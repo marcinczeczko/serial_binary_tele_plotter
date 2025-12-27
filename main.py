@@ -137,8 +137,6 @@ class ControlPanel(QtWidgets.QWidget):
         layout.addWidget(axis_group)
         layout.addStretch()
         layout.addWidget(self.connect_btn)
-        if self.payload_combo.count() > 0:
-            self._on_stream_changed(0)
         
     def _collapse_others(self, opened, groups):
         for g in groups:
@@ -152,6 +150,7 @@ class ControlPanel(QtWidgets.QWidget):
 
         stream_cfg = self.stream_loader.get_stream(stream_id)
         self._build_signal_panel(stream_cfg)
+        self.plot_area.configure_signals(stream_cfg)
 
     def _on_group_expanded(self, opened):
         for g in self._accordion_groups:
@@ -181,15 +180,42 @@ class ControlPanel(QtWidgets.QWidget):
         # Add signals
         for sig_id, sig in signals_cfg.items():
             widget = YAxisControlWidget(sig["label"], sig["color"])
+            widget.signal_id = sig_id  # ← ważne
+
+            # --- default values from JSON ---
             widget.min_edit.setValue(sig["y_range"]["min"])
             widget.max_edit.setValue(sig["y_range"]["max"])
             widget.enable_checkbox.setChecked(sig.get("visible", True))
 
+            # --- UI → PlotArea bindings ---
+            plot = self.plot_area  # ControlPanel → MainWindow → PlotArea
+
+            widget.enable_checkbox.toggled.connect(
+                lambda checked, sid=sig_id: plot.set_signal_visible(sid, checked)
+            )
+
+            widget.min_edit.valueChanged.connect(
+                lambda _, sid=sig_id, w=widget: plot.set_signal_y_range(
+                    sid, w.min_edit.value(), w.max_edit.value()
+                )
+            )
+
+            widget.max_edit.valueChanged.connect(
+                lambda _, sid=sig_id, w=widget: plot.set_signal_y_range(
+                    sid, w.min_edit.value(), w.max_edit.value()
+                )
+            )
+
+            widget.lock_checkbox.toggled.connect(
+                lambda locked, sid=sig_id: plot.set_signal_lock(sid, locked)
+            )
+
+            # --- add to UI ---
             groups[sig["group"]].content_layout.addWidget(widget)
 
             separator = QtWidgets.QFrame()
             separator.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-            separator.setStyleSheet("color: #2a2a2a;")
+            separator.setStyleSheet("color: white;")
             groups[sig["group"]].content_layout.addWidget(separator)
 
             self.y_controls.append(widget)
@@ -217,6 +243,7 @@ class PlotArea(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
 
+        self.signal_views = {}
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -281,6 +308,60 @@ class PlotArea(QtWidgets.QWidget):
         rect = self.vb_setpoint.sceneBoundingRect()
         self.vb_measurement.setGeometry(rect)
         self.vb_output.setGeometry(rect)
+        
+    def configure_signals(self, stream_cfg: dict):
+        # Clear previous
+        self.plot.clear()
+        self.signal_views.clear()
+
+        base_vb = self.plot.getViewBox()
+        base_vb.setMouseEnabled(x=True, y=False)
+
+        for sig_id, sig in stream_cfg["signals"].items():
+            vb = pg.ViewBox()
+            self.plot.scene().addItem(vb)
+            vb.setXLink(base_vb)
+            vb.setMouseEnabled(x=False, y=False)
+
+            pen = pg.mkPen(
+                color=sig["color"],
+                width=sig.get("line", {}).get("width", 2),
+                style=LINE_STYLE_MAP.get(
+                    sig.get("line", {}).get("style", "solid"),
+                    QtCore.Qt.PenStyle.SolidLine
+                )
+            )
+
+            curve = pg.PlotCurveItem(pen=pen, name=sig["label"])
+            vb.addItem(curve)
+
+            # Default Y range
+            yr = sig["y_range"]
+            vb.setYRange(yr["min"], yr["max"], padding=0)
+
+            self.signal_views[sig_id] = {
+                "viewbox": vb,
+                "curve": curve
+            }
+
+        base_vb.sigResized.connect(self._sync_views)
+        
+    def _sync_views(self):
+        rect = self.plot.getViewBox().sceneBoundingRect()
+        for s in self.signal_views.values():
+            s["viewbox"].setGeometry(rect)
+            
+    def set_signal_visible(self, sig_id: str, visible: bool):
+        self.signal_views[sig_id]["curve"].setVisible(visible)
+
+
+    def set_signal_y_range(self, sig_id: str, y_min: float, y_max: float):
+        self.signal_views[sig_id]["viewbox"].setYRange(y_min, y_max, padding=0)
+
+
+    def set_signal_lock(self, sig_id: str, locked: bool):
+        vb = self.signal_views[sig_id]["viewbox"]
+        vb.enableAutoRange(axis=pg.ViewBox.YAxis, enable=not locked)
 
 
 LINE_STYLE_MAP = {
@@ -399,6 +480,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.control_panel = ControlPanel()
         self.plot_area = PlotArea()
+        self.control_panel.plot_area = self.plot_area
+        if self.control_panel.payload_combo.count() > 0:
+            self.control_panel._on_stream_changed(0)
 
         splitter.addWidget(self.control_panel)
         splitter.addWidget(self.plot_area)
