@@ -1,4 +1,7 @@
 import sys
+import json
+from pathlib import Path
+
 from PyQt6 import QtWidgets, QtCore
 import pyqtgraph as pg
 
@@ -58,6 +61,22 @@ def apply_dark_theme(app: QtWidgets.QApplication):
         """)
 
 
+class StreamConfigLoader:
+    def __init__(self, path: str):
+        self.path = Path(path)
+        self.data = self._load()
+
+    def _load(self):
+        with self.path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def list_streams(self):
+        return self.data["streams"]
+
+    def get_stream(self, stream_id: str):
+        return self.data["streams"][stream_id]
+
+
 # -----------------------------
 # Left control panel
 # -----------------------------
@@ -91,8 +110,13 @@ class ControlPanel(QtWidgets.QWidget):
         payload_group = QtWidgets.QGroupBox("Payload Type")
         payload_layout = QtWidgets.QVBoxLayout(payload_group)
 
+        self.stream_loader = StreamConfigLoader("streams.json")
         self.payload_combo = QtWidgets.QComboBox()
-        self.payload_combo.addItem("PID Telemetry")
+        
+        for stream_id, stream in self.stream_loader.list_streams().items():
+            self.payload_combo.addItem(stream["name"], stream_id)
+
+        self.payload_combo.currentIndexChanged.connect(self._on_stream_changed)
 
         payload_layout.addWidget(self.payload_combo)
 
@@ -103,71 +127,9 @@ class ControlPanel(QtWidgets.QWidget):
         # --- Y axis control placeholder ---
         # --- Y Axis / Signals ---
         axis_group = QtWidgets.QGroupBox("Signals")
-        axis_layout = QtWidgets.QVBoxLayout(axis_group)
-        axis_layout.setSpacing(8)
-
+        self.axis_layout = QtWidgets.QVBoxLayout(axis_group)
+        self.axis_layout.setSpacing(8)        
         self.y_controls = []
-
-        # --- Groups ---
-        group_pid_core = CollapsibleGroup("PID Core")
-        group_pid_terms = CollapsibleGroup("PID Terms")
-        group_actuator = CollapsibleGroup("Actuator")
-        
-        groups = [group_pid_core, group_pid_terms, group_actuator]
-        for g in groups:
-            g.expanded.connect(lambda opened, g=g: self._collapse_others(opened, groups))
-
-        # --- PID Core ---
-        core_signals = [
-            ("Setpoint", "#4FC3F7"),
-            ("Measurement", "#81C784"),
-            ("Error", "#BA68C8"),
-        ]
-
-        for name, color in core_signals:
-            w = YAxisControlWidget(name, color)
-            group_pid_core.content_layout.addWidget(w)
-            separator = QtWidgets.QFrame()
-            separator.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-            separator.setFrameShadow(QtWidgets.QFrame.Shadow.Plain)
-            separator.setStyleSheet("color: white;")
-            group_pid_core.content_layout.addWidget(separator)
-            self.y_controls.append(w)
-
-        # --- PID Terms ---
-        term_signals = [
-            ("P Term", "#FFD54F"),
-            ("I Term", "#4DB6AC"),
-            ("D Term", "#E57373"),
-        ]
-
-        for name, color in term_signals:
-            w = YAxisControlWidget(name, color)
-            group_pid_terms.content_layout.addWidget(w)
-            self.y_controls.append(w)
-
-        # --- Actuator ---
-        actuator_signals = [
-            ("Output", "#FF8A65"),
-        ]
-
-        for name, color in actuator_signals:
-            w = YAxisControlWidget(name, color)
-            group_actuator.content_layout.addWidget(w)
-            self.y_controls.append(w)
-
-        # --- Add groups ---
-        axis_layout.addWidget(group_pid_core)
-        axis_layout.addWidget(group_pid_terms)
-        axis_layout.addWidget(group_actuator)
-        axis_layout.addStretch()
-
-        layout.addWidget(axis_group)
-        # axis_group = QtWidgets.QGroupBox("Y Axis Control (PID)")
-        # axis_layout = QtWidgets.QVBoxLayout(axis_group)
-
-        # self.lock_y_checkbox = QtWidgets.QCheckBox("Lock Y axis range")
-        # axis_layout.addWidget(self.lock_y_checkbox)
 
         # Spacer
         layout.addWidget(serial_group)
@@ -175,11 +137,77 @@ class ControlPanel(QtWidgets.QWidget):
         layout.addWidget(axis_group)
         layout.addStretch()
         layout.addWidget(self.connect_btn)
+        if self.payload_combo.count() > 0:
+            self._on_stream_changed(0)
         
     def _collapse_others(self, opened, groups):
         for g in groups:
             if g is not opened:
                 g.toggle.setChecked(False)
+                
+    def _on_stream_changed(self, index: int):
+        stream_id = self.payload_combo.itemData(index)
+        if not stream_id:
+            return
+
+        stream_cfg = self.stream_loader.get_stream(stream_id)
+        self._build_signal_panel(stream_cfg)
+
+    def _on_group_expanded(self, opened):
+        for g in self._accordion_groups:
+            if g is not opened:
+                g.toggle.setChecked(False)
+
+        
+    def _build_signal_panel(self, stream_cfg: dict):
+        # Clear previous
+        while self.axis_layout.count():
+            item = self.axis_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        self.y_controls = []
+
+        # Create groups sorted by order
+        groups_cfg = stream_cfg["groups"]
+        signals_cfg = stream_cfg["signals"]
+
+        groups = {}
+        for group_id, g in sorted(groups_cfg.items(), key=lambda x: x[1]["order"]):
+            group = CollapsibleGroup(g["label"])
+            self.axis_layout.addWidget(group)
+            groups[group_id] = group
+
+        # Add signals
+        for sig_id, sig in signals_cfg.items():
+            widget = YAxisControlWidget(sig["label"], sig["color"])
+            widget.min_edit.setValue(sig["y_range"]["min"])
+            widget.max_edit.setValue(sig["y_range"]["max"])
+            widget.enable_checkbox.setChecked(sig.get("visible", True))
+
+            groups[sig["group"]].content_layout.addWidget(widget)
+
+            separator = QtWidgets.QFrame()
+            separator.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+            separator.setStyleSheet("color: #2a2a2a;")
+            groups[sig["group"]].content_layout.addWidget(separator)
+
+            self.y_controls.append(widget)
+
+        self.axis_layout.addStretch()
+
+        # Accordion behavior
+        group_list = list(groups.values())
+        for g in group_list:
+            g.expanded.connect(self._on_group_expanded)
+
+        self._accordion_groups = group_list
+
+        # Open first group by default
+        if group_list:
+            group_list[0].toggle.setChecked(True)
+
+
 
 
 # -----------------------------
@@ -253,6 +281,13 @@ class PlotArea(QtWidgets.QWidget):
         rect = self.vb_setpoint.sceneBoundingRect()
         self.vb_measurement.setGeometry(rect)
         self.vb_output.setGeometry(rect)
+
+
+LINE_STYLE_MAP = {
+    "solid": QtCore.Qt.PenStyle.SolidLine,
+    "dashed": QtCore.Qt.PenStyle.DashLine,
+    "dotted": QtCore.Qt.PenStyle.DotLine,
+}
 
 
 ## Widget kontroli osi Y

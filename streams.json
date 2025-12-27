@@ -1,0 +1,171 @@
+{
+    "streams": {
+        "pid": {
+            "name": "PID Telemetry",
+            "frame": {
+                "stream_id": 1,
+                "endianness": "little",
+                "packed": true,
+                "fields": [
+                    {
+                        "name": "loopCntr",
+                        "type": "u32"
+                    },
+                    {
+                        "name": "motor",
+                        "type": "u8"
+                    },
+                    {
+                        "name": "setpoint",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "measurement",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "error",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "pTerm",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "iTerm",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "outputRaw",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "output",
+                        "type": "f32"
+                    }
+                ]
+            },
+            "groups": {
+                "core": {
+                    "label": "PID Core",
+                    "order": 1
+                },
+                "terms": {
+                    "label": "PID Terms",
+                    "order": 2
+                },
+                "actuator": {
+                    "label": "Actuator",
+                    "order": 3
+                }
+            },
+            "signals": {
+                "setpoint": {
+                    "label": "Setpoint",
+                    "field": "setpoint",
+                    "group": "core",
+                    "color": "#4FC3F7",
+                    "line": {
+                        "style": "dashed",
+                        "width": 2
+                    },
+                    "y_range": {
+                        "min": -2.0,
+                        "max": 2.0
+                    },
+                    "visible": true
+                },
+                "measurement": {
+                    "label": "Measurement",
+                    "field": "measurement",
+                    "group": "core",
+                    "color": "#81C784",
+                    "line": {
+                        "style": "solid",
+                        "width": 2
+                    },
+                    "y_range": {
+                        "min": -2.0,
+                        "max": 2.0
+                    },
+                    "visible": true
+                },
+                "error": {
+                    "label": "Error",
+                    "field": "error",
+                    "group": "core",
+                    "color": "#BA68C8",
+                    "line": {
+                        "style": "solid",
+                        "width": 2
+                    },
+                    "y_range": {
+                        "min": -1.0,
+                        "max": 1.0
+                    },
+                    "visible": true
+                },
+                "p_term": {
+                    "label": "pTerm",
+                    "field": "pTerm",
+                    "group": "terms",
+                    "color": "#FFD54F",
+                    "line": {
+                        "style": "solid",
+                        "width": 2
+                    },
+                    "y_range": {
+                        "min": -50,
+                        "max": 50
+                    },
+                    "visible": false
+                },
+                "i_term": {
+                    "label": "iTerm",
+                    "field": "iTerm",
+                    "group": "terms",
+                    "color": "#4DB6AC",
+                    "line": {
+                        "style": "solid",
+                        "width": 2
+                    },
+                    "y_range": {
+                        "min": -50,
+                        "max": 50
+                    },
+                    "visible": false
+                },
+                "outputRaw": {
+                    "label": "Output Raw",
+                    "field": "outputRaw",
+                    "group": "actuator",
+                    "color": "#FF8A65",
+                    "line": {
+                        "style": "dotted",
+                        "width": 2
+                    },
+                    "y_range": {
+                        "min": -100,
+                        "max": 100
+                    },
+                    "visible": true
+                },
+                "output": {
+                    "label": "Output",
+                    "field": "output",
+                    "group": "actuator",
+                    "color": "#FF8A65",
+                    "line": {
+                        "style": "solid",
+                        "width": 2
+                    },
+                    "y_range": {
+                        "min": -100,
+                        "max": 100
+                    },
+                    "visible": true
+                }
+            }
+        }
+    }
+}
