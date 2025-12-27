@@ -1,6 +1,8 @@
 import sys
 import json
 from pathlib import Path
+import math
+import random
 
 from PyQt6 import QtWidgets, QtCore
 import pyqtgraph as pg
@@ -242,6 +244,10 @@ class ControlPanel(QtWidgets.QWidget):
 class PlotArea(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
+        
+        self.fake_time = 0.0
+        self.fake_data = {}
+        self.max_samples = 500
 
         self.signal_views = {}
         layout = QtWidgets.QVBoxLayout(self)
@@ -284,6 +290,60 @@ class PlotArea(QtWidgets.QWidget):
         )
         self.vb_measurement.addItem(self.curve_measurement)
         
+        self.fake_timer = QtCore.QTimer(self)
+        self.fake_timer.timeout.connect(self._fake_step)
+        
+    def _init_fake_data(self):
+        self.fake_time = 0.0
+        self.fake_data.clear()
+
+        for sig_id in self.signal_views.keys():
+            self.fake_data[sig_id] = []
+            
+    def _fake_step(self):
+        self.fake_time += 0.05  # ~20 Hz
+
+        # Example PID-like behavior
+        setpoint = math.sin(self.fake_time * 0.5)
+        measurement = setpoint + random.uniform(-0.05, 0.05)
+        error = setpoint - measurement
+
+        p = error * 20.0
+        i = math.sin(self.fake_time * 0.2) * 5.0
+        
+        outputRaw = p + i
+        output = max(min(outputRaw, 100), -100)
+
+        values = {
+            "setpoint": setpoint,
+            "measurement": measurement,
+            "error": error,
+            "p_term": p,
+            "i_term": i,
+            "outputRaw": outputRaw,
+            "output": output,
+        }
+
+        for sig_id, v in values.items():
+            if sig_id not in self.fake_data:
+                continue
+
+            buf = self.fake_data[sig_id]
+            buf.append(v)
+
+            if len(buf) > self.max_samples:
+                buf.pop(0)
+
+            y = buf
+            x0 = max(0, len(y) - self.max_samples)
+            x = list(range(x0, x0 + len(y)))
+
+            self.signal_views[sig_id]["curve"].setData(x, y)
+            # --- auto-scroll X axis ---
+            base_vb = self.plot.getViewBox()
+            n = len(next(iter(self.fake_data.values())))
+            base_vb.setXRange(max(0, n - self.max_samples), n, padding=0)
+
     def configure_signals(self, stream_cfg: dict):
         # Clear previous
         self.plot.clear()
@@ -323,6 +383,8 @@ class PlotArea(QtWidgets.QWidget):
             }
 
         base_vb.sigResized.connect(self._sync_views)
+        self._init_fake_data()
+        self.fake_timer.start(50)  # 20 Hz
         
     def _sync_views(self):
         rect = self.plot.getViewBox().sceneBoundingRect()
