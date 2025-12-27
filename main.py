@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 import math
 import random
+from serial.tools import list_ports
+
 
 from PyQt6 import QtWidgets, QtCore
 import pyqtgraph as pg
@@ -98,6 +100,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.port_combo.addItem("COM2")
 
         self.refresh_btn = QtWidgets.QPushButton("⟳")
+        self.refresh_btn.clicked.connect(self.refresh_serial_ports)
 
         self.baud_combo = QtWidgets.QComboBox()
         self.baud_combo.addItems(["115200", "230400", "460800", "921600"])
@@ -139,6 +142,7 @@ class ControlPanel(QtWidgets.QWidget):
         layout.addWidget(axis_group)
         layout.addStretch()
         layout.addWidget(self.connect_btn)
+        self.refresh_serial_ports()
         
     def _collapse_others(self, opened, groups):
         for g in groups:
@@ -234,9 +238,19 @@ class ControlPanel(QtWidgets.QWidget):
         # Open first group by default
         if group_list:
             group_list[0].toggle.setChecked(True)
+            
+    def refresh_serial_ports(self):
+        self.port_combo.clear()
 
+        ports = list_ports.comports()
+        for p in ports:
+            # p.device = np. /dev/tty.usbmodemXXXX lub COM3
+            # p.description = opis urządzenia
+            label = f"{p.device}  ({p.description})"
+            self.port_combo.addItem(label, p.device)
 
-
+        if self.port_combo.count() == 0:
+            self.port_combo.addItem("No ports found", None)
 
 # -----------------------------
 # Plot area
