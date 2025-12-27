@@ -283,31 +283,6 @@ class PlotArea(QtWidgets.QWidget):
             name="Measurement"
         )
         self.vb_measurement.addItem(self.curve_measurement)
-
-        # --- Output ViewBox (second right axis) ---
-        self.vb_output = pg.ViewBox()
-        self.plot.scene().addItem(self.vb_output)
-        self.vb_output.setXLink(self.vb_setpoint)
-
-        self.axis_output = pg.AxisItem("right")
-        self.axis_output.setLabel("Output")
-        self.axis_output.setStyle(tickTextOffset=30)
-        self.plot.layout.addItem(self.axis_output, 2, 3)
-        self.axis_output.linkToView(self.vb_output)
-
-        self.curve_output = pg.PlotCurveItem(
-            pen=pg.mkPen(color="#FF8A65", width=2),
-            name="Output"
-        )
-        self.vb_output.addItem(self.curve_output)
-
-        # --- Keep viewboxes aligned ---
-        self.vb_setpoint.sigResized.connect(self._update_views)
-
-    def _update_views(self):
-        rect = self.vb_setpoint.sceneBoundingRect()
-        self.vb_measurement.setGeometry(rect)
-        self.vb_output.setGeometry(rect)
         
     def configure_signals(self, stream_cfg: dict):
         # Clear previous
@@ -316,6 +291,9 @@ class PlotArea(QtWidgets.QWidget):
 
         base_vb = self.plot.getViewBox()
         base_vb.setMouseEnabled(x=True, y=False)
+        # Hide default Y axes (we use logical Y ranges per ViewBox)
+        self.plot.getAxis("left").setVisible(False)
+        self.plot.getAxis("right").setVisible(False)
 
         for sig_id, sig in stream_cfg["signals"].items():
             vb = pg.ViewBox()
