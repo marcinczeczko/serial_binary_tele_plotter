@@ -457,7 +457,6 @@ class PlotArea(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
         self.signal_views = {}
-        self.lock_x = False
         self.paused = False # Flaga pauzy
         
         self.last_packet = None 
@@ -511,7 +510,7 @@ class PlotArea(QtWidgets.QWidget):
             if sig_id in self.signal_views:
                 self.signal_views[sig_id]["curve"].setData(time, y)
 
-        if not self.lock_x:
+        if self.anchor_time is None:
             self.plot.setXRange(time[0], time[-1], padding=0)
 
     @QtCore.pyqtSlot(bool)
@@ -529,7 +528,8 @@ class PlotArea(QtWidgets.QWidget):
         
         # Pobierz pozycję kliknięcia
         pos = evt.scenePos()
-        if self.plot.sceneBoundingRect().contains(pos):
+        vb_rect = self.plot.getViewBox().sceneBoundingRect()
+        if vb_rect.contains(pos):
             mousePoint = self.plot.vb.mapSceneToView(pos)
             
             # Ustawienie Anchor
@@ -557,7 +557,8 @@ class PlotArea(QtWidgets.QWidget):
 
     def mouse_moved(self, evt):
         pos = evt[0]
-        if self.plot.sceneBoundingRect().contains(pos):
+        vb_rect = self.plot.getViewBox().sceneBoundingRect()
+        if vb_rect.contains(pos):
             mousePoint = self.plot.vb.mapSceneToView(pos)
             self.vLine.setPos(mousePoint.x())
             self.update_tooltip(mousePoint.x())
