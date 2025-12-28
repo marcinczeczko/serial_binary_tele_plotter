@@ -131,8 +131,6 @@ class TelemetryWorker(QtCore.QObject):
         if not self.buffers:
             return
 
-        # Pobieramy długość pierwszego bufora (zakładamy synchronizację)
-        # iter(self.buffers.values()) może być pusty przy przełączaniu, stąd try/except lub check
         try:
             first_buf = next(iter(self.buffers.values()))
         except StopIteration:
@@ -146,29 +144,32 @@ class TelemetryWorker(QtCore.QObject):
         t0 = (self.sample_index - n) * self.sample_period_s
         time = np.linspace(t0, t0 + n * self.sample_period_s, n, endpoint=False)
 
-        # Przetwarzanie sygnałów (normalizacja 0..1 dla ViewBoxów)
-        out_signals = {}
+        # Przetwarzanie sygnałów
+        out_signals_norm = {} # Dane znormalizowane 0-1 (dla wykresu)
+        out_signals_raw = {}  # Dane surowe (dla tooltipa)
+
         for sig_id, buf in self.buffers.items():
+            # Kopia surowych danych jako numpy array
+            arr = np.array(buf)
+            out_signals_raw[sig_id] = arr
+
             if sig_id not in self.scale:
                 continue
                 
             ymin, ymax = self.scale[sig_id]
-            # Zabezpieczenie przed dzieleniem przez zero
             span = ymax - ymin
             scale = span if abs(span) > 1e-12 else 1.0
 
-            # Konwersja deque -> numpy array
-            arr = np.array(buf)
-            
             # Normalizacja
             y_norm = (arr - ymin) / scale
             y_norm = np.clip(y_norm, 0.0, 1.0)
 
-            out_signals[sig_id] = y_norm
+            out_signals_norm[sig_id] = y_norm
 
         self.data_ready.emit({
             "time": time,
-            "signals": out_signals
+            "signals": out_signals_norm,
+            "raw": out_signals_raw # <--- Nowe pole
         })
 
 
@@ -459,6 +460,10 @@ class PlotArea(QtWidgets.QWidget):
         super().__init__()
         self.signal_views = {}
         self.lock_x = False
+        
+        # Przechowujemy ostatnią paczkę danych do odczytu kursora
+        self.last_packet = None 
+        self.signal_colors = {} # Cache kolorów do tooltipa
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -470,8 +475,22 @@ class PlotArea(QtWidgets.QWidget):
         self.plot.setLabel("bottom", "Time [s]")
         self.plot.getAxis("left").setVisible(False)
 
+        # --- CROSSHAIR SETUP ---
+        # 1. Pionowa linia
+        self.vLine = pg.InfiniteLine(angle=90, movable=False)
+        self.plot.addItem(self.vLine, ignoreBounds=True)
+        
+        # 2. Etykieta z wartościami (HTML support)
+        self.label = pg.TextItem(anchor=(0, 0)) # anchor 0,0 = top-left tekstu
+        self.plot.addItem(self.label, ignoreBounds=True)
+
+        # 3. Podpięcie ruchu myszy
+        self.proxy = pg.SignalProxy(self.plot.scene().sigMouseMoved, rateLimit=60, slot=self.mouse_moved)
+
     @QtCore.pyqtSlot(dict)
     def on_data_ready(self, packet: dict):
+        self.last_packet = packet # Zapisz do odczytu przez kursor
+        
         time = packet["time"]
         signals = packet["signals"]
         
@@ -481,25 +500,73 @@ class PlotArea(QtWidgets.QWidget):
             if sig_id in self.signal_views:
                 self.signal_views[sig_id]["curve"].setData(time, y)
 
-        # Auto-scroll X axis if not locked by user interaction
         if not self.lock_x:
             self.plot.setXRange(time[0], time[-1], padding=0)
+
+    def mouse_moved(self, evt):
+        pos = evt[0]  # Pozycja myszy w oknie
+        if self.plot.sceneBoundingRect().contains(pos):
+            mousePoint = self.plot.vb.mapSceneToView(pos)
+            self.vLine.setPos(mousePoint.x())
+            self.update_tooltip(mousePoint.x())
+
+    def update_tooltip(self, x_pos):
+        if not self.last_packet: return
+
+        time_arr = self.last_packet["time"]
+        raw_data = self.last_packet["raw"]
+        
+        if len(time_arr) == 0: return
+
+        # Znajdź indeks w tablicy czasu najbliższy pozycji kursora
+        # Używamy searchsorted dla szybkości (zakładamy, że czas jest posortowany)
+        idx = np.searchsorted(time_arr, x_pos)
+        
+        # Zabezpieczenie indeksu
+        if idx >= len(time_arr): idx = len(time_arr) - 1
+        if idx < 0: idx = 0
+
+        # Budowanie treści tooltipa (HTML)
+        html_str = f'<div style="background-color: rgba(0, 0, 0, 0.7);">'
+        html_str += f'<span style="color: #FFF; font-weight: bold;">Time: {time_arr[idx]:.2f} s</span><br>'
+        html_str += "--------------------<br>"
+
+        for sig_id, values in raw_data.items():
+            # Pomiń ukryte sygnały
+            if sig_id in self.signal_views and not self.signal_views[sig_id]["curve"].isVisible():
+                continue
+                
+            val = values[idx]
+            color = self.signal_colors.get(sig_id, "#FFF")
+            
+            # Formatowanie koloru tekstu zgodnie z linią wykresu
+            html_str += f'<span style="color: {color};">{sig_id}: <b>{val:.4f}</b></span><br>'
+        
+        html_str += "</div>"
+        
+        self.label.setHtml(html_str)
+        self.label.setPos(x_pos, 1.0) # Pozycja Y = 1.0 (góra wykresu znormalizowanego)
 
     @QtCore.pyqtSlot(dict)
     def configure_signals(self, signals_cfg: dict):
         self.plot.clear()
         self.signal_views.clear()
+        self.signal_colors.clear()
+
+        # Dodaj ponownie elementy stałe po czyszczeniu
+        self.plot.addItem(self.vLine, ignoreBounds=True)
+        self.plot.addItem(self.label, ignoreBounds=True)
         
-        # Base ViewBox for X-axis sync
         base_vb = self.plot.getViewBox()
 
         for sig_id, sig in signals_cfg.items():
+            # Zapisz kolor do tooltipa
+            self.signal_colors[sig_id] = sig["color"]
+
             vb = pg.ViewBox()
             vb.enableAutoRange(pg.ViewBox.YAxis, False)
-            vb.setYRange(0.0, 1.0) # Normalized range
+            vb.setYRange(0.0, 1.0) 
             self.plot.scene().addItem(vb)
-            
-            # Sync X axis
             vb.setXLink(base_vb)
             
             pen = pg.mkPen(color=sig["color"], width=2)
@@ -525,10 +592,6 @@ class PlotArea(QtWidgets.QWidget):
 
     @QtCore.pyqtSlot(str, bool)
     def set_signal_lock(self, sig_id, locked):
-        # Tutaj można dodać logikę blokowania autokalibracji Y
-        # W tym modelu (normalizowanym 0-1) jest to trudniejsze, 
-        # bo skalowanie odbywa się w Workerze. 
-        # Logika "Lock" powinna być zrealizowana przez zmianę trybu skalowania w Workerze.
         pass
 
 # -----------------------------
