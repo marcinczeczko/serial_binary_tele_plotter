@@ -160,6 +160,8 @@ class TelemetryWorker(QtCore.QObject):
 
         self.data_ready.emit({
             "time": time,
+            "t0": t0,
+            "dt": self.sample_period_s,
             "signals": out_signals_norm,
             "raw": out_signals_raw,
             "count": self.sample_index
@@ -556,35 +558,67 @@ class PlotArea(QtWidgets.QWidget):
         time_arr = self.last_packet["time"]
         raw_data = self.last_packet["raw"]
         
-        idx = np.searchsorted(time_arr, t_anchor)
-        if idx >= len(time_arr): idx = len(time_arr) - 1
+        t_anchor = float(np.clip(t_anchor, time_arr[0], time_arr[-1]))
         
         self.anchor_values = {}
         for sig_id, values in raw_data.items():
-            self.anchor_values[sig_id] = values[idx]
+            self.anchor_values[sig_id] = np.interp(t_anchor, time_arr, values)
 
     def mouse_moved(self, evt):
         pos = evt[0]
         vb_rect = self.plot.getViewBox().sceneBoundingRect()
         if vb_rect.contains(pos):
             mousePoint = self.plot.vb.mapSceneToView(pos)
-            self.vLine.setPos(mousePoint.x())
-            self.update_tooltip(mousePoint.x())
+
+            # --- CLAMP X DO ZAKRESU DANYCH ---
+            if not self.last_packet:
+                return
+
+            time_arr = self.last_packet["time"]
+            if len(time_arr) < 2:
+                return
+
+            x_clamped = float(np.clip(
+                mousePoint.x(),
+                time_arr[0],
+                time_arr[-1]
+            ))
+
+            self.vLine.setPos(x_clamped)
+            self.update_tooltip(x_clamped)
+
 
     def update_tooltip(self, x_pos):
-        if not self.last_packet: return
+        if not self.last_packet: 
+            return
         time_arr = self.last_packet["time"]
         raw_data = self.last_packet["raw"]
-        if len(time_arr) == 0: return
+        if len(time_arr) < 2: 
+            return
 
-        idx = np.searchsorted(time_arr, x_pos)
-        if idx >= len(time_arr): idx = len(time_arr) - 1
-        if idx < 0: idx = 0
+         # --- 1. CLAMP X DO ZAKRESU DANYCH ---
+        x_clamped = float(np.clip(x_pos, time_arr[0], time_arr[-1]))
+        
+         # --- 2. INDEX TYLKO INFORMACYJNIE (STATUS BAR) ---
+        dt = time_arr[1] - time_arr[0]
+        idx = int((x_clamped - time_arr[0]) / dt)
+        idx = int(np.clip(idx, 0, len(time_arr) - 1))
 
-        current_time = time_arr[idx]
+        current_time = x_clamped
+        
+           # --- 3. USTAW KURSOR ---
+        self.vLine.setPos(x_clamped)
+        self.cursor_moved.emit(f"Cursor: {current_time:.3f} s | Index: {idx}")
+
+        # if idx >= len(time_arr): 
+        #     idx = len(time_arr) - 1
+        # if idx < 0: 
+        #     idx = 0
+
+        # current_time = time_arr[idx]
         
         # Emit info do status bara
-        self.cursor_moved.emit(f"Cursor: {current_time:.3f} s | Index: {idx}")
+       # self.cursor_moved.emit(f"Cursor: {current_time:.3f} s | Index: {idx}")
 
         # --- BUDOWANIE TOOLTIPA ---
         html_str = f'<div style="background-color: rgba(0, 0, 0, 0.7); font-size: 11px;">'
@@ -602,8 +636,10 @@ class PlotArea(QtWidgets.QWidget):
             if sig_id in self.signal_views and not self.signal_views[sig_id]["curve"].isVisible():
                 continue
                 
-            val = values[idx]
-            color = self.signal_colors.get(sig_id, "#FFF")
+            val = float(np.interp(x_clamped, time_arr, values))
+            color = self.signal_colors.get(sig_id, "#FFF")        
+            # val = values[idx]
+            # color = self.signal_colors.get(sig_id, "#FFF")
             
             # Podstawowa wartość
             row_str = f'<span style="color: {color};">{sig_id}: <b>{val:.3f}</b>'
@@ -620,7 +656,15 @@ class PlotArea(QtWidgets.QWidget):
         html_str += "</div>"
         
         self.label.setHtml(html_str)
-        self.label.setPos(x_pos, 1.0)
+        
+        # --- 5. POZYCJA HUD (STABILNA) ---
+        vb = self.plot.getViewBox()
+        xr, yr = vb.viewRange()
+        x_text = xr[0] + 0.01 * (xr[1] - xr[0])
+        y_text = yr[1] - 0.02 * (yr[1] - yr[0])
+
+        self.label.setPos(x_text, y_text)
+        #self.label.setPos(x_pos, 1.0)
 
     @QtCore.pyqtSlot(dict)
     def configure_signals(self, signals_cfg: dict):
