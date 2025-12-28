@@ -458,14 +458,14 @@ class ControlPanel(QtWidgets.QWidget):
 
 
 class PlotArea(QtWidgets.QWidget):
-    # Sygnał do status bara (czas pod kursorem)
     cursor_moved = QtCore.pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
         self.mode = PlotMode.LIVE
         self.signal_views = {}
-        self.last_packet = None 
+        self.last_packet = None      # Strumień "żywy" (zawsze aktualny)
+        self.analysis_packet = None  # Strumień "zamrożony" do analizy na pauzie
         self.signal_colors = {} 
         self.anchor_time = None 
         self.anchor_values = {}
@@ -480,41 +480,31 @@ class PlotArea(QtWidgets.QWidget):
         self.plot.setLabel("bottom", "Time [s]")
         self.plot.getAxis("left").setVisible(False)
 
-        # --- KONFIGURACJA CURSORÓW ---
-        # Kursor bieżący (szary)
+        # --- CURSORS ---
         self.vLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('#888', width=1))
-        self.vLine.setAcceptHoverEvents(False) # Blokuje przechwytywanie zdarzeń myszy przez linię
+        self.vLine.setAcceptHoverEvents(False)
         self.plot.addItem(self.vLine, ignoreBounds=True)
         
-        # Kursor kotwicy (żółty przerywany)
-        self.anchorLine = pg.InfiniteLine(
-            angle=90, 
-            movable=False, 
-            pen=pg.mkPen('y', style=QtCore.Qt.PenStyle.DashLine, width=2)
-        )
+        self.anchorLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('y', style=QtCore.Qt.PenStyle.DashLine, width=2))
         self.anchorLine.setAcceptHoverEvents(False)
         self.anchorLine.setVisible(False)
         self.plot.addItem(self.anchorLine, ignoreBounds=True)
 
-        # HUD Label - Informacje tekstowe w rogu
         self.label = pg.TextItem(anchor=(0, 0))
         self.label.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
         self.label.setAcceptHoverEvents(False)
         self.plot.addItem(self.label, ignoreBounds=True)
 
-        # --- OBSŁUGA ZDARZEŃ ---
-        # Używamy bezpośredniego połączenia dla lepszej responsywności HUD
         self.plot.scene().sigMouseMoved.connect(self.mouse_moved_handler)
         self.plot.scene().sigMouseClicked.connect(self.on_mouse_clicked)
-        
-        # Stabilizacja pozycji HUD przy zmianie zakresu (zoom/pan)
         self.plot.sigRangeChanged.connect(self.update_hud_position)
 
     @QtCore.pyqtSlot(dict)
     def on_data_ready(self, packet: dict):
+        # Zawsze trzymamy najświeższy pakiet pod ręką (na wypadek Resume)
         self.last_packet = packet
         
-        # W trybie ANALIZY nie aktualizujemy linii na wykresie
+        # Jeśli jesteśmy w trybie analizy, kompletnie ignorujemy nowe dane w GUI
         if self.mode == PlotMode.ANALYSIS:
             return
         
@@ -526,93 +516,90 @@ class PlotArea(QtWidgets.QWidget):
             if sig_id in self.signal_views:
                 self.signal_views[sig_id]["curve"].setData(time, y)
 
-        # Automatyczne przesuwanie okna czasu w trybie LIVE
         if self.mode == PlotMode.LIVE:
             self.plot.setXRange(time[0], time[-1], padding=0)
             self.update_hud_position()
 
     @QtCore.pyqtSlot(bool)
     def set_paused(self, paused: bool):
-        """Przełącza między trybem Live a Analizą (Delta)"""
         if paused:
             self.mode = PlotMode.ANALYSIS
+            # KLUCZOWE: Robimy migawkę danych w momencie pauzy
+            # Od teraz kursor i delta działają TYLKO na tych danych
+            import copy
+            self.analysis_packet = copy.deepcopy(self.last_packet)
         else:
             self.mode = PlotMode.LIVE
+            self.analysis_packet = None
             self.anchor_time = None
             self.anchorLine.setVisible(False)
             self.anchor_values = {}
-            # Resetujemy HUD, aby nie pokazywał starych delt po wznowieniu
-            if self.last_packet:
-                self._process_mouse_movement(self.vLine.value())
+            self.label.setHtml("")
 
     def mouse_moved_handler(self, pos):
-        """Przechwytuje surową pozycję myszy ze sceny"""
         vb = self.plot.vb
         if vb.sceneBoundingRect().contains(pos):
             mousePoint = vb.mapSceneToView(pos)
             self._process_mouse_movement(mousePoint.x())
 
     def _process_mouse_movement(self, x_raw):
-        """Logika przeliczania pozycji kursora i tooltipa"""
-        if not self.last_packet: return
-        time_arr = self.last_packet["time"]
+        # Wybieramy źródło danych: zamrożone (pauza) lub żywe (live)
+        data_source = self.analysis_packet if self.mode == PlotMode.ANALYSIS else self.last_packet
+        
+        if not data_source: return
+        time_arr = data_source["time"]
         if len(time_arr) < 2: return
 
-        # Ograniczamy kursor do zakresu danych
+        # Kursor nie ucieknie, bo time_arr jest zamrożone w czasie!
         x_clamped = float(np.clip(x_raw, time_arr[0], time_arr[-1]))
         self.vLine.setPos(x_clamped)
         self.update_tooltip(x_clamped)
 
     def on_mouse_clicked(self, evt):
-        """Ustawia punkt odniesienia (Anchor) w trybie analizy"""
         if self.mode != PlotMode.ANALYSIS: return
         if evt.button() != QtCore.Qt.MouseButton.LeftButton: return
         
-        pos = evt.scenePos()
         vb = self.plot.vb
-        if vb.sceneBoundingRect().contains(pos):
-            mousePoint = vb.mapSceneToView(pos)
+        if vb.sceneBoundingRect().contains(evt.scenePos()):
+            mousePoint = vb.mapSceneToView(evt.scenePos())
             self.anchor_time = mousePoint.x()
-            
             self.anchorLine.setPos(self.anchor_time)
             self.anchorLine.setVisible(True)
             
-            # Pobieramy i zapamiętujemy wartości w punkcie kliknięcia (interpolowane)
+            # Pobieramy wartości z zamrożonego pakietu
             self._capture_anchor_values(self.anchor_time)
             self._process_mouse_movement(self.anchor_time)
 
     def _capture_anchor_values(self, t_anchor):
-        if not self.last_packet: return
-        time_arr = self.last_packet["time"]
-        raw_data = self.last_packet["raw"]
+        if not self.analysis_packet: return
+        time_arr = self.analysis_packet["time"]
+        raw_data = self.analysis_packet["raw"]
         
         self.anchor_values = {}
         for sig_id, values in raw_data.items():
-            # Używamy interpolacji dla maksymalnej precyzji punktu odniesienia
             self.anchor_values[sig_id] = np.interp(t_anchor, time_arr, values)
 
     def update_hud_position(self):
-        """Utrzymuje etykietę HUD w stałym miejscu na ekranie (lewy górny róg)"""
         vb = self.plot.getViewBox()
         xr, yr = vb.viewRange()
-        # Marginesy: 1% szerokości i 2% wysokości widoku
         x_text = xr[0] + 0.01 * (xr[1] - xr[0])
         y_text = yr[1] - 0.02 * (yr[1] - yr[0])
         self.label.setPos(x_text, y_text)
 
     def update_tooltip(self, x_pos):
-        if not self.last_packet: return
-        time_arr = self.last_packet["time"]
-        raw_data = self.last_packet["raw"]
+        # Wybieramy źródło danych: zamrożone (pauza) lub żywe (live)
+        data_source = self.analysis_packet if self.mode == PlotMode.ANALYSIS else self.last_packet
+        
+        if not data_source: return
+        time_arr = data_source["time"]
+        raw_data = data_source["raw"]
         
         current_time = float(x_pos)
         
-        # Obliczanie indeksu (tylko do status bara)
         dt = time_arr[1] - time_arr[0]
         idx = int(np.clip((current_time - time_arr[0]) / dt, 0, len(time_arr) - 1))
         self.cursor_moved.emit(f"Cursor: {current_time:.3f} s | Index: {idx}")
 
-        # Budowanie treści HUD (HTML)
         html_str = '<div style="background-color: rgba(0, 0, 0, 0.7); padding: 6px; font-family: Consolas, monospace; border: 1px solid #444;">'
         html_str += f'<b style="color: white; font-size: 12px;">T: {current_time:.3f} s</b>'
         
@@ -623,21 +610,16 @@ class PlotArea(QtWidgets.QWidget):
         html_str += "<br><hr style='margin: 4px 0;'>"
 
         for sig_id, values in raw_data.items():
-            # Sprawdzamy widoczność sygnału
             if sig_id in self.signal_views and not self.signal_views[sig_id]["curve"].isVisible():
                 continue
             
-            # Pobieramy wartość w dokładnie tym punkcie czasu (interpolacja liniowa)
             val = float(np.interp(current_time, time_arr, values))
             color = self.signal_colors.get(sig_id, "#FFF")
-            
             row = f'<span style="color: {color};">{sig_id}: <b>{val:>8.4f}</b>'
             
-            # Jeśli mamy punkt odniesienia, obliczamy deltę Y
             if self.anchor_time is not None and sig_id in self.anchor_values:
                 dy = val - self.anchor_values[sig_id]
                 row += f' <span style="color: #aaa; font-size: 10px;">(Δ {dy:+.4f})</span>'
-            
             html_str += row + '</span><br>'
         
         html_str += "</div>"
@@ -646,7 +628,6 @@ class PlotArea(QtWidgets.QWidget):
 
     @QtCore.pyqtSlot(dict)
     def configure_signals(self, signals_cfg: dict):
-        # --- CZYSZCZENIE STARYCH WARSTW (Zapobiega wyciekom pamięci) ---
         for sig_id in list(self.signal_views.keys()):
             old_vb = self.signal_views[sig_id]["viewbox"]
             self.plot.scene().removeItem(old_vb)
@@ -655,21 +636,15 @@ class PlotArea(QtWidgets.QWidget):
         self.signal_views.clear()
         self.signal_colors.clear()
 
-        # Przywrócenie stałych elementów interfejsu
         self.plot.addItem(self.vLine, ignoreBounds=True)
         self.plot.addItem(self.anchorLine, ignoreBounds=True)
         self.plot.addItem(self.label, ignoreBounds=True)
         
         base_vb = self.plot.getViewBox()
-
         for sig_id, sig in signals_cfg.items():
             self.signal_colors[sig_id] = sig["color"]
             vb = pg.ViewBox()
-            
-            # WAŻNE: Dodatkowe warstwy nie mogą reagować na mysz, 
-            # aby nie blokować zdarzeń dla głównej osi i HUDa
             vb.setMouseEnabled(x=False, y=False)
-            
             vb.enableAutoRange(pg.ViewBox.YAxis, False)
             vb.setYRange(0.0, 1.0) 
             self.plot.scene().addItem(vb)
@@ -678,16 +653,10 @@ class PlotArea(QtWidgets.QWidget):
             pen = pg.mkPen(color=sig["color"], width=2)
             curve = pg.PlotDataItem(pen=pen, skipFiniteCheck=True)
             vb.addItem(curve)
-
-            self.signal_views[sig_id] = {
-                "viewbox": vb,
-                "curve": curve
-            }
-
+            self.signal_views[sig_id] = {"viewbox": vb, "curve": curve}
         base_vb.sigResized.connect(self._update_views)
     
     def _update_views(self):
-        """Synchronizuje geometrię warstw przy zmianie rozmiaru okna"""
         rect = self.plot.getViewBox().sceneBoundingRect()
         for s in self.signal_views.values():
             s["viewbox"].setGeometry(rect)
@@ -696,8 +665,10 @@ class PlotArea(QtWidgets.QWidget):
     def set_signal_visible(self, sig_id, visible):
         if sig_id in self.signal_views:
             self.signal_views[sig_id]["curve"].setVisible(visible)
-            # Wymuś odświeżenie HUD, aby usunąć/dodać linię danych
-            if self.last_packet:
+            # Odśwież HUD używając odpowiedniego źródła danych
+            if self.mode == PlotMode.ANALYSIS and self.analysis_packet:
+                self._process_mouse_movement(self.vLine.value())
+            elif self.last_packet:
                 self._process_mouse_movement(self.vLine.value())
 
     @QtCore.pyqtSlot(str, bool)
