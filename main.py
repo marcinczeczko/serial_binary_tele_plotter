@@ -2,6 +2,7 @@ import sys
 import json
 from pathlib import Path
 import math
+from enum import Enum
 import random
 import numpy as np
 from collections import deque
@@ -9,6 +10,10 @@ from serial.tools import list_ports
 
 from PyQt6 import QtWidgets, QtCore, QtGui
 import pyqtgraph as pg
+
+class PlotMode(Enum):
+    LIVE = 1
+    ANALYSIS = 2
 
 # -----------------------------
 # Global application styling
@@ -456,8 +461,8 @@ class PlotArea(QtWidgets.QWidget):
 
     def __init__(self):
         super().__init__()
+        self.mode = PlotMode.LIVE
         self.signal_views = {}
-        self.paused = False # Flaga pauzy
         
         self.last_packet = None 
         self.signal_colors = {} 
@@ -499,9 +504,9 @@ class PlotArea(QtWidgets.QWidget):
         self.last_packet = packet
         
         # Jeśli pauza, NIE aktualizujemy wykresu (renderingu), ale mamy dane w last_packet
-        if self.paused:
+        if self.mode == PlotMode.ANALYSIS:
             return
-
+        
         time = packet["time"]
         signals = packet["signals"]
         if len(time) == 0: return
@@ -510,21 +515,24 @@ class PlotArea(QtWidgets.QWidget):
             if sig_id in self.signal_views:
                 self.signal_views[sig_id]["curve"].setData(time, y)
 
-        if self.anchor_time is None:
+        if self.mode == PlotMode.LIVE:
             self.plot.setXRange(time[0], time[-1], padding=0)
 
     @QtCore.pyqtSlot(bool)
     def set_paused(self, paused: bool):
-        self.paused = paused
-        if not paused:
-            # Wyłączenie trybu delta po wznowieniu
+        if paused:
+            self.mode = PlotMode.ANALYSIS
+        else:
+            self.mode = PlotMode.LIVE
             self.anchor_time = None
             self.anchorLine.setVisible(False)
 
     def on_mouse_clicked(self, evt):
         # Anchor stawiamy tylko na pauzie lewym przyciskiem
-        if not self.paused: return
-        if evt.button() != QtCore.Qt.MouseButton.LeftButton: return
+        if self.mode != PlotMode.ANALYSIS: 
+            return
+        if evt.button() != QtCore.Qt.MouseButton.LeftButton: 
+            return
         
         # Pobierz pozycję kliknięcia
         pos = evt.scenePos()
