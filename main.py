@@ -10,7 +10,6 @@ from serial.tools import list_ports
 from PyQt6 import QtWidgets, QtCore, QtGui
 import pyqtgraph as pg
 
-
 # -----------------------------
 # Global application styling
 # -----------------------------
@@ -27,7 +26,6 @@ def apply_dark_theme(app: QtWidgets.QApplication):
     palette.setColor(palette.ColorRole.Highlight, QtCore.Qt.GlobalColor.blue)
     app.setPalette(palette)
     
-    # Dodatkowe style CSS
     app.setStyleSheet("""
         QCheckBox { spacing: 6px; color: #ddd; }
         QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #666; background-color: #111; }
@@ -38,7 +36,9 @@ def apply_dark_theme(app: QtWidgets.QApplication):
         QPushButton { background-color: #333; border: 1px solid #555; border-radius: 3px; padding: 5px; color: white; }
         QPushButton:hover { background-color: #444; }
         QPushButton:pressed { background-color: #222; }
+        QPushButton:checked { background-color: #555; border: 1px solid #888; }
         QComboBox { background-color: #1e1e1e; border: 1px solid #333; color: white; padding: 4px; }
+        QStatusBar { color: #888; }
     """)
 
 # -----------------------------
@@ -59,31 +59,35 @@ class TelemetryWorker(QtCore.QObject):
 
     @QtCore.pyqtSlot()
     def start_working(self):
-        """Uruchamia timer wewnątrz wątku roboczego"""
-        self.timer = QtCore.QTimer(self)
-        self.timer.timeout.connect(self._step)
-        # Ustawiamy interwał timera
+        """Uruchamia timer generujący dane"""
+        if self.timer is None:
+            self.timer = QtCore.QTimer(self)
+            self.timer.timeout.connect(self._step)
+        
         self.timer.start(int(self.sample_period_s * 1000))
+
+    @QtCore.pyqtSlot()
+    def stop_working(self):
+        """Zatrzymuje timer"""
+        if self.timer:
+            self.timer.stop()
 
     @QtCore.pyqtSlot(float, int)
     def update_time_config(self, period_ms: float, max_samples: int):
-        """Aktualizuje konfigurację czasu i resetuje bufory"""
         self.sample_period_s = period_ms / 1000.0
         self.max_samples = max_samples
         
-        # Reset buforów z nowym rozmiarem
+        # Reset buforów
         new_buffers = {}
         for k in self.buffers.keys():
             new_buffers[k] = deque(maxlen=self.max_samples)
         self.buffers = new_buffers
         
-        # Aktualizacja timera jeśli działa
         if self.timer and self.timer.isActive():
             self.timer.setInterval(int(period_ms))
 
     @QtCore.pyqtSlot(dict)
     def configure_signals(self, signals_cfg: dict):
-        """Konfiguruje sygnały na podstawie wybranego strumienia"""
         self.buffers.clear()
         self.scale.clear()
 
@@ -100,10 +104,9 @@ class TelemetryWorker(QtCore.QObject):
             self.scale[sig_id] = (ymin, ymax)
 
     def _step(self):
-        """Symulacja odbioru danych z Seriala"""
         t = self.sample_index * self.sample_period_s
 
-        # Symulacja danych PID
+        # Mock generator
         setpoint = math.sin(t * 0.5)
         measurement = setpoint + random.uniform(-0.05, 0.05)
         error = setpoint - measurement
@@ -118,7 +121,6 @@ class TelemetryWorker(QtCore.QObject):
             "output": max(min(error * 30.0, 100), -100),
         }
 
-        # Zapisz do buforów tylko te sygnały, które są skonfigurowane
         for k, v in values.items():
             if k in self.buffers:
                 self.buffers[k].append(v)
@@ -127,60 +129,46 @@ class TelemetryWorker(QtCore.QObject):
         self._emit()
 
     def _emit(self):
-        """Przygotowanie i wysłanie paczki danych do GUI"""
-        if not self.buffers:
-            return
-
+        if not self.buffers: return
         try:
             first_buf = next(iter(self.buffers.values()))
-        except StopIteration:
-            return
+        except StopIteration: return
 
         n = len(first_buf)
-        if n < 2: 
-            return
+        if n < 2: return
 
-        # Oś czasu
         t0 = (self.sample_index - n) * self.sample_period_s
         time = np.linspace(t0, t0 + n * self.sample_period_s, n, endpoint=False)
 
-        # Przetwarzanie sygnałów
-        out_signals_norm = {} # Dane znormalizowane 0-1 (dla wykresu)
-        out_signals_raw = {}  # Dane surowe (dla tooltipa)
+        out_signals_norm = {}
+        out_signals_raw = {}
 
         for sig_id, buf in self.buffers.items():
-            # Kopia surowych danych jako numpy array
             arr = np.array(buf)
             out_signals_raw[sig_id] = arr
 
-            if sig_id not in self.scale:
-                continue
-                
+            if sig_id not in self.scale: continue
             ymin, ymax = self.scale[sig_id]
-            span = ymax - ymin
-            scale = span if abs(span) > 1e-12 else 1.0
-
-            # Normalizacja
-            y_norm = (arr - ymin) / scale
-            y_norm = np.clip(y_norm, 0.0, 1.0)
-
+            scale = max(ymax - ymin, 1e-12)
+            y_norm = np.clip((arr - ymin) / scale, 0.0, 1.0)
             out_signals_norm[sig_id] = y_norm
 
         self.data_ready.emit({
             "time": time,
             "signals": out_signals_norm,
-            "raw": out_signals_raw # <--- Nowe pole
+            "raw": out_signals_raw,
+            "count": self.sample_index
         })
 
 
 # -----------------------------
-# Config Loader
+# Config Loader (Bez zmian)
 # -----------------------------
 class StreamConfigLoader:
     def __init__(self, path: str):
         self.path = Path(path)
-        # Fallback/Default config jeśli plik nie istnieje (dla testów)
         if not self.path.exists():
+            # Default mock config
             self.data = {
                 "streams": {
                     "pid_control": {
@@ -220,7 +208,6 @@ class StreamConfigLoader:
 # -----------------------------
 class CollapsibleGroup(QtWidgets.QWidget):
     expanded = QtCore.pyqtSignal(object)
-
     def __init__(self, title: str):
         super().__init__()
         self.toggle = QtWidgets.QToolButton(text=title)
@@ -229,37 +216,28 @@ class CollapsibleGroup(QtWidgets.QWidget):
         self.toggle.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.toggle.setArrowType(QtCore.Qt.ArrowType.RightArrow)
         self.toggle.setStyleSheet("QToolButton { border: none; font-weight: bold; color: #ccc; }")
-
         self.content = QtWidgets.QWidget()
         self.content.setVisible(False)
         self.content_layout = QtWidgets.QVBoxLayout(self.content)
         self.content_layout.setContentsMargins(10, 0, 0, 0)
-
         self.toggle.toggled.connect(self._on_toggled)
-
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self.toggle)
         layout.addWidget(self.content)
-
     def _on_toggled(self, checked: bool):
         self.content.setVisible(checked)
         self.toggle.setArrowType(QtCore.Qt.ArrowType.DownArrow if checked else QtCore.Qt.ArrowType.RightArrow)
-        if checked:
-            self.expanded.emit(self)
-
+        if checked: self.expanded.emit(self)
 
 class YAxisControlWidget(QtWidgets.QWidget):
     def __init__(self, name: str, color: str):
         super().__init__()
-        self.signal_id = None # Będzie ustawione z zewnątrz
-
+        self.signal_id = None
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 8)
         layout.setSpacing(4)
-
-        # Header
         h_layout = QtWidgets.QHBoxLayout()
         color_lbl = QtWidgets.QLabel("●")
         color_lbl.setStyleSheet(f"color: {color}; font-size: 16px;")
@@ -268,8 +246,6 @@ class YAxisControlWidget(QtWidgets.QWidget):
         h_layout.addWidget(color_lbl)
         h_layout.addWidget(self.enable_checkbox)
         h_layout.addStretch()
-
-        # Ranges
         r_layout = QtWidgets.QHBoxLayout()
         self.min_edit = QtWidgets.QDoubleSpinBox()
         self.max_edit = QtWidgets.QDoubleSpinBox()
@@ -277,19 +253,14 @@ class YAxisControlWidget(QtWidgets.QWidget):
             w.setRange(-1e6, 1e6)
             w.setDecimals(2)
             w.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
-        
         r_layout.addWidget(QtWidgets.QLabel("Min:"))
         r_layout.addWidget(self.min_edit)
         r_layout.addWidget(QtWidgets.QLabel("Max:"))
         r_layout.addWidget(self.max_edit)
-
-        # Lock
         self.lock_checkbox = QtWidgets.QCheckBox("Lock Y")
-
         layout.addLayout(h_layout)
         layout.addLayout(r_layout)
         layout.addWidget(self.lock_checkbox)
-
 
 class ControlPanel(QtWidgets.QWidget):
     scale_changed = QtCore.pyqtSignal(str, float, float)
@@ -297,6 +268,10 @@ class ControlPanel(QtWidgets.QWidget):
     time_config_changed = QtCore.pyqtSignal(float, int)
     signal_visibility_changed = QtCore.pyqtSignal(str, bool)
     signal_lock_changed = QtCore.pyqtSignal(str, bool)
+    
+    # Nowe sygnały sterujące
+    connection_requested = QtCore.pyqtSignal(bool) # True=Connect, False=Disconnect
+    pause_requested = QtCore.pyqtSignal(bool)      # True=Pause, False=Resume
 
     def __init__(self):
         super().__init__()
@@ -310,7 +285,6 @@ class ControlPanel(QtWidgets.QWidget):
         self.refresh_btn.clicked.connect(self.refresh_ports)
         self.baud_combo = QtWidgets.QComboBox()
         self.baud_combo.addItems(["115200", "230400", "460800", "921600"])
-        
         l_serial.addWidget(QtWidgets.QLabel("Port:"), 0, 0)
         l_serial.addWidget(self.port_combo, 0, 1)
         l_serial.addWidget(self.refresh_btn, 0, 2)
@@ -329,7 +303,6 @@ class ControlPanel(QtWidgets.QWidget):
         self.sample_count_edit.setRange(10, 10000)
         self.sample_count_edit.setValue(200)
         
-        # Connect signals
         self.sample_period_edit.valueChanged.connect(self._emit_time_config)
         self.sample_count_edit.valueChanged.connect(self._emit_time_config)
 
@@ -350,17 +323,32 @@ class ControlPanel(QtWidgets.QWidget):
         l_payload.addWidget(self.payload_combo)
         layout.addWidget(grp_payload)
 
-        # Connect Btn
+        # --- CONNECTION & CONTROL BUTTONS ---
+        btn_layout = QtWidgets.QHBoxLayout()
+        
         self.connect_btn = QtWidgets.QPushButton("Connect")
-        self.connect_btn.setStyleSheet("background-color: #2E7D32; font-weight: bold;")
-        layout.addWidget(self.connect_btn)
+        self.connect_btn.setCheckable(True)
+        self.connect_btn.setStyleSheet("""
+            QPushButton:checked { background-color: #C62828; } 
+            QPushButton { background-color: #2E7D32; font-weight: bold; }
+        """)
+        self.connect_btn.toggled.connect(self._on_connect_toggled)
+
+        self.pause_btn = QtWidgets.QPushButton("Pause")
+        self.pause_btn.setCheckable(True)
+        self.pause_btn.setEnabled(False) # Domyślnie nieaktywny
+        self.pause_btn.toggled.connect(self._on_pause_toggled)
+
+        btn_layout.addWidget(self.connect_btn)
+        btn_layout.addWidget(self.pause_btn)
+        layout.addLayout(btn_layout)
         
         # Apply Scale Btn
         self.apply_btn = QtWidgets.QPushButton("Apply Scales")
         self.apply_btn.clicked.connect(self._apply_scales)
         layout.addWidget(self.apply_btn)
 
-        # Signals List (Scroll Area)
+        # Signals List
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
@@ -373,7 +361,7 @@ class ControlPanel(QtWidgets.QWidget):
         grp_sigs = QtWidgets.QGroupBox("Signals")
         l_sigs = QtWidgets.QVBoxLayout(grp_sigs)
         l_sigs.addWidget(scroll)
-        layout.addWidget(grp_sigs, 1) # stretch 1 to fill space
+        layout.addWidget(grp_sigs, 1)
 
         self.y_controls = []
         self._accordion_groups = []
@@ -389,62 +377,69 @@ class ControlPanel(QtWidgets.QWidget):
         s = self.sample_count_edit.value()
         self.time_config_changed.emit(p, s)
 
+    def _on_connect_toggled(self, checked):
+        if checked:
+            self.connect_btn.setText("Disconnect")
+            self.pause_btn.setEnabled(True)
+            self.connection_requested.emit(True)
+        else:
+            self.connect_btn.setText("Connect")
+            self.pause_btn.setChecked(False)
+            self.pause_btn.setEnabled(False)
+            self.connection_requested.emit(False)
+
+    def _on_pause_toggled(self, checked):
+        if checked:
+            self.pause_btn.setText("Resume")
+            self.pause_btn.setStyleSheet("background-color: #F57F17; color: black; font-weight: bold;")
+        else:
+            self.pause_btn.setText("Pause")
+            self.pause_btn.setStyleSheet("")
+        self.pause_requested.emit(checked)
+
     def _on_stream_changed(self, idx):
         sid = self.payload_combo.itemData(idx)
         if not sid: return
         cfg = self.stream_loader.get_stream(sid)
-        
         self._rebuild_signal_list(cfg)
         self.stream_changed.emit(cfg["signals"])
 
     def _rebuild_signal_list(self, cfg):
-            # 1. Wyczyść WSZYSTKO (widgety i stare spresery/stretche)
-            while self.signals_layout.count():
-                item = self.signals_layout.takeAt(0)
-                if item.widget():
-                    item.widget().deleteLater()
+        while self.signals_layout.count():
+            item = self.signals_layout.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
+        
+        self.y_controls = []
+        self._accordion_groups = []
+        groups = {}
+
+        for gid, gdata in sorted(cfg["groups"].items(), key=lambda x: x[1]["order"]):
+            grp_widget = CollapsibleGroup(gdata["label"])
+            grp_widget.expanded.connect(self._on_group_expanded)
+            self.signals_layout.addWidget(grp_widget)
+            groups[gid] = grp_widget
+            self._accordion_groups.append(grp_widget)
+
+        for sid, sdata in cfg["signals"].items():
+            w = YAxisControlWidget(sdata["label"], sdata["color"])
+            w.signal_id = sid
+            w.min_edit.setValue(sdata["y_range"]["min"])
+            w.max_edit.setValue(sdata["y_range"]["max"])
+            w.enable_checkbox.toggled.connect(lambda c, s=sid: self.signal_visibility_changed.emit(s, c))
+            w.lock_checkbox.toggled.connect(lambda c, s=sid: self.signal_lock_changed.emit(s, c))
             
-            self.y_controls = []
-            self._accordion_groups = []
-            groups = {}
+            target_group = groups.get(sdata["group"])
+            if target_group:
+                target_group.content_layout.addWidget(w)
+                line = QtWidgets.QFrame()
+                line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+                line.setStyleSheet("background-color: #333;")
+                target_group.content_layout.addWidget(line)
+            self.y_controls.append(w)
 
-            # 2. Dodaj grupy (normalnie, append na koniec)
-            for gid, gdata in sorted(cfg["groups"].items(), key=lambda x: x[1]["order"]):
-                grp_widget = CollapsibleGroup(gdata["label"])
-                grp_widget.expanded.connect(self._on_group_expanded)
-                
-                # ZMIANA: Dodajemy normalnie na koniec (addWidget), a nie insertWidget
-                self.signals_layout.addWidget(grp_widget)
-                
-                groups[gid] = grp_widget
-                self._accordion_groups.append(grp_widget)
-
-            # 3. Dodaj sygnały do grup
-            for sid, sdata in cfg["signals"].items():
-                w = YAxisControlWidget(sdata["label"], sdata["color"])
-                w.signal_id = sid
-                w.min_edit.setValue(sdata["y_range"]["min"])
-                w.max_edit.setValue(sdata["y_range"]["max"])
-                
-                w.enable_checkbox.toggled.connect(lambda c, s=sid: self.signal_visibility_changed.emit(s, c))
-                w.lock_checkbox.toggled.connect(lambda c, s=sid: self.signal_lock_changed.emit(s, c))
-                
-                target_group = groups.get(sdata["group"])
-                if target_group:
-                    target_group.content_layout.addWidget(w)
-                    line = QtWidgets.QFrame()
-                    line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-                    line.setStyleSheet("background-color: #333;")
-                    target_group.content_layout.addWidget(line)
-                
-                self.y_controls.append(w)
-
-            # 4. KLUCZOWE: Dodaj stretch na samym końcu, żeby docisnąć wszystko do góry
-            self.signals_layout.addStretch()
-
-            # Rozwiń pierwszą grupę
-            if self._accordion_groups:
-                self._accordion_groups[0].toggle.setChecked(True)
+        self.signals_layout.addStretch()
+        if self._accordion_groups:
+            self._accordion_groups[0].toggle.setChecked(True)
 
     def _on_group_expanded(self, sender):
         for g in self._accordion_groups:
@@ -456,14 +451,21 @@ class ControlPanel(QtWidgets.QWidget):
 
 
 class PlotArea(QtWidgets.QWidget):
+    # Sygnał do status bara (czas pod kursorem, wartości itp)
+    cursor_moved = QtCore.pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
         self.signal_views = {}
         self.lock_x = False
+        self.paused = False # Flaga pauzy
         
-        # Przechowujemy ostatnią paczkę danych do odczytu kursora
         self.last_packet = None 
-        self.signal_colors = {} # Cache kolorów do tooltipa
+        self.signal_colors = {} 
+
+        # --- DELTA MEASUREMENT VARS ---
+        self.anchor_time = None # Czas (oś X) zakotwiczenia
+        self.anchor_indices = {} # Zapamiętane wartości surowe w momencie zakotwiczenia
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -475,25 +477,34 @@ class PlotArea(QtWidgets.QWidget):
         self.plot.setLabel("bottom", "Time [s]")
         self.plot.getAxis("left").setVisible(False)
 
-        # --- CROSSHAIR SETUP ---
-        # 1. Pionowa linia
+        # --- CROSSHAIRS ---
+        # 1. Dynamiczny (Cursor)
         self.vLine = pg.InfiniteLine(angle=90, movable=False)
         self.plot.addItem(self.vLine, ignoreBounds=True)
         
-        # 2. Etykieta z wartościami (HTML support)
-        self.label = pg.TextItem(anchor=(0, 0)) # anchor 0,0 = top-left tekstu
+        # 2. Statyczny (Anchor) - domyślnie ukryty
+        self.anchorLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('y', style=QtCore.Qt.PenStyle.DashLine, width=2))
+        self.anchorLine.setVisible(False)
+        self.plot.addItem(self.anchorLine, ignoreBounds=True)
+
+        self.label = pg.TextItem(anchor=(0, 0))
         self.plot.addItem(self.label, ignoreBounds=True)
 
-        # 3. Podpięcie ruchu myszy
         self.proxy = pg.SignalProxy(self.plot.scene().sigMouseMoved, rateLimit=60, slot=self.mouse_moved)
+        
+        # Obsługa kliknięcia (dla Anchor)
+        self.plot.scene().sigMouseClicked.connect(self.on_mouse_clicked)
 
     @QtCore.pyqtSlot(dict)
     def on_data_ready(self, packet: dict):
-        self.last_packet = packet # Zapisz do odczytu przez kursor
+        self.last_packet = packet
         
+        # Jeśli pauza, NIE aktualizujemy wykresu (renderingu), ale mamy dane w last_packet
+        if self.paused:
+            return
+
         time = packet["time"]
         signals = packet["signals"]
-        
         if len(time) == 0: return
 
         for sig_id, y in signals.items():
@@ -503,8 +514,49 @@ class PlotArea(QtWidgets.QWidget):
         if not self.lock_x:
             self.plot.setXRange(time[0], time[-1], padding=0)
 
+    @QtCore.pyqtSlot(bool)
+    def set_paused(self, paused: bool):
+        self.paused = paused
+        if not paused:
+            # Wyłączenie trybu delta po wznowieniu
+            self.anchor_time = None
+            self.anchorLine.setVisible(False)
+
+    def on_mouse_clicked(self, evt):
+        # Anchor stawiamy tylko na pauzie lewym przyciskiem
+        if not self.paused: return
+        if evt.button() != QtCore.Qt.MouseButton.LeftButton: return
+        
+        # Pobierz pozycję kliknięcia
+        pos = evt.scenePos()
+        if self.plot.sceneBoundingRect().contains(pos):
+            mousePoint = self.plot.vb.mapSceneToView(pos)
+            
+            # Ustawienie Anchor
+            self.anchor_time = mousePoint.x()
+            self.anchorLine.setPos(self.anchor_time)
+            self.anchorLine.setVisible(True)
+            
+            # Zapamiętanie wartości w punkcie anchor (dla delty Y)
+            self._capture_anchor_values(self.anchor_time)
+            
+            # Odśwież tooltip natychmiast
+            self.update_tooltip(self.anchor_time)
+
+    def _capture_anchor_values(self, t_anchor):
+        if not self.last_packet: return
+        time_arr = self.last_packet["time"]
+        raw_data = self.last_packet["raw"]
+        
+        idx = np.searchsorted(time_arr, t_anchor)
+        if idx >= len(time_arr): idx = len(time_arr) - 1
+        
+        self.anchor_values = {}
+        for sig_id, values in raw_data.items():
+            self.anchor_values[sig_id] = values[idx]
+
     def mouse_moved(self, evt):
-        pos = evt[0]  # Pozycja myszy w oknie
+        pos = evt[0]
         if self.plot.sceneBoundingRect().contains(pos):
             mousePoint = self.plot.vb.mapSceneToView(pos)
             self.vLine.setPos(mousePoint.x())
@@ -512,40 +564,54 @@ class PlotArea(QtWidgets.QWidget):
 
     def update_tooltip(self, x_pos):
         if not self.last_packet: return
-
         time_arr = self.last_packet["time"]
         raw_data = self.last_packet["raw"]
-        
         if len(time_arr) == 0: return
 
-        # Znajdź indeks w tablicy czasu najbliższy pozycji kursora
-        # Używamy searchsorted dla szybkości (zakładamy, że czas jest posortowany)
         idx = np.searchsorted(time_arr, x_pos)
-        
-        # Zabezpieczenie indeksu
         if idx >= len(time_arr): idx = len(time_arr) - 1
         if idx < 0: idx = 0
 
-        # Budowanie treści tooltipa (HTML)
-        html_str = f'<div style="background-color: rgba(0, 0, 0, 0.7);">'
-        html_str += f'<span style="color: #FFF; font-weight: bold;">Time: {time_arr[idx]:.2f} s</span><br>'
-        html_str += "--------------------<br>"
+        current_time = time_arr[idx]
+        
+        # Emit info do status bara
+        self.cursor_moved.emit(f"Cursor: {current_time:.3f} s | Index: {idx}")
+
+        # --- BUDOWANIE TOOLTIPA ---
+        html_str = f'<div style="background-color: rgba(0, 0, 0, 0.7); font-size: 11px;">'
+        
+        # Sekcja czasu
+        html_str += f'<span style="color: #FFF; font-weight: bold;">T: {current_time:.3f} s</span>'
+        
+        if self.anchor_time is not None:
+            dt = current_time - self.anchor_time
+            html_str += f' <span style="color: #FFD700;">(Δ {dt:+.3f} s)</span>'
+            
+        html_str += "<br>--------------------<br>"
 
         for sig_id, values in raw_data.items():
-            # Pomiń ukryte sygnały
             if sig_id in self.signal_views and not self.signal_views[sig_id]["curve"].isVisible():
                 continue
                 
             val = values[idx]
             color = self.signal_colors.get(sig_id, "#FFF")
             
-            # Formatowanie koloru tekstu zgodnie z linią wykresu
-            html_str += f'<span style="color: {color};">{sig_id}: <b>{val:.4f}</b></span><br>'
+            # Podstawowa wartość
+            row_str = f'<span style="color: {color};">{sig_id}: <b>{val:.3f}</b>'
+            
+            # Delta Y (jeśli mamy anchor)
+            if self.anchor_time is not None and sig_id in self.anchor_values:
+                anchor_val = self.anchor_values[sig_id]
+                dy = val - anchor_val
+                row_str += f' <span style="color: #aaa;">(Δ {dy:+.3f})</span>'
+            
+            row_str += '</span><br>'
+            html_str += row_str
         
         html_str += "</div>"
         
         self.label.setHtml(html_str)
-        self.label.setPos(x_pos, 1.0) # Pozycja Y = 1.0 (góra wykresu znormalizowanego)
+        self.label.setPos(x_pos, 1.0)
 
     @QtCore.pyqtSlot(dict)
     def configure_signals(self, signals_cfg: dict):
@@ -553,16 +619,14 @@ class PlotArea(QtWidgets.QWidget):
         self.signal_views.clear()
         self.signal_colors.clear()
 
-        # Dodaj ponownie elementy stałe po czyszczeniu
         self.plot.addItem(self.vLine, ignoreBounds=True)
+        self.plot.addItem(self.anchorLine, ignoreBounds=True) # Dodaj anchor
         self.plot.addItem(self.label, ignoreBounds=True)
         
         base_vb = self.plot.getViewBox()
 
         for sig_id, sig in signals_cfg.items():
-            # Zapisz kolor do tooltipa
             self.signal_colors[sig_id] = sig["color"]
-
             vb = pg.ViewBox()
             vb.enableAutoRange(pg.ViewBox.YAxis, False)
             vb.setYRange(0.0, 1.0) 
@@ -600,8 +664,15 @@ class PlotArea(QtWidgets.QWidget):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("DiffBot Telemetry Viewer (Fixed)")
+        self.setWindowTitle("DiffBot Telemetry Viewer (Pro)")
         self.resize(1280, 800)
+
+        # --- STATUS BAR ---
+        self.status_bar = self.statusBar()
+        self.lbl_status = QtWidgets.QLabel("Ready")
+        self.lbl_cursor = QtWidgets.QLabel("")
+        self.status_bar.addWidget(self.lbl_status)
+        self.status_bar.addPermanentWidget(self.lbl_cursor)
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         self.setCentralWidget(splitter)
@@ -614,7 +685,6 @@ class MainWindow(QtWidgets.QMainWindow):
         splitter.setSizes([350, 930])
 
         # --- Worker Setup ---
-        # Początkowe wartości zgodne z domyślnymi w UI
         init_period = self.panel.sample_period_edit.value()
         init_samples = self.panel.sample_count_edit.value()
 
@@ -622,30 +692,47 @@ class MainWindow(QtWidgets.QMainWindow):
         self.thread = QtCore.QThread()
         self.worker.moveToThread(self.thread)
 
-        # 1. Thread management
-        self.thread.started.connect(self.worker.start_working)
-        # Zamknięcie aplikacji zamyka wątek
+        self.thread.started.connect(lambda: self.lbl_status.setText("Worker Thread Started"))
         QtWidgets.QApplication.instance().aboutToQuit.connect(self._cleanup)
 
-        # 2. Control Panel -> Worker signals
+        # Wiring
         self.panel.scale_changed.connect(self.worker.update_scale)
         self.panel.stream_changed.connect(self.worker.configure_signals)
         self.panel.time_config_changed.connect(self.worker.update_time_config)
+        
+        # Connect / Pause Logic wiring
+        self.panel.connection_requested.connect(self._handle_connection)
+        self.panel.pause_requested.connect(self._handle_pause)
 
-        # 3. Control Panel -> Plot signals (visuals only)
         self.panel.stream_changed.connect(self.plot.configure_signals)
         self.panel.signal_visibility_changed.connect(self.plot.set_signal_visible)
         self.panel.signal_lock_changed.connect(self.plot.set_signal_lock)
 
-        # 4. Worker -> Plot signals (data flow)
         self.worker.data_ready.connect(self.plot.on_data_ready)
+        self.plot.cursor_moved.connect(self.lbl_cursor.setText) # Aktualizacja status bara
 
-        # Start
         self.thread.start()
-
-        # Trigger initial configuration
-        # Wymuszamy wywołanie konfiguracji dla domyślnie wybranego strumienia
         self.panel._on_stream_changed(self.panel.payload_combo.currentIndex())
+
+    def _handle_connection(self, connect: bool):
+        if connect:
+            # Używamy invokeMethod, aby wywołać slot w wątku Workera (bezpiecznie)
+            QtCore.QMetaObject.invokeMethod(self.worker, "start_working", QtCore.Qt.ConnectionType.QueuedConnection)
+            self.lbl_status.setText("Connected: Receiving Data")
+            self.lbl_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
+        else:
+            QtCore.QMetaObject.invokeMethod(self.worker, "stop_working", QtCore.Qt.ConnectionType.QueuedConnection)
+            self.lbl_status.setText("Disconnected")
+            self.lbl_status.setStyleSheet("color: #F44336; font-weight: bold;")
+
+    def _handle_pause(self, paused: bool):
+        self.plot.set_paused(paused)
+        if paused:
+            self.lbl_status.setText("PAUSED - Click chart to set Delta Anchor")
+            self.lbl_status.setStyleSheet("color: #FF9800; font-weight: bold;")
+        else:
+            self.lbl_status.setText("Connected: Receiving Data")
+            self.lbl_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
 
     def _cleanup(self):
         self.thread.quit()
