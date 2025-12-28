@@ -96,9 +96,6 @@ class ControlPanel(QtWidgets.QWidget):
         serial_layout = QtWidgets.QGridLayout(serial_group)
 
         self.port_combo = QtWidgets.QComboBox()
-        self.port_combo.addItem("COM1")
-        self.port_combo.addItem("COM2")
-
         self.refresh_btn = QtWidgets.QPushButton("⟳")
         self.refresh_btn.clicked.connect(self.refresh_serial_ports)
 
@@ -110,6 +107,28 @@ class ControlPanel(QtWidgets.QWidget):
         serial_layout.addWidget(self.refresh_btn, 0, 2)
         serial_layout.addWidget(QtWidgets.QLabel("Baud:"), 1, 0)
         serial_layout.addWidget(self.baud_combo, 1, 1, 1, 2)
+        
+        # --- Time Window ---
+        time_group = QtWidgets.QGroupBox("Time Window")
+        time_layout = QtWidgets.QGridLayout(time_group)
+
+        self.sample_period_edit = QtWidgets.QDoubleSpinBox()
+        self.sample_period_edit.setSuffix(" ms")
+        self.sample_period_edit.setRange(1, 1000)
+        self.sample_period_edit.setValue(50.0)
+        self.sample_period_edit.setDecimals(1)
+        self.sample_period_edit.valueChanged.connect(self._on_time_config_changed)
+
+        self.sample_count_edit = QtWidgets.QSpinBox()
+        self.sample_count_edit.setRange(10, 10000)
+        self.sample_count_edit.setValue(200)
+        self.sample_count_edit.valueChanged.connect(self._on_time_config_changed)
+
+        time_layout.addWidget(QtWidgets.QLabel("Sample period:"), 0, 0)
+        time_layout.addWidget(self.sample_period_edit, 0, 1)
+
+        time_layout.addWidget(QtWidgets.QLabel("Samples:"), 1, 0)
+        time_layout.addWidget(self.sample_count_edit, 1, 1)
 
         # --- Payload selection ---
         payload_group = QtWidgets.QGroupBox("Payload Type")
@@ -128,6 +147,10 @@ class ControlPanel(QtWidgets.QWidget):
         # --- Connect button ---
         self.connect_btn = QtWidgets.QPushButton("Connect")
         self.connect_btn.setMinimumHeight(36)
+        
+        self.apply_btn = QtWidgets.QPushButton("Apply")
+        self.apply_btn.setMinimumHeight(32)
+        self.apply_btn.clicked.connect(self._apply_plot_config)
 
         # --- Y axis control placeholder ---
         # --- Y Axis / Signals ---
@@ -138,12 +161,32 @@ class ControlPanel(QtWidgets.QWidget):
 
         # Spacer
         layout.addWidget(serial_group)
+        layout.addWidget(self.connect_btn)
+        layout.addWidget(time_group)
         layout.addWidget(payload_group)
         layout.addWidget(axis_group)
+        layout.addWidget(self.apply_btn)
         layout.addStretch()
-        layout.addWidget(self.connect_btn)
         self.refresh_serial_ports()
         
+    def _apply_plot_config(self):
+        config = {}
+
+        for w in self.y_controls:
+            config[w.signal_id] = {
+                "visible": w.enable_checkbox.isChecked(),
+                "y_min": w.min_edit.value(),
+                "y_max": w.max_edit.value(),
+                "lock": w.lock_checkbox.isChecked(),
+            }
+
+        self.plot_area.apply_plot_config(config)
+        
+    def _on_time_config_changed(self):
+        period_ms = self.sample_period_edit.value()
+        samples = self.sample_count_edit.value()
+        self.plot_area.set_time_config(period_ms, samples)
+
     def _collapse_others(self, opened, groups):
         for g in groups:
             if g is not opened:
@@ -200,18 +243,6 @@ class ControlPanel(QtWidgets.QWidget):
                 lambda checked, sid=sig_id: plot.set_signal_visible(sid, checked)
             )
 
-            widget.min_edit.valueChanged.connect(
-                lambda _, sid=sig_id, w=widget: plot.set_signal_y_range(
-                    sid, w.min_edit.value(), w.max_edit.value()
-                )
-            )
-
-            widget.max_edit.valueChanged.connect(
-                lambda _, sid=sig_id, w=widget: plot.set_signal_y_range(
-                    sid, w.min_edit.value(), w.max_edit.value()
-                )
-            )
-
             widget.lock_checkbox.toggled.connect(
                 lambda locked, sid=sig_id: plot.set_signal_lock(sid, locked)
             )
@@ -261,7 +292,11 @@ class PlotArea(QtWidgets.QWidget):
         
         self.fake_time = 0.0
         self.fake_data = {}
-        self.max_samples = 500
+        
+        self.sample_period_ms = 50.0
+        self.sample_period_s = self.sample_period_ms / 1000.0
+        self.max_samples = 200
+        self.sample_index = 0
 
         self.signal_views = {}
         layout = QtWidgets.QVBoxLayout(self)
@@ -307,6 +342,53 @@ class PlotArea(QtWidgets.QWidget):
         self.fake_timer = QtCore.QTimer(self)
         self.fake_timer.timeout.connect(self._fake_step)
         
+    def apply_plot_config(self, config: dict):
+        # 1. Stop drawing
+        self.fake_timer.stop()
+        self.sample_index = 0
+
+        # 2. Apply per-signal config
+        for sig_id, cfg in config.items():
+            view = self.signal_views.get(sig_id)
+            if not view:
+                continue
+
+            curve = view["curve"]
+            vb = view["viewbox"]
+
+            curve.setVisible(cfg["visible"])
+
+            if cfg["lock"]:
+                vb.enableAutoRange(axis=pg.ViewBox.YAxis, enable=False)
+                vb.setYRange(cfg["y_min"], cfg["y_max"], padding=0)
+            else:
+                vb.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
+
+        # 3. HARD reset buffers
+        self.fake_data.clear()
+        for sig_id in self.signal_views.keys():
+            self.fake_data[sig_id] = []
+
+        # 4. HARD reset X axis
+        base_vb = self.plot.getViewBox()
+        base_vb.enableAutoRange(axis=pg.ViewBox.XAxis, enable=False)
+
+        window_t = self.max_samples * self.sample_period_s
+        base_vb.setXRange(0.0, window_t, padding=0)
+
+        # 5. Restart drawing
+        self.fake_timer.start(int(self.sample_period_ms))
+        
+    def set_time_config(self, sample_period_ms: float, max_samples: int):
+        self.sample_period_ms = sample_period_ms
+        self.sample_period_s = sample_period_ms / 1000.0
+        self.max_samples = max_samples
+
+        # Trim buffers if needed
+        for buf in self.fake_data.values():
+            while len(buf) > self.max_samples:
+                buf.pop(0)
+        
     def _init_fake_data(self):
         self.fake_time = 0.0
         self.fake_data.clear()
@@ -315,16 +397,13 @@ class PlotArea(QtWidgets.QWidget):
             self.fake_data[sig_id] = []
             
     def _fake_step(self):
-        self.fake_time += 0.05  # ~20 Hz
-
         # Example PID-like behavior
-        setpoint = math.sin(self.fake_time * 0.5)
+        setpoint = math.sin(self.sample_index * self.sample_period_s * 0.5)
         measurement = setpoint + random.uniform(-0.05, 0.05)
         error = setpoint - measurement
 
         p = error * 20.0
-        i = math.sin(self.fake_time * 0.2) * 5.0
-        
+        i = math.sin(self.sample_index * self.sample_period_s * 0.2) * 5.0
         outputRaw = p + i
         output = max(min(outputRaw, 100), -100)
 
@@ -348,19 +427,29 @@ class PlotArea(QtWidgets.QWidget):
             if len(buf) > self.max_samples:
                 buf.pop(0)
 
-            y = buf
-            x0 = max(0, len(y) - self.max_samples)
-            x = list(range(x0, x0 + len(y)))
+            start_index = self.sample_index - len(buf) + 1
+            x = [
+                (start_index + i) * self.sample_period_s
+                for i in range(len(buf))
+            ]
 
-            self.signal_views[sig_id]["curve"].setData(x, y)
-            # --- auto-scroll X axis ---
-            base_vb = self.plot.getViewBox()
-            n = len(next(iter(self.fake_data.values())))
-            base_vb.setXRange(max(0, n - self.max_samples), n, padding=0)
+            self.signal_views[sig_id]["curve"].setData(x, buf)
+
+        # --- advance time ---
+        self.sample_index += 1
+
+        # --- auto-scroll X axis (TIME) ---
+        end_t = self.sample_index * self.sample_period_s
+        window_t = self.max_samples * self.sample_period_s
+        start_t = max(0.0, end_t - window_t)
+
+        self.plot.getViewBox().setXRange(start_t, end_t, padding=0)
+
 
     def configure_signals(self, stream_cfg: dict):
         # Clear previous
         self.plot.clear()
+        self.plot.setLabel("bottom", "Time [s]")
         self.signal_views.clear()
 
         base_vb = self.plot.getViewBox()
@@ -384,7 +473,15 @@ class PlotArea(QtWidgets.QWidget):
                 )
             )
 
-            curve = pg.PlotCurveItem(pen=pen, name=sig["label"])
+            curve = pg.PlotDataItem(
+                        pen=pen,
+                        name=sig["label"],
+                        clipToView=True,
+                        downsample=1,          # aktywuje mechanizm
+                        autoDownsample=True,
+                        downsampleMethod="peak"
+                    )
+            
             vb.addItem(curve)
 
             # Default Y range
@@ -410,8 +507,12 @@ class PlotArea(QtWidgets.QWidget):
 
 
     def set_signal_y_range(self, sig_id: str, y_min: float, y_max: float):
-        self.signal_views[sig_id]["viewbox"].setYRange(y_min, y_max, padding=0)
+        vb = self.signal_views[sig_id]["viewbox"]
 
+        # 🔑 WYŁĄCZ AUTORANGE zanim ustawisz zakres
+        vb.enableAutoRange(axis=pg.ViewBox.YAxis, enable=False)
+
+        vb.setYRange(y_min, y_max, padding=0)
 
     def set_signal_lock(self, sig_id: str, locked: bool):
         vb = self.signal_views[sig_id]["viewbox"]
@@ -429,6 +530,10 @@ LINE_STYLE_MAP = {
 class YAxisControlWidget(QtWidgets.QWidget):
     def __init__(self, name: str, color: str):
         super().__init__()
+        
+        self._debounce_timer = QtCore.QTimer(self)
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.setInterval(150)
 
         main_layout = QtWidgets.QVBoxLayout(self)
         main_layout.setContentsMargins(4, 2, 4, 2)
