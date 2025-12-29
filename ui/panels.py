@@ -224,7 +224,7 @@ class ControlPanel(QtWidgets.QWidget):
             return
         cfg = self.stream_loader.get_stream(sid)
         self._rebuild_signal_list(cfg)
-        self.stream_changed.emit(cfg["signals"])
+        self.stream_changed.emit(cfg)
 
     def _rebuild_signal_list(self, cfg):
         """

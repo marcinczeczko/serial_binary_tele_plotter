@@ -72,7 +72,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # --- Signal Wiring ---
         # Panel -> Worker (Configuration)
         self.panel.scale_changed.connect(self.worker.update_scale)
-        self.panel.stream_changed.connect(self.worker.configure_signals)
+        self.panel.stream_changed.connect(self._on_stream_changed)
         self.panel.time_config_changed.connect(self.worker.update_time_config)
         self.panel.pid_config_sent.connect(self.worker.send_pid_config)
 
@@ -81,7 +81,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.panel.pause_requested.connect(self._handle_pause)
 
         # Panel -> Plot (Visuals)
-        self.panel.stream_changed.connect(self.plot.configure_signals)
         self.panel.signal_visibility_changed.connect(self.plot.set_signal_visible)
 
         # Worker -> Plot/UI (Data flow)
@@ -93,6 +92,21 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Initial Stream Setup
         self.panel._on_stream_changed(self.panel.payload_combo.currentIndex())
+
+    def _on_stream_changed(self, stream_cfg: dict):
+        # Stop data acquisition if is progress
+        QtCore.QMetaObject.invokeMethod(
+            self.worker,
+            "stop_working",
+            QtCore.Qt.ConnectionType.QueuedConnection,
+        )
+
+        # UI
+        self.plot.configure_signals(stream_cfg["signals"])
+
+        # Worker
+        self.worker.configure_signals(stream_cfg["signals"])
+        self.worker.configure_frame(stream_cfg)
 
     def _handle_connection(self, port, baud):
         """

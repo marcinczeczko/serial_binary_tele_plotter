@@ -17,7 +17,10 @@ import numpy as np
 import serial
 from PyQt6 import QtCore
 
+from core.frame_decoder import FrameDecoder
 from core.protocol import MAGIC_0, MAGIC_1, RTP_PID, RTP_REQ_PID, calculate_crc8
+
+DEBUG_DECODE = False
 
 
 class TelemetryWorker(QtCore.QObject):
@@ -48,6 +51,9 @@ class TelemetryWorker(QtCore.QObject):
         self.sample_index = 0
         self.buffers = {}
         self.scale = {}
+
+        self.frame_decoder = None
+        self.active_stream_id = None
 
         self.timer = None
         self.serial_port = None
@@ -182,22 +188,41 @@ class TelemetryWorker(QtCore.QObject):
             p_type (int): The packet ID (e.g., RTP_PID).
             payload (bytes): The raw data bytes of the packet body.
         """
-        if p_type == RTP_PID:
-            try:
-                # Unpack: timestamp (uint32), reserved (byte), 7 floats
-                d = struct.unpack("<IBfffffff", payload)
-                t = d[0] * self.sample_period_s
-                values = {
-                    "setpoint": d[2],
-                    "measurement": d[3],
-                    "error": d[4],
-                    "p_term": d[5],
-                    "i_term": d[6],
-                    "output": d[8],
-                }
-                self._update_buffers(values, t)
-            except struct.error:
-                pass
+        if not self.frame_decoder or self.active_stream_id is None:
+            return
+
+        # Ignore payloads for other stream ID
+        if p_type != self.active_stream_id:
+            if DEBUG_DECODE:
+                print(f"[RX] Ignored payload type={p_type}, active={self.active_stream_id}")
+            return
+
+        # Validate length
+        if len(payload) != self.frame_decoder.size:
+            if DEBUG_DECODE:
+                print(
+                    f"[RX] Payload size mismatch for stream_id={p_type}: "
+                    f"got={len(payload)} expected={self.frame_decoder.size}"
+                )
+            return
+
+        try:
+            decoded = self.frame_decoder.decode(payload)
+        except struct.error as e:
+            if DEBUG_DECODE:
+                print(f"[RX] Decode error: {e}")
+            return
+
+        # TIME BASE
+        t = decoded.get("loopCntr", self.sample_index) * self.sample_period_s
+
+        values = {}
+        for sig_id in self.buffers.keys():
+            if sig_id in decoded:
+                values[sig_id] = decoded[sig_id]
+
+        self._debug_print_frame(f"id={p_type}", values)
+        self._update_buffers(values, t)
 
     @QtCore.pyqtSlot(int, float, float, float)
     def send_pid_config(self, motor_id, kp, ki, kff):
@@ -317,14 +342,50 @@ class TelemetryWorker(QtCore.QObject):
         """Resets and re-initializes buffers based on the new signal configuration."""
         self.buffers.clear()
         self.scale.clear()
+
         for sig_id, sig in signals_cfg.items():
             self.buffers[sig_id] = deque(maxlen=self.max_samples)
             yr = sig["y_range"]
             self.scale[sig_id] = (yr["min"], yr["max"])
+
         self.sample_index = 0
+
+    def configure_frame(self, stream_cfg: dict):
+        if "frame" not in stream_cfg:
+            raise ValueError("Stream config missing 'frame' definition")
+
+        frame = stream_cfg["frame"]
+
+        stream_id = frame.get("stream_id")
+        if stream_id is None:
+            raise ValueError("Frame definition missing 'stream_id'")
+
+        self.frame_decoder = FrameDecoder(
+            endian=frame.get("endianness", "little"),
+            fields=frame["fields"],
+        )
+
+        self.active_stream_id = stream_id
+
+        if DEBUG_DECODE:
+            print(
+                f"[CFG] Active stream set: stream_id={stream_id}, "
+                f"bytes={self.frame_decoder.size}, "
+                f"fields={[f['name'] for f in frame['fields']]}"
+            )
 
     @QtCore.pyqtSlot(str, float, float)
     def update_scale(self, sig_id, ymin, ymax):
         """Updates the Y-axis scaling range for a specific signal."""
         if sig_id in self.scale:
             self.scale[sig_id] = (ymin, ymax)
+
+    def _debug_print_frame(self, stream_name: str, values: dict):
+        if not DEBUG_DECODE:
+            return
+
+        items = " ".join(
+            f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}" for k, v in values.items()
+        )
+
+        print(f"[RX][{stream_name}] {items}")

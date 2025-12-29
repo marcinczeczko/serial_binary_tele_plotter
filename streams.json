@@ -105,7 +105,7 @@
                     },
                     "visible": true
                 },
-                "p_term": {
+                "pTerm": {
                     "label": "pTerm",
                     "field": "pTerm",
                     "group": "terms",
@@ -120,7 +120,7 @@
                     },
                     "visible": false
                 },
-                "i_term": {
+                "iTerm": {
                     "label": "iTerm",
                     "field": "iTerm",
                     "group": "terms",
