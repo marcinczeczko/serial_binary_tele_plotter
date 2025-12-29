@@ -1,0 +1,94 @@
+# --- Python: Core & Compiled files ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- C extensions ---
+*.so
+
+# --- Distribution / Packaging ---
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --- Virtual Environments ---
+# Common aliases for virtual envs
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# --- Unit Tests & Coverage ---
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# --- Documentation ---
+docs/_build/
+
+# --- Jupyter Notebooks ---
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# --- Logs ---
+*.log
+
+# --- Databases (local files) ---
+*.sqlite3
+*.db
+
+# --- Visual Studio Code ---
+# Ignore everything in .vscode...
+.vscode/*
+# ...except for shared settings (uncomment if you want to share these):
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# VS Code local history (always ignore)
+.history/
+
+# --- Environment Variables & Secrets (CRITICAL) ---
+.env
+.env.local
+.env.*.local
+*.pem
+
+# --- Operating System Files ---
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini

@@ -32,7 +32,8 @@
   // ---PYLINT for PYQT6 ---
   // Load PyQT6 plugin so classes are visible by linter
   "pylint.args": [
-    "--extension-pkg-allow-list=PyQt6",
+    "--extension-pkg-allow-list=PyQt6.QtWidgets,PyQt6.QtCore,PyQt6.QtGui",
+    "--disable=no-member,c-extension-no-member",
     //"--variable-rgx=[a-z_][a-z0-9_]{1,30}$",  // Less restrictive nameology of variables
    // "--disable=C0114,C0115,C0116"             // Disable the need for docstrings
   ]
