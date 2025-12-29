@@ -48,6 +48,7 @@ class ControlPanel(QtWidgets.QWidget):
     connection_requested = QtCore.pyqtSignal(str, int)
     pause_requested = QtCore.pyqtSignal(bool)
     pid_config_sent = QtCore.pyqtSignal(int, float, float, float)
+    motor_changed = QtCore.pyqtSignal(int)
 
     def __init__(self):
         """Initializes the Control Panel UI layout and widgets."""
@@ -137,6 +138,13 @@ class ControlPanel(QtWidgets.QWidget):
         l_payload.addWidget(self.payload_combo)
         layout.addWidget(grp_payload)
 
+        self.cb_motor = QtWidgets.QComboBox()
+        self.cb_motor.addItem("Left Motor (0)", 0)  # UserData = 0
+        self.cb_motor.addItem("Right Motor (1)", 1)  # UserData = 1
+        self.cb_motor.setCurrentIndex(0)
+        self.cb_motor.currentIndexChanged.connect(self._on_motor_changed)
+        layout.addWidget(self.cb_motor)
+
         # Apply Scales Button
         self.apply_btn = QtWidgets.QPushButton("Apply Scales")
         self.apply_btn.clicked.connect(self._apply_scales)
@@ -162,6 +170,19 @@ class ControlPanel(QtWidgets.QWidget):
 
         # Initial population
         self.refresh_ports()
+
+    def apply_stream_config(self, cfg: dict):
+        """
+        Applies stream configuration to the control panel UI.
+        This is the public API used by MainWindow.
+        """
+        self._rebuild_signal_list(cfg)
+
+    def _on_motor_changed(self):
+        """Emituje sygnał ze zmianą silnika."""
+        # Pobieramy int (user data) przypisane do itemu (0 lub 1)
+        motor_id = self.cb_motor.currentData()
+        self.motor_changed.emit(motor_id)
 
     def _make_sb(self, val):
         """Helper to create standard double spin boxes."""

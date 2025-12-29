@@ -8,7 +8,7 @@ signal wiring, thread management, and application lifecycle events.
 
 from PyQt6 import QtCore, QtWidgets
 
-from core.worker import TelemetryWorker
+from core.worker import TelemetryWorker, WorkerState
 from ui.panels import ControlPanel
 from ui.plot_area import PlotArea
 
@@ -70,6 +70,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker_thread.start()
 
         # --- Signal Wiring ---
+        self._initial_stream_setup()
+
         # Panel -> Worker (Configuration)
         self.panel.scale_changed.connect(self.worker.update_scale)
         self.panel.stream_changed.connect(self._on_stream_changed)
@@ -87,24 +89,36 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker.data_ready.connect(self.plot.on_data_ready)
         self.worker.status_msg.connect(self.lbl_status.setText)
 
+        # Motor filter
+        self.panel.motor_changed.connect(self.worker.set_selected_motor)
+
         # Plot -> UI (Interactivity)
         self.plot.cursor_moved.connect(self.lbl_cursor.setText)
 
-        # Initial Stream Setup
-        self.panel._on_stream_changed(self.panel.payload_combo.currentIndex())
+    def _initial_stream_setup(self):
+        idx = self.panel.payload_combo.currentIndex()
+        sid = self.panel.payload_combo.itemData(idx)
+        if not sid:
+            return
+        cfg = self.panel.stream_loader.get_stream(sid)
+
+        self.panel.apply_stream_config(cfg)
+
+        self.plot.configure_signals(cfg["signals"])
+        self.worker.configure_signals(cfg["signals"])
+        self.worker.configure_frame(cfg)
 
     def _on_stream_changed(self, stream_cfg: dict):
-        # Stop data acquisition if is progress
-        QtCore.QMetaObject.invokeMethod(
-            self.worker,
-            "stop_working",
-            QtCore.Qt.ConnectionType.QueuedConnection,
-        )
+        if self.worker.state == WorkerState.RUNNING:
+            QtCore.QMetaObject.invokeMethod(
+                self.worker,
+                "stop_working",
+                QtCore.Qt.ConnectionType.QueuedConnection,
+            )
+            self.lbl_status.setText("Stream changed — stopped")
+            self.lbl_status.setStyleSheet("color: #FFA000; font-weight: bold;")
 
-        # UI
         self.plot.configure_signals(stream_cfg["signals"])
-
-        # Worker
         self.worker.configure_signals(stream_cfg["signals"])
         self.worker.configure_frame(stream_cfg)
 

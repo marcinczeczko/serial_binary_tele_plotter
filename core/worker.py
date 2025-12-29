@@ -12,15 +12,26 @@ import random
 import struct
 import traceback
 from collections import deque
+from enum import Enum, auto
+from typing import Deque, Dict, Union
 
 import numpy as np
 import serial
 from PyQt6 import QtCore
 
 from core.frame_decoder import FrameDecoder
-from core.protocol import MAGIC_0, MAGIC_1, RTP_PID, RTP_REQ_PID, calculate_crc8
+from core.protocol import MAGIC_0, MAGIC_1, RTP_REQ_PID, calculate_crc8
 
-DEBUG_DECODE = False
+DEBUG_DECODE = True
+TRACE_DECODE = False
+
+BufferValue = Union[float, int]
+
+
+class WorkerState(Enum):
+    IDLE = auto()  # brak konfiguracji, brak pracy
+    CONFIGURED = auto()  # sygnały + frame skonfigurowane
+    RUNNING = auto()  # aktywne czytanie (serial lub virtual)
 
 
 class TelemetryWorker(QtCore.QObject):
@@ -48,16 +59,24 @@ class TelemetryWorker(QtCore.QObject):
         super().__init__()
         self.sample_period_s = sample_period_ms / 1000.0
         self.max_samples = max_samples
-        self.sample_index = 0
-        self.buffers = {}
+        self._virtual_loop_cntr: int = 0
+
+        self.rx_buffer = bytearray()
+
         self.scale = {}
+
+        self.selected_motor = 0
+        # buffers[motor_id][signal_id] -> deque
+        self.buffers: Dict[int, Dict[str, Deque[BufferValue]]] = {}
+        # signals mapping: signal_id -> frame field name
+        self.signal_field_map: Dict[str, str] = {}
 
         self.frame_decoder = None
         self.active_stream_id = None
 
         self.timer = None
         self.serial_port = None
-        self.is_running = False
+        self.state: WorkerState = WorkerState.IDLE
 
     @QtCore.pyqtSlot(str, int)
     def start_working(self, port_name, baudrate):
@@ -71,9 +90,18 @@ class TelemetryWorker(QtCore.QObject):
             port_name (str): The name of the COM port (e.g., 'COM3', '/dev/ttyUSB0') or 'VIRTUAL'.
             baudrate (int): The communication speed.
         """
-        self.is_running = True
+        if self.state != WorkerState.CONFIGURED:
+            self.status_msg.emit("Worker not configured yet")
+            if TRACE_DECODE:
+                print(f"[STATE] start_working blocked, state={self.state}")
+            return
+
+        self.state = WorkerState.RUNNING
+        if TRACE_DECODE:
+            print("[STATE] RUNNING")
 
         if port_name == "VIRTUAL":
+            self._virtual_loop_cntr = 0
             if self.timer is None:
                 self.timer = QtCore.QTimer(self)
                 self.timer.timeout.connect(self._step)
@@ -87,10 +115,10 @@ class TelemetryWorker(QtCore.QObject):
                 QtCore.QTimer.singleShot(0, self._serial_read_step)
             except serial.SerialException as e:
                 self.status_msg.emit(f"Connection Error: {e}")
-                self.is_running = False
+                self.state = WorkerState.CONFIGURED
             except ValueError as e:
                 self.status_msg.emit(f"Config Error: {e}")
-                self.is_running = False
+                self.state = WorkerState.CONFIGURED
 
     @QtCore.pyqtSlot()
     def stop_working(self):
@@ -100,7 +128,16 @@ class TelemetryWorker(QtCore.QObject):
         Stops the internal timer, closes the serial port, and sets the running flag to False.
         This slot is typically connected to the GUI disconnection or close events.
         """
-        self.is_running = False
+        print("[STOP] stop_working called from:")
+        traceback.print_stack(limit=5)
+
+        if self.state != WorkerState.RUNNING:
+            return
+
+        if TRACE_DECODE:
+            print("[STATE] STOP -> CONFIGURED")
+
+        self.state = WorkerState.CONFIGURED
 
         if self.timer:
             self.timer.stop()
@@ -122,63 +159,90 @@ class TelemetryWorker(QtCore.QObject):
         process other events (like signals) between reads, ensuring the thread
         remains responsive to 'stop' commands.
         """
-        if not self.is_running or not self.serial_port:
+        if self.state != WorkerState.RUNNING or not self.serial_port:
             return
 
         try:
-            # Read everything in buffer to avoid lag
-            # Limit iterations to avoid freezing UI during data floods
-            iterations = 0
-            while self.serial_port and self.serial_port.in_waiting >= 5 and iterations < 50:
-                iterations += 1
+            n = self.serial_port.in_waiting
+            if n > 0:
+                data = self.serial_port.read(n)
+                if data:
+                    if TRACE_DECODE:
+                        print(f"[RX][READ] got {len(data)} bytes")
+                    self.rx_buffer.extend(data)
+                    if TRACE_DECODE:
+                        print(f"[RX][BUF] size={len(self.rx_buffer)}")
+                    self._parse_rx_buffer()
+        except serial.SerialException as e:
+            msg = str(e)
+            self.status_msg.emit(f"Serial error: {msg}")
 
-                # Search for header synchronization (byte by byte)
-                b = self.serial_port.read(1)
-                if not b or ord(b) != MAGIC_0:
-                    continue
+            if "returned no data" not in msg:
+                self.stop_working()
+                return
 
-                b = self.serial_port.read(1)
-                if not b or ord(b) != MAGIC_1:
-                    continue
-
-                # Read rest of the header
-                h_data = self.serial_port.read(3)
-                if len(h_data) < 3:
-                    continue
-
-                p_type, p_len, h_crc = struct.unpack("BBB", h_data)
-
-                # Verify Header CRC
-                header_check = struct.pack("BBBB", MAGIC_0, MAGIC_1, p_type, p_len)
-                if calculate_crc8(header_check) != h_crc:
-                    continue
-
-                # Read Payload
-                payload = self.serial_port.read(p_len)
-                if len(payload) != p_len:
-                    continue
-
-                # Read and Verify Payload CRC
-                p_crc_raw = self.serial_port.read(1)
-                if len(p_crc_raw) < 1:
-                    continue
-                p_crc = ord(p_crc_raw)
-
-                if calculate_crc8(payload) == p_crc:
-                    self._handle_payload(p_type, payload)
-        except (serial.SerialException, OSError) as e:
-            self.status_msg.emit(f"Device Disconnected: {e}")
-            self.stop_working()
-            return
-        except Exception as e:
-            print(f"CRITICAL WORKER ERROR: {e}")
-            traceback.print_exc()  # Wypisze pełny stack trace
-            self.stop_working()
-            return
-
-        # Schedule next read immediately if still running
-        if self.is_running:
+        if self.state == WorkerState.RUNNING:
             QtCore.QTimer.singleShot(0, self._serial_read_step)
+
+    def _parse_rx_buffer(self):
+        """
+        Parses complete frames from rx_buffer.
+        Frame format:
+        [MAGIC0][MAGIC1][TYPE][LEN][HDR_CRC][PAYLOAD...][PAYLOAD_CRC]
+        """
+        if len(self.rx_buffer) > 4096:
+            if TRACE_DECODE:
+                print(f"[RX][WARN] buffer overflow ({len(self.rx_buffer)} bytes), clearing")
+            self.rx_buffer.clear()
+            return
+        while True:
+            # minimal frame = 2 magic + 3 header + 1 payload crc
+            if len(self.rx_buffer) < 6:
+                return
+
+            # sync to MAGIC
+            if self.rx_buffer[0] != MAGIC_0 or self.rx_buffer[1] != MAGIC_1:
+                if TRACE_DECODE:
+                    print(
+                        f"[RX][SYNC] drop byte 0x{self.rx_buffer[0]:02X}, "
+                        f"next=0x{self.rx_buffer[1]:02X}"
+                    )
+                del self.rx_buffer[0]
+                continue
+
+            # header available?
+            if len(self.rx_buffer) < 5:
+                return
+
+            p_type = self.rx_buffer[2]
+            p_len = self.rx_buffer[3]
+            h_crc = self.rx_buffer[4]
+
+            header = bytes(self.rx_buffer[:4])
+            if calculate_crc8(header) != h_crc:
+                # bad header → resync
+                del self.rx_buffer[0]
+                continue
+
+            frame_len = 5 + p_len + 1
+            if len(self.rx_buffer) < frame_len:
+                return  # wait for more data
+
+            payload = bytes(self.rx_buffer[5 : 5 + p_len])
+            p_crc = self.rx_buffer[5 + p_len]
+
+            if calculate_crc8(payload) == p_crc:
+                if TRACE_DECODE:
+                    print(f"[RX][FRAME] type={p_type} len={p_len}")
+                self._handle_payload(p_type, payload)
+            else:
+                if TRACE_DECODE:
+                    print("[RX][CRC] payload CRC error")
+
+            # consume frame
+            del self.rx_buffer[:frame_len]
+            if TRACE_DECODE:
+                print(f"[RX][BUF] consumed frame, remaining={len(self.rx_buffer)}")
 
     def _handle_payload(self, p_type, payload):
         """
@@ -188,18 +252,21 @@ class TelemetryWorker(QtCore.QObject):
             p_type (int): The packet ID (e.g., RTP_PID).
             payload (bytes): The raw data bytes of the packet body.
         """
+        if TRACE_DECODE:
+            print(f"[RX] got payload type={p_type}, len={len(payload)}")
+
         if not self.frame_decoder or self.active_stream_id is None:
             return
 
         # Ignore payloads for other stream ID
         if p_type != self.active_stream_id:
-            if DEBUG_DECODE:
+            if TRACE_DECODE:
                 print(f"[RX] Ignored payload type={p_type}, active={self.active_stream_id}")
             return
 
         # Validate length
         if len(payload) != self.frame_decoder.size:
-            if DEBUG_DECODE:
+            if TRACE_DECODE:
                 print(
                     f"[RX] Payload size mismatch for stream_id={p_type}: "
                     f"got={len(payload)} expected={self.frame_decoder.size}"
@@ -209,20 +276,42 @@ class TelemetryWorker(QtCore.QObject):
         try:
             decoded = self.frame_decoder.decode(payload)
         except struct.error as e:
-            if DEBUG_DECODE:
+            if TRACE_DECODE:
                 print(f"[RX] Decode error: {e}")
             return
 
-        # TIME BASE
-        t = decoded.get("loopCntr", self.sample_index) * self.sample_period_s
+        if DEBUG_DECODE:
+            items = []
+            if decoded["motor"] == 0:
+                for k, v in decoded.items():
+                    if isinstance(v, float):
+                        items.append(f"{k}={v:.5f}")
+                    else:
+                        items.append(f"{k}={v}")
+                print("[RX][DATA] " + " ".join(items))
 
-        values = {}
-        for sig_id in self.buffers.keys():
-            if sig_id in decoded:
-                values[sig_id] = decoded[sig_id]
+        # --- MOTOR FILTER
+        motor = decoded.get("motor")
+        if motor not in self.buffers:
+            if TRACE_DECODE:
+                print(f"[RX] Motor {motor} not configured, buffers={list(self.buffers.keys())}")
+            return
 
-        self._debug_print_frame(f"id={p_type}", values)
-        self._update_buffers(values, t)
+        loop_cntr = decoded["loopCntr"]
+
+        # Store values in motor-specific buffers
+        motor_buffers = self.buffers[motor]
+        # store time base
+        motor_buffers["__loop__"].append(loop_cntr)
+
+        # store signals
+        for sig_id, field in self.signal_field_map.items():
+            motor_buffers[sig_id].append(decoded[field])
+
+        # Emit only if this motor is currently selected
+        if motor == self.selected_motor:
+            # self._debug_print_frame(f"id={p_type}, motor={motor}", values)
+            self._update_buffers_from_motor(motor)
 
     @QtCore.pyqtSlot(int, float, float, float)
     def send_pid_config(self, motor_id, kp, ki, kff):
@@ -252,80 +341,87 @@ class TelemetryWorker(QtCore.QObject):
     def _step(self):
         """
         Generates simulated telemetry data for VIRTUAL mode.
+        Uses the SAME decode path as real serial data.
         """
-        t = self.sample_index * self.sample_period_s
+
+        if self.state != WorkerState.RUNNING:
+            return
+
+        if self.frame_decoder is None or self.active_stream_id is None:
+            return  # not configured yet
+
+        loop = self._virtual_loop_cntr
+        t = loop * self.sample_period_s
+
+        # --- simulate signals ---
         setpoint = math.sin(t * 0.5)
         measurement = setpoint + random.uniform(-0.05, 0.05)
         error = setpoint - measurement
-        values = {
+
+        decoded = {
+            "loopCntr": loop,
+            "motor": self.selected_motor,
             "setpoint": setpoint,
             "measurement": measurement,
             "error": error,
-            "p_term": error * 20.0,
-            "i_term": math.sin(t * 0.2) * 5.0,
+            "pTerm": error * 20.0,
+            "iTerm": math.sin(t * 0.2) * 5.0,
+            "outputRaw": error * 30.0,
             "output": max(min(error * 30.0, 100), -100),
         }
-        self._update_buffers(values, t)
-        self.sample_index += 1
 
-    def _update_buffers(self, values, current_time):
-        """
-        Updates internal buffers, synchronizes data lengths, and prepares signals for the UI.
+        try:
+            payload = struct.pack(
+                self.frame_decoder.format, *[decoded[f["name"]] for f in self.frame_decoder.fields]
+            )
+        except (KeyError, struct.error) as e:
+            print(f"[VIRTUAL] pack error: {e}")
+            return
 
-        This method:
-        1. Appends new values to deques.
-        2. Creates a snapshot (list) of the data to avoid race conditions.
-        3. Synchronizes all signals to the minimum available length.
-        4. Normalizes signals (0.0 - 1.0) based on configured ranges.
-        5. Emits the `data_ready` signal.
+        self._handle_payload(self.active_stream_id, payload)
+        self._virtual_loop_cntr += 1
+
+    def _update_buffers_from_motor(self, motor_id: int):
+        """_summary_
 
         Args:
-            values (dict): New data points keyed by signal ID.
-            current_time (float): The timestamp associated with this data batch.
+            motor_id (_type_): _description_
+            current_time (_type_): _description_
         """
-        # 1. Append new data
-        for k, v in values.items():
-            if k in self.buffers:
-                self.buffers[k].append(v)
+        motor_buffers = self.buffers[motor_id]
 
-        if not self.buffers:
+        loops_cntr = motor_buffers["__loop__"]
+        if len(loops_cntr) < 2:
             return
 
-        # 2. Snapshot to avoid modification during drawing
-        # Get only buffers that actually have data
-        snapshot_raw = {}
-        active_lengths = []
+        # build time axis from loopCntr
+        loop_cntr_arr = np.asarray(loops_cntr, dtype=float)
+        time_axis = loop_cntr_arr * self.sample_period_s
 
-        for sig_id, buf in self.buffers.items():
-            data_list = list(buf)
-            if len(data_list) > 0:
-                snapshot_raw[sig_id] = np.array(data_list)
-                active_lengths.append(len(data_list))
+        snapshot_raw: Dict[str, np.ndarray] = {}
+        out_norm: Dict[str, np.ndarray] = {}
 
-        # If no data or not enough samples, exit
-        if not active_lengths or max(active_lengths) < 2:
-            return
+        for sig_id, buf in motor_buffers.items():
+            if sig_id == "__loop__":
+                continue
 
-        # 3. Synchronize lengths (take minimum of active buffers)
-        min_len = min(active_lengths)
-        for sig_id, arr in snapshot_raw.items():
-            if len(arr) > min_len:
-                snapshot_raw[sig_id] = arr[:min_len]
+            arr = np.asarray(buf, dtype=float)
+            if len(arr) != len(time_axis):
+                continue
 
-        # 4. Create time axis
-        time_axis = np.linspace(
-            current_time - min_len * self.sample_period_s, current_time, min_len
+            snapshot_raw[sig_id] = arr
+
+            ymin, ymax = self.scale[sig_id]
+            scale = max(ymax - ymin, 1e-12)
+            out_norm[sig_id] = np.clip((arr - ymin) / scale, 0.0, 1.0)
+
+        self.data_ready.emit(
+            {
+                "time": time_axis,
+                "signals": out_norm,
+                "raw": snapshot_raw,
+            }
         )
-
-        # 5. Normalize
-        out_signals_norm = {}
-        for sig_id, arr in snapshot_raw.items():
-            if sig_id in self.scale:
-                ymin, ymax = self.scale[sig_id]
-                scale = max(ymax - ymin, 1e-12)
-                out_signals_norm[sig_id] = np.clip((arr - ymin) / scale, 0.0, 1.0)
-
-        self.data_ready.emit({"time": time_axis, "signals": out_signals_norm, "raw": snapshot_raw})
 
     @QtCore.pyqtSlot(float, int)
     def update_time_config(self, period_ms, max_samples):
@@ -333,22 +429,42 @@ class TelemetryWorker(QtCore.QObject):
         self.sample_period_s = period_ms / 1000.0
         self.max_samples = max_samples
 
-        self.buffers = {k: deque(maxlen=self.max_samples) for k in self.buffers}
+        # rebuild all deques with new maxlen
+        for motor_bufs in self.buffers.values():
+            for sig_id, old_buf in motor_bufs.items():
+                motor_bufs[sig_id] = deque(old_buf, maxlen=max_samples)
+
         if self.timer and self.timer.isActive():
             self.timer.setInterval(int(period_ms))
 
     @QtCore.pyqtSlot(dict)
     def configure_signals(self, signals_cfg: dict):
-        """Resets and re-initializes buffers based on the new signal configuration."""
+        """
+        Initialize per-motor buffers.
+        """
         self.buffers.clear()
         self.scale.clear()
+        self.signal_field_map.clear()
 
+        # Build signal → frame field mapping
         for sig_id, sig in signals_cfg.items():
-            self.buffers[sig_id] = deque(maxlen=self.max_samples)
+            self.signal_field_map[sig_id] = sig["field"]
             yr = sig["y_range"]
             self.scale[sig_id] = (yr["min"], yr["max"])
 
-        self.sample_index = 0
+        # Prepare buffers for known motors (0,1)
+        for motor_id in (0, 1):
+            motor_bufs: Dict[str, Deque[float]] = {}
+            motor_bufs["__loop__"] = deque(maxlen=self.max_samples)
+
+            for sig_id in signals_cfg.keys():
+                motor_bufs[sig_id] = deque(maxlen=self.max_samples)
+
+            self.buffers[motor_id] = motor_bufs
+
+        self.state = WorkerState.CONFIGURED
+        if DEBUG_DECODE:
+            print("[STATE] CONFIGURED")
 
     def configure_frame(self, stream_cfg: dict):
         if "frame" not in stream_cfg:
@@ -356,20 +472,16 @@ class TelemetryWorker(QtCore.QObject):
 
         frame = stream_cfg["frame"]
 
-        stream_id = frame.get("stream_id")
-        if stream_id is None:
-            raise ValueError("Frame definition missing 'stream_id'")
-
         self.frame_decoder = FrameDecoder(
             endian=frame.get("endianness", "little"),
             fields=frame["fields"],
         )
 
-        self.active_stream_id = stream_id
+        self.active_stream_id = frame.get("stream_id")
 
         if DEBUG_DECODE:
             print(
-                f"[CFG] Active stream set: stream_id={stream_id}, "
+                f"[CFG] Active stream set: stream_id={self.active_stream_id}, "
                 f"bytes={self.frame_decoder.size}, "
                 f"fields={[f['name'] for f in frame['fields']]}"
             )
@@ -389,3 +501,19 @@ class TelemetryWorker(QtCore.QObject):
         )
 
         print(f"[RX][{stream_name}] {items}")
+
+    @QtCore.pyqtSlot(int)
+    def set_selected_motor(self, motor_id: int):
+        """
+        Ustawia ID silnika i czyści bufory, aby uniknąć mieszania danych.
+        """
+        if motor_id not in self.buffers:
+            return
+
+        self.selected_motor = motor_id
+
+        # Czyścimy wszystkie aktywne bufory sygnałów
+        for buf in self.buffers[motor_id].values():
+            buf.clear()
+
+        print(f"[UI] Active motor set to {motor_id}")
