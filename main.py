@@ -1,19 +1,26 @@
-import sys
+import copy
 import json
-from pathlib import Path
 import math
-from enum import Enum
 import random
-import numpy as np
+import signal
+import struct
+import sys
+import time
 from collections import deque
+from enum import Enum
+from pathlib import Path
+
+import numpy as np
+import pyqtgraph as pg
+import serial  # Wymaga: pip install pyserial
+from PyQt6 import QtCore, QtGui, QtWidgets
 from serial.tools import list_ports
 
-from PyQt6 import QtWidgets, QtCore, QtGui
-import pyqtgraph as pg
 
 class PlotMode(Enum):
     LIVE = 1
     ANALYSIS = 2
+
 
 # -----------------------------
 # Global application styling
@@ -30,12 +37,13 @@ def apply_dark_theme(app: QtWidgets.QApplication):
     palette.setColor(palette.ColorRole.ButtonText, QtCore.Qt.GlobalColor.white)
     palette.setColor(palette.ColorRole.Highlight, QtCore.Qt.GlobalColor.blue)
     app.setPalette(palette)
-    
-    app.setStyleSheet("""
+
+    app.setStyleSheet(
+        """
         QCheckBox { spacing: 6px; color: #ddd; }
         QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #666; background-color: #111; }
         QCheckBox::indicator:checked { background-color: #4FC3F7; border: 1px solid #4FC3F7; }
-        QDoubleSpinBox, QSpinBox { padding: 2px; background-color: #1e1e1e; border: 1px solid #333; color: #fff; }
+        QDoubleSpinBox, QSpinBox, QLineEdit { padding: 2px; background-color: #1e1e1e; border: 1px solid #333; color: #fff; }
         QGroupBox { border: 1px solid #333; margin-top: 6px; padding-top: 10px; font-weight: bold; color: #aaa; }
         QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 3px; }
         QPushButton { background-color: #333; border: 1px solid #555; border-radius: 3px; padding: 5px; color: white; }
@@ -44,50 +52,239 @@ def apply_dark_theme(app: QtWidgets.QApplication):
         QPushButton:checked { background-color: #555; border: 1px solid #888; }
         QComboBox { background-color: #1e1e1e; border: 1px solid #333; color: white; padding: 4px; }
         QStatusBar { color: #888; }
-    """)
+    """
+    )
+
 
 # -----------------------------
 # Data & Logic Worker
 # -----------------------------
 class TelemetryWorker(QtCore.QObject):
     data_ready = QtCore.pyqtSignal(dict)
+    status_msg = QtCore.pyqtSignal(str)
 
     def __init__(self, sample_period_ms: float, max_samples: int):
         super().__init__()
         self.sample_period_s = sample_period_ms / 1000.0
         self.max_samples = max_samples
-        
         self.sample_index = 0
         self.buffers = {}
         self.scale = {}
-        self.timer = None
 
-    @QtCore.pyqtSlot()
-    def start_working(self):
-        """Uruchamia timer generujący dane"""
-        if self.timer is None:
-            self.timer = QtCore.QTimer(self)
-            self.timer.timeout.connect(self._step)
-        
-        self.timer.start(int(self.sample_period_s * 1000))
+        self.timer = None
+        self.serial_port = None
+        self.is_running = False
+
+        self.MAGIC_0 = 0xAA
+        self.MAGIC_1 = 0x55
+        self.RTP_PID = 0x01
+        self.RTP_REQ_PID = 0x10
+
+    def calculate_crc8(self, data):
+        crc = 0x00
+        for byte in data:
+            crc ^= byte
+            for _ in range(8):
+                if crc & 0x80:
+                    crc = ((crc << 1) ^ 0x07) & 0xFF
+                else:
+                    crc = (crc << 1) & 0xFF
+        return crc
+
+    @QtCore.pyqtSlot(str, int)
+    def start_working(self, port_name, baudrate):
+        self.is_running = True
+
+        if port_name == "VIRTUAL":
+            if self.timer is None:
+                self.timer = QtCore.QTimer(self)
+                self.timer.timeout.connect(self._step)
+            self.timer.start(int(self.sample_period_s * 1000))
+        else:
+            try:
+                # Otwieramy port
+                self.serial_port = serial.Serial(port_name, baudrate, timeout=0.1)
+                self.serial_port.reset_input_buffer()
+                # Zamiast blokującej pętli while, uruchamiamy pierwszy krok
+                QtCore.QTimer.singleShot(0, self._serial_read_step)
+            except Exception as e:
+                self.status_msg.emit(f"Serial Error: {e}")
+                self.is_running = False
 
     @QtCore.pyqtSlot()
     def stop_working(self):
-        """Zatrzymuje timer"""
+        """Ta funkcja jest wywoływana przez sygnał z GUI"""
+        self.is_running = False
+
         if self.timer:
             self.timer.stop()
 
+        if self.serial_port and self.serial_port.is_open:
+            try:
+                self.serial_port.close()
+            except Exception:
+                pass
+            self.serial_port = None
+
+    def _serial_read_step(self):
+        """
+        Funkcja wykonuje jeden cykl odczytu i planuje swoje kolejne wywołanie.
+        Dzięki temu Event Loop nie jest zablokowany.
+        """
+        if not self.is_running or not self.serial_port:
+            return
+
+        try:
+            # Czytamy wszystko co jest w buforze, żeby nie robić opóźnień
+            # Ale w pętlach max np. 10-20 iteracji, żeby nie zamrozić UI przy floodzie danych
+            iterations = 0
+            while self.serial_port and self.serial_port.in_waiting >= 5 and iterations < 50:
+                iterations += 1
+
+                # Szukamy nagłówka (bezpieczniej czytać po 1 bajcie przy szukaniu synchro)
+                b = self.serial_port.read(1)
+                if not b or ord(b) != self.MAGIC_0:
+                    continue
+
+                b = self.serial_port.read(1)
+                if not b or ord(b) != self.MAGIC_1:
+                    continue
+
+                # Czytamy resztę nagłówka
+                h_data = self.serial_port.read(3)
+                if len(h_data) < 3:
+                    continue
+
+                p_type, p_len, h_crc = struct.unpack("BBB", h_data)
+
+                # CRC nagłówka
+                header_check = struct.pack("BBBB", self.MAGIC_0, self.MAGIC_1, p_type, p_len)
+                if self.calculate_crc8(header_check) != h_crc:
+                    continue
+
+                # Payload
+                payload = self.serial_port.read(p_len)
+                if len(payload) != p_len:
+                    continue
+
+                # CRC payloadu
+                p_crc_raw = self.serial_port.read(1)
+                if len(p_crc_raw) < 1:
+                    continue
+                p_crc = ord(p_crc_raw)
+
+                if self.calculate_crc8(payload) == p_crc:
+                    self._handle_payload(p_type, payload)
+
+        except Exception as e:
+            # Jeśli port został nagle zamknięty lub wyrwany
+            print(f"Read Loop Error: {e}")
+            self.stop_working()
+            return
+
+        # Jeśli nadal mamy działać, planujemy kolejne wywołanie "natychmiast" (po obsłużeniu zdarzeń)
+        if self.is_running:
+            QtCore.QTimer.singleShot(0, self._serial_read_step)
+
+    def _handle_payload(self, p_type, payload):
+        if p_type == self.RTP_PID:
+            try:
+                d = struct.unpack("<IBfffffff", payload)
+                t = d[0] * self.sample_period_s
+                values = {
+                    "setpoint": d[2],
+                    "measurement": d[3],
+                    "error": d[4],
+                    "p_term": d[5],
+                    "i_term": d[6],
+                    "output": d[8],
+                }
+                self._update_buffers(values, t)
+            except struct.error:
+                pass
+
+    @QtCore.pyqtSlot(int, float, float, float)
+    def send_pid_config(self, motor_id, kp, ki, kff):
+        if not self.serial_port or not self.serial_port.is_open:
+            return
+        try:
+            payload = struct.pack("<Bfff", motor_id, kp, ki, kff)
+            h_base = struct.pack("BBBB", self.MAGIC_0, self.MAGIC_1, self.RTP_REQ_PID, len(payload))
+            h_crc = self.calculate_crc8(h_base)
+            p_crc = self.calculate_crc8(payload)
+            full_frame = h_base + struct.pack("B", h_crc) + payload + struct.pack("B", p_crc)
+            self.serial_port.write(full_frame)
+        except Exception as e:
+            print(f"Write Error: {e}")
+
+    def _step(self):
+        """Generator demo danych"""
+        t = self.sample_index * self.sample_period_s
+        setpoint = math.sin(t * 0.5)
+        measurement = setpoint + random.uniform(-0.05, 0.05)
+        error = setpoint - measurement
+        values = {
+            "setpoint": setpoint,
+            "measurement": measurement,
+            "error": error,
+            "p_term": error * 20.0,
+            "i_term": math.sin(t * 0.2) * 5.0,
+            "output": max(min(error * 30.0, 100), -100),
+        }
+        self._update_buffers(values, t)
+        self.sample_index += 1
+
+    def _update_buffers(self, values, current_time):
+        # 1. Dodaj nowe dane
+        for k, v in values.items():
+            if k in self.buffers:
+                self.buffers[k].append(v)
+
+        if not self.buffers:
+            return
+
+        # 2. Migawka (Snapshot) - zabezpieczenie przed modyfikacją w trakcie rysowania
+        # Pobieramy tylko te bufory, które mają dane
+        snapshot_raw = {}
+        active_lengths = []
+
+        for sig_id, buf in self.buffers.items():
+            data_list = list(buf)
+            if len(data_list) > 0:
+                snapshot_raw[sig_id] = np.array(data_list)
+                active_lengths.append(len(data_list))
+
+        # Jeśli brak danych lub za mało próbek, wychodzimy
+        if not active_lengths or max(active_lengths) < 2:
+            return
+
+        # 3. Synchronizacja długości (bierzemy minimum z aktywnych)
+        min_len = min(active_lengths)
+        for sig_id in snapshot_raw:
+            if len(snapshot_raw[sig_id]) > min_len:
+                snapshot_raw[sig_id] = snapshot_raw[sig_id][:min_len]
+
+        # 4. Oś czasu
+        time_axis = np.linspace(
+            current_time - min_len * self.sample_period_s, current_time, min_len
+        )
+
+        # 5. Normalizacja
+        out_signals_norm = {}
+        for sig_id, arr in snapshot_raw.items():
+            if sig_id in self.scale:
+                ymin, ymax = self.scale[sig_id]
+                scale = max(ymax - ymin, 1e-12)
+                out_signals_norm[sig_id] = np.clip((arr - ymin) / scale, 0.0, 1.0)
+
+        self.data_ready.emit({"time": time_axis, "signals": out_signals_norm, "raw": snapshot_raw})
+
     @QtCore.pyqtSlot(float, int)
-    def update_time_config(self, period_ms: float, max_samples: int):
+    def update_time_config(self, period_ms, max_samples):
         self.sample_period_s = period_ms / 1000.0
         self.max_samples = max_samples
-        
-        # Reset buforów
-        new_buffers = {}
         for k in self.buffers.keys():
-            new_buffers[k] = deque(maxlen=self.max_samples)
-        self.buffers = new_buffers
-        
+            self.buffers[k] = deque(maxlen=self.max_samples)
         if self.timer and self.timer.isActive():
             self.timer.setInterval(int(period_ms))
 
@@ -95,87 +292,25 @@ class TelemetryWorker(QtCore.QObject):
     def configure_signals(self, signals_cfg: dict):
         self.buffers.clear()
         self.scale.clear()
-
         for sig_id, sig in signals_cfg.items():
             self.buffers[sig_id] = deque(maxlen=self.max_samples)
             yr = sig["y_range"]
             self.scale[sig_id] = (yr["min"], yr["max"])
-
         self.sample_index = 0
 
     @QtCore.pyqtSlot(str, float, float)
-    def update_scale(self, sig_id: str, ymin: float, ymax: float):
+    def update_scale(self, sig_id, ymin, ymax):
         if sig_id in self.scale:
             self.scale[sig_id] = (ymin, ymax)
 
-    def _step(self):
-        t = self.sample_index * self.sample_period_s
-
-        # Mock generator
-        setpoint = math.sin(t * 0.5)
-        measurement = setpoint + random.uniform(-0.05, 0.05)
-        error = setpoint - measurement
-
-        values = {
-            "setpoint": setpoint,
-            "measurement": measurement,
-            "error": error,
-            "p_term": error * 20.0,
-            "i_term": math.sin(t * 0.2) * 5.0,
-            "outputRaw": error * 30.0,
-            "output": max(min(error * 30.0, 100), -100),
-        }
-
-        for k, v in values.items():
-            if k in self.buffers:
-                self.buffers[k].append(v)
-
-        self.sample_index += 1
-        self._emit()
-
-    def _emit(self):
-        if not self.buffers: return
-        try:
-            first_buf = next(iter(self.buffers.values()))
-        except StopIteration: return
-
-        n = len(first_buf)
-        if n < 2: return
-
-        t0 = (self.sample_index - n) * self.sample_period_s
-        time = np.linspace(t0, t0 + n * self.sample_period_s, n, endpoint=False)
-
-        out_signals_norm = {}
-        out_signals_raw = {}
-
-        for sig_id, buf in self.buffers.items():
-            arr = np.array(buf)
-            out_signals_raw[sig_id] = arr
-
-            if sig_id not in self.scale: continue
-            ymin, ymax = self.scale[sig_id]
-            scale = max(ymax - ymin, 1e-12)
-            y_norm = np.clip((arr - ymin) / scale, 0.0, 1.0)
-            out_signals_norm[sig_id] = y_norm
-
-        self.data_ready.emit({
-            "time": time,
-            "t0": t0,
-            "dt": self.sample_period_s,
-            "signals": out_signals_norm,
-            "raw": out_signals_raw,
-            "count": self.sample_index
-        })
-
 
 # -----------------------------
-# Config Loader (Bez zmian)
+# Config Loader
 # -----------------------------
 class StreamConfigLoader:
     def __init__(self, path: str):
         self.path = Path(path)
         if not self.path.exists():
-            # Default mock config
             self.data = {
                 "streams": {
                     "pid_control": {
@@ -183,16 +318,46 @@ class StreamConfigLoader:
                         "groups": {
                             "main": {"label": "Main Variables", "order": 1},
                             "terms": {"label": "PID Terms", "order": 2},
-                            "out": {"label": "Output", "order": 3}
+                            "out": {"label": "Output", "order": 3},
                         },
                         "signals": {
-                            "setpoint": {"label": "Setpoint", "color": "#00FF00", "group": "main", "y_range": {"min": -1.5, "max": 1.5}},
-                            "measurement": {"label": "Measurement", "color": "#FF0000", "group": "main", "y_range": {"min": -1.5, "max": 1.5}},
-                            "error": {"label": "Error", "color": "#FFFF00", "group": "main", "y_range": {"min": -0.5, "max": 0.5}},
-                            "p_term": {"label": "P Term", "color": "#00FFFF", "group": "terms", "y_range": {"min": -50, "max": 50}},
-                            "i_term": {"label": "I Term", "color": "#FF00FF", "group": "terms", "y_range": {"min": -10, "max": 10}},
-                            "output": {"label": "Motor Output", "color": "#FFFFFF", "group": "out", "y_range": {"min": -100, "max": 100}}
-                        }
+                            "setpoint": {
+                                "label": "Setpoint",
+                                "color": "#00FF00",
+                                "group": "main",
+                                "y_range": {"min": -1.5, "max": 1.5},
+                            },
+                            "measurement": {
+                                "label": "Measurement",
+                                "color": "#FF0000",
+                                "group": "main",
+                                "y_range": {"min": -1.5, "max": 1.5},
+                            },
+                            "error": {
+                                "label": "Error",
+                                "color": "#FFFF00",
+                                "group": "main",
+                                "y_range": {"min": -0.5, "max": 0.5},
+                            },
+                            "p_term": {
+                                "label": "P Term",
+                                "color": "#00FFFF",
+                                "group": "terms",
+                                "y_range": {"min": -50, "max": 50},
+                            },
+                            "i_term": {
+                                "label": "I Term",
+                                "color": "#FF00FF",
+                                "group": "terms",
+                                "y_range": {"min": -10, "max": 10},
+                            },
+                            "output": {
+                                "label": "Motor Output",
+                                "color": "#FFFFFF",
+                                "group": "out",
+                                "y_range": {"min": -100, "max": 100},
+                            },
+                        },
                     }
                 }
             }
@@ -215,11 +380,11 @@ class StreamConfigLoader:
 # -----------------------------
 class CollapsibleGroup(QtWidgets.QWidget):
     expanded = QtCore.pyqtSignal(object)
+
     def __init__(self, title: str):
         super().__init__()
         self.toggle = QtWidgets.QToolButton(text=title)
         self.toggle.setCheckable(True)
-        self.toggle.setChecked(False)
         self.toggle.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.toggle.setArrowType(QtCore.Qt.ArrowType.RightArrow)
         self.toggle.setStyleSheet("QToolButton { border: none; font-weight: bold; color: #ccc; }")
@@ -230,13 +395,17 @@ class CollapsibleGroup(QtWidgets.QWidget):
         self.toggle.toggled.connect(self._on_toggled)
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
         layout.addWidget(self.toggle)
         layout.addWidget(self.content)
+
     def _on_toggled(self, checked: bool):
         self.content.setVisible(checked)
-        self.toggle.setArrowType(QtCore.Qt.ArrowType.DownArrow if checked else QtCore.Qt.ArrowType.RightArrow)
-        if checked: self.expanded.emit(self)
+        self.toggle.setArrowType(
+            QtCore.Qt.ArrowType.DownArrow if checked else QtCore.Qt.ArrowType.RightArrow
+        )
+        if checked:
+            self.expanded.emit(self)
+
 
 class YAxisControlWidget(QtWidgets.QWidget):
     def __init__(self, name: str, color: str):
@@ -244,7 +413,6 @@ class YAxisControlWidget(QtWidgets.QWidget):
         self.signal_id = None
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 8)
-        layout.setSpacing(4)
         h_layout = QtWidgets.QHBoxLayout()
         color_lbl = QtWidgets.QLabel("●")
         color_lbl.setStyleSheet(f"color: {color}; font-size: 16px;")
@@ -269,22 +437,22 @@ class YAxisControlWidget(QtWidgets.QWidget):
         layout.addLayout(r_layout)
         layout.addWidget(self.lock_checkbox)
 
+
 class ControlPanel(QtWidgets.QWidget):
     scale_changed = QtCore.pyqtSignal(str, float, float)
     stream_changed = QtCore.pyqtSignal(dict)
     time_config_changed = QtCore.pyqtSignal(float, int)
     signal_visibility_changed = QtCore.pyqtSignal(str, bool)
     signal_lock_changed = QtCore.pyqtSignal(str, bool)
-    
-    # Nowe sygnały sterujące
-    connection_requested = QtCore.pyqtSignal(bool) # True=Connect, False=Disconnect
-    pause_requested = QtCore.pyqtSignal(bool)      # True=Pause, False=Resume
+    connection_requested = QtCore.pyqtSignal(str, int)
+    pause_requested = QtCore.pyqtSignal(bool)
+    pid_config_sent = QtCore.pyqtSignal(int, float, float, float)
 
     def __init__(self):
         super().__init__()
         layout = QtWidgets.QVBoxLayout(self)
 
-        # Serial Group
+        # Serial Connection
         grp_serial = QtWidgets.QGroupBox("Serial Connection")
         l_serial = QtWidgets.QGridLayout(grp_serial)
         self.port_combo = QtWidgets.QComboBox()
@@ -299,6 +467,29 @@ class ControlPanel(QtWidgets.QWidget):
         l_serial.addWidget(self.baud_combo, 1, 1, 1, 2)
         layout.addWidget(grp_serial)
 
+        # PID Tuning
+        grp_pid = QtWidgets.QGroupBox("PID Tuning")
+        l_pid = QtWidgets.QGridLayout(grp_pid)
+        self.motor_selector = QtWidgets.QComboBox()
+        self.motor_selector.addItem("Left Motor", 0)
+        self.motor_selector.addItem("Right Motor", 1)
+        self.motor_selector.addItem("Both Motors", 2)
+        self.kp_sb = self._make_sb(1.0)
+        self.ki_sb = self._make_sb(0.1)
+        self.kff_sb = self._make_sb(0.5)
+        self.pid_update_btn = QtWidgets.QPushButton("Update PID Parameters")
+        self.pid_update_btn.clicked.connect(self._on_pid_update)
+        l_pid.addWidget(QtWidgets.QLabel("Motor:"), 0, 0)
+        l_pid.addWidget(self.motor_selector, 0, 1)
+        l_pid.addWidget(QtWidgets.QLabel("Kp:"), 1, 0)
+        l_pid.addWidget(self.kp_sb, 1, 1)
+        l_pid.addWidget(QtWidgets.QLabel("Ki:"), 2, 0)
+        l_pid.addWidget(self.ki_sb, 2, 1)
+        l_pid.addWidget(QtWidgets.QLabel("Kff:"), 3, 0)
+        l_pid.addWidget(self.kff_sb, 3, 1)
+        l_pid.addWidget(self.pid_update_btn, 4, 0, 1, 2)
+        layout.addWidget(grp_pid)
+
         # Time Group
         grp_time = QtWidgets.QGroupBox("Time Window")
         l_time = QtWidgets.QGridLayout(grp_time)
@@ -309,10 +500,8 @@ class ControlPanel(QtWidgets.QWidget):
         self.sample_count_edit = QtWidgets.QSpinBox()
         self.sample_count_edit.setRange(10, 10000)
         self.sample_count_edit.setValue(200)
-        
         self.sample_period_edit.valueChanged.connect(self._emit_time_config)
         self.sample_count_edit.valueChanged.connect(self._emit_time_config)
-
         l_time.addWidget(QtWidgets.QLabel("Period:"), 0, 0)
         l_time.addWidget(self.sample_period_edit, 0, 1)
         l_time.addWidget(QtWidgets.QLabel("Samples:"), 1, 0)
@@ -330,27 +519,22 @@ class ControlPanel(QtWidgets.QWidget):
         l_payload.addWidget(self.payload_combo)
         layout.addWidget(grp_payload)
 
-        # --- CONNECTION & CONTROL BUTTONS ---
+        # Connection Buttons
         btn_layout = QtWidgets.QHBoxLayout()
-        
         self.connect_btn = QtWidgets.QPushButton("Connect")
         self.connect_btn.setCheckable(True)
-        self.connect_btn.setStyleSheet("""
-            QPushButton:checked { background-color: #C62828; } 
-            QPushButton { background-color: #2E7D32; font-weight: bold; }
-        """)
+        self.connect_btn.setStyleSheet(
+            "QPushButton:checked { background-color: #C62828; } QPushButton { background-color: #2E7D32; font-weight: bold; }"
+        )
         self.connect_btn.toggled.connect(self._on_connect_toggled)
-
         self.pause_btn = QtWidgets.QPushButton("Pause")
         self.pause_btn.setCheckable(True)
-        self.pause_btn.setEnabled(False) # Domyślnie nieaktywny
+        self.pause_btn.setEnabled(False)
         self.pause_btn.toggled.connect(self._on_pause_toggled)
-
         btn_layout.addWidget(self.connect_btn)
         btn_layout.addWidget(self.pause_btn)
         layout.addLayout(btn_layout)
-        
-        # Apply Scale Btn
+
         self.apply_btn = QtWidgets.QPushButton("Apply Scales")
         self.apply_btn.clicked.connect(self._apply_scales)
         layout.addWidget(self.apply_btn)
@@ -364,7 +548,6 @@ class ControlPanel(QtWidgets.QWidget):
         self.signals_layout.setSpacing(5)
         self.signals_layout.addStretch()
         scroll.setWidget(self.signals_container)
-        
         grp_sigs = QtWidgets.QGroupBox("Signals")
         l_sigs = QtWidgets.QVBoxLayout(grp_sigs)
         l_sigs.addWidget(scroll)
@@ -374,83 +557,91 @@ class ControlPanel(QtWidgets.QWidget):
         self._accordion_groups = []
         self.refresh_ports()
 
+    def _make_sb(self, val):
+        sb = QtWidgets.QDoubleSpinBox()
+        sb.setRange(0, 1000)
+        sb.setDecimals(4)
+        sb.setValue(val)
+        return sb
+
     def refresh_ports(self):
         self.port_combo.clear()
+        self.port_combo.addItem("VIRTUAL", "VIRTUAL")
         for p in list_ports.comports():
             self.port_combo.addItem(f"{p.device}", p.device)
 
+    def _on_pid_update(self):
+        motor_id = self.motor_selector.currentData()
+        self.pid_config_sent.emit(
+            motor_id, self.kp_sb.value(), self.ki_sb.value(), self.kff_sb.value()
+        )
+
     def _emit_time_config(self):
-        p = self.sample_period_edit.value()
-        s = self.sample_count_edit.value()
-        self.time_config_changed.emit(p, s)
+        self.time_config_changed.emit(
+            self.sample_period_edit.value(), self.sample_count_edit.value()
+        )
 
     def _on_connect_toggled(self, checked):
         if checked:
             self.connect_btn.setText("Disconnect")
             self.pause_btn.setEnabled(True)
-            self.connection_requested.emit(True)
+            self.connection_requested.emit(
+                self.port_combo.currentText(), int(self.baud_combo.currentText())
+            )
         else:
             self.connect_btn.setText("Connect")
             self.pause_btn.setChecked(False)
             self.pause_btn.setEnabled(False)
-            self.connection_requested.emit(False)
+            self.connection_requested.emit("STOP", 0)
 
     def _on_pause_toggled(self, checked):
-        if checked:
-            self.pause_btn.setText("Resume")
-            self.pause_btn.setStyleSheet("background-color: #F57F17; color: black; font-weight: bold;")
-        else:
-            self.pause_btn.setText("Pause")
-            self.pause_btn.setStyleSheet("")
+        self.pause_btn.setText("Resume" if checked else "Pause")
+        self.pause_btn.setStyleSheet(
+            "background-color: #F57F17; color: black; font-weight: bold;" if checked else ""
+        )
         self.pause_requested.emit(checked)
 
     def _on_stream_changed(self, idx):
         sid = self.payload_combo.itemData(idx)
-        if not sid: return
+        if not sid:
+            return
         cfg = self.stream_loader.get_stream(sid)
         self._rebuild_signal_list(cfg)
         self.stream_changed.emit(cfg["signals"])
 
     def _rebuild_signal_list(self, cfg):
-        while self.signals_layout.count():
+        while self.signals_layout.count() > 1:
             item = self.signals_layout.takeAt(0)
-            if item.widget(): item.widget().deleteLater()
-        
+            if item.widget():
+                item.widget().deleteLater()
         self.y_controls = []
         self._accordion_groups = []
         groups = {}
-
         for gid, gdata in sorted(cfg["groups"].items(), key=lambda x: x[1]["order"]):
-            grp_widget = CollapsibleGroup(gdata["label"])
-            grp_widget.expanded.connect(self._on_group_expanded)
-            self.signals_layout.addWidget(grp_widget)
-            groups[gid] = grp_widget
-            self._accordion_groups.append(grp_widget)
-
+            grp = CollapsibleGroup(gdata["label"])
+            grp.expanded.connect(self._on_group_expanded)
+            self.signals_layout.insertWidget(self.signals_layout.count() - 1, grp)
+            groups[gid] = grp
+            self._accordion_groups.append(grp)
         for sid, sdata in cfg["signals"].items():
             w = YAxisControlWidget(sdata["label"], sdata["color"])
             w.signal_id = sid
             w.min_edit.setValue(sdata["y_range"]["min"])
             w.max_edit.setValue(sdata["y_range"]["max"])
-            w.enable_checkbox.toggled.connect(lambda c, s=sid: self.signal_visibility_changed.emit(s, c))
-            w.lock_checkbox.toggled.connect(lambda c, s=sid: self.signal_lock_changed.emit(s, c))
-            
-            target_group = groups.get(sdata["group"])
-            if target_group:
-                target_group.content_layout.addWidget(w)
-                line = QtWidgets.QFrame()
-                line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-                line.setStyleSheet("background-color: #333;")
-                target_group.content_layout.addWidget(line)
+            w.enable_checkbox.toggled.connect(
+                lambda c, s=sid: self.signal_visibility_changed.emit(s, c)
+            )
+            target = groups.get(sdata["group"])
+            if target:
+                target.content_layout.addWidget(w)
             self.y_controls.append(w)
-
-        self.signals_layout.addStretch()
         if self._accordion_groups:
             self._accordion_groups[0].toggle.setChecked(True)
 
     def _on_group_expanded(self, sender):
         for g in self._accordion_groups:
-            if g is not sender: g.toggle.setChecked(False)
+            if g is not sender:
+                g.toggle.setChecked(False)
 
     def _apply_scales(self):
         for w in self.y_controls:
@@ -464,34 +655,32 @@ class PlotArea(QtWidgets.QWidget):
         super().__init__()
         self.mode = PlotMode.LIVE
         self.signal_views = {}
-        self.last_packet = None      # Strumień "żywy" (zawsze aktualny)
-        self.analysis_packet = None  # Strumień "zamrożony" do analizy na pauzie
-        self.signal_colors = {} 
-        self.anchor_time = None 
+        self.last_packet = None
+        self.analysis_packet = None
+        self.signal_colors = {}
+        self.anchor_time = None
         self.anchor_values = {}
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.graphics = pg.GraphicsLayoutWidget()
         layout.addWidget(self.graphics)
-
         self.plot = self.graphics.addPlot()
         self.plot.showGrid(x=True, y=True, alpha=0.3)
         self.plot.setLabel("bottom", "Time [s]")
         self.plot.getAxis("left").setVisible(False)
 
-        # --- CURSORS ---
-        self.vLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('#888', width=1))
+        self.vLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen("#888", width=1))
         self.vLine.setAcceptHoverEvents(False)
         self.plot.addItem(self.vLine, ignoreBounds=True)
-        
-        self.anchorLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('y', style=QtCore.Qt.PenStyle.DashLine, width=2))
+        self.anchorLine = pg.InfiniteLine(
+            angle=90, movable=False, pen=pg.mkPen("y", style=QtCore.Qt.PenStyle.DashLine, width=2)
+        )
         self.anchorLine.setAcceptHoverEvents(False)
         self.anchorLine.setVisible(False)
         self.plot.addItem(self.anchorLine, ignoreBounds=True)
 
         self.label = pg.TextItem(anchor=(0, 0))
-        self.label.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
         self.label.setAcceptHoverEvents(False)
         self.plot.addItem(self.label, ignoreBounds=True)
 
@@ -501,39 +690,31 @@ class PlotArea(QtWidgets.QWidget):
 
     @QtCore.pyqtSlot(dict)
     def on_data_ready(self, packet: dict):
-        # Zawsze trzymamy najświeższy pakiet pod ręką (na wypadek Resume)
         self.last_packet = packet
-        
-        # Jeśli jesteśmy w trybie analizy, kompletnie ignorujemy nowe dane w GUI
         if self.mode == PlotMode.ANALYSIS:
             return
-        
         time = packet["time"]
         signals = packet["signals"]
-        if len(time) == 0: return
-
+        if len(time) == 0:
+            return
         for sig_id, y in signals.items():
             if sig_id in self.signal_views:
                 self.signal_views[sig_id]["curve"].setData(time, y)
-
-        if self.mode == PlotMode.LIVE:
-            self.plot.setXRange(time[0], time[-1], padding=0)
-            self.update_hud_position()
+        self.plot.setXRange(time[0], time[-1], padding=0)
+        self.update_hud_position()
 
     @QtCore.pyqtSlot(bool)
     def set_paused(self, paused: bool):
         if paused:
             self.mode = PlotMode.ANALYSIS
-            # KLUCZOWE: Robimy migawkę danych w momencie pauzy
-            # Od teraz kursor i delta działają TYLKO na tych danych
             import copy
+
             self.analysis_packet = copy.deepcopy(self.last_packet)
         else:
             self.mode = PlotMode.LIVE
             self.analysis_packet = None
             self.anchor_time = None
             self.anchorLine.setVisible(False)
-            self.anchor_values = {}
             self.label.setHtml("")
 
     def mouse_moved_handler(self, pos):
@@ -543,119 +724,102 @@ class PlotArea(QtWidgets.QWidget):
             self._process_mouse_movement(mousePoint.x())
 
     def _process_mouse_movement(self, x_raw):
-        # Wybieramy źródło danych: zamrożone (pauza) lub żywe (live)
-        data_source = self.analysis_packet if self.mode == PlotMode.ANALYSIS else self.last_packet
-        
-        if not data_source: return
-        time_arr = data_source["time"]
-        if len(time_arr) < 2: return
-
-        # Kursor nie ucieknie, bo time_arr jest zamrożone w czasie!
-        x_clamped = float(np.clip(x_raw, time_arr[0], time_arr[-1]))
+        ds = self.analysis_packet if self.mode == PlotMode.ANALYSIS else self.last_packet
+        if not ds or len(ds["time"]) < 2:
+            return
+        x_clamped = float(np.clip(x_raw, ds["time"][0], ds["time"][-1]))
         self.vLine.setPos(x_clamped)
         self.update_tooltip(x_clamped)
 
     def on_mouse_clicked(self, evt):
-        if self.mode != PlotMode.ANALYSIS: return
-        if evt.button() != QtCore.Qt.MouseButton.LeftButton: return
-        
+        if self.mode != PlotMode.ANALYSIS:
+            return
+        if evt.button() != QtCore.Qt.MouseButton.LeftButton:
+            return
         vb = self.plot.vb
         if vb.sceneBoundingRect().contains(evt.scenePos()):
             mousePoint = vb.mapSceneToView(evt.scenePos())
             self.anchor_time = mousePoint.x()
             self.anchorLine.setPos(self.anchor_time)
             self.anchorLine.setVisible(True)
-            
-            # Pobieramy wartości z zamrożonego pakietu
             self._capture_anchor_values(self.anchor_time)
             self._process_mouse_movement(self.anchor_time)
 
     def _capture_anchor_values(self, t_anchor):
-        if not self.analysis_packet: return
-        time_arr = self.analysis_packet["time"]
-        raw_data = self.analysis_packet["raw"]
-        
-        self.anchor_values = {}
-        for sig_id, values in raw_data.items():
-            self.anchor_values[sig_id] = np.interp(t_anchor, time_arr, values)
+        if not self.analysis_packet:
+            return
+        t_arr = self.analysis_packet["time"]
+        raw = self.analysis_packet["raw"]
+        self.anchor_values = {s: np.interp(t_anchor, t_arr, v) for s, v in raw.items()}
 
     def update_hud_position(self):
-        vb = self.plot.getViewBox()
+        vb = self.plot.vb
         xr, yr = vb.viewRange()
-        x_text = xr[0] + 0.01 * (xr[1] - xr[0])
-        y_text = yr[1] - 0.02 * (yr[1] - yr[0])
-        self.label.setPos(x_text, y_text)
+        self.label.setPos(xr[0] + 0.01 * (xr[1] - xr[0]), yr[1] - 0.02 * (yr[1] - yr[0]))
 
     def update_tooltip(self, x_pos):
-        # Wybieramy źródło danych: zamrożone (pauza) lub żywe (live)
-        data_source = self.analysis_packet if self.mode == PlotMode.ANALYSIS else self.last_packet
-        
-        if not data_source: return
-        time_arr = data_source["time"]
-        raw_data = data_source["raw"]
-        
-        current_time = float(x_pos)
-        
-        dt = time_arr[1] - time_arr[0]
-        idx = int(np.clip((current_time - time_arr[0]) / dt, 0, len(time_arr) - 1))
-        self.cursor_moved.emit(f"Cursor: {current_time:.3f} s | Index: {idx}")
+        ds = self.analysis_packet if self.mode == PlotMode.ANALYSIS else self.last_packet
+        if not ds or len(ds["time"]) < 2:
+            return
 
-        html_str = '<div style="background-color: rgba(0, 0, 0, 0.7); padding: 6px; font-family: Consolas, monospace; border: 1px solid #444;">'
-        html_str += f'<b style="color: white; font-size: 12px;">T: {current_time:.3f} s</b>'
-        
-        if self.anchor_time is not None:
-            delta_t = current_time - self.anchor_time
-            html_str += f' <span style="color: #FFD700; font-size: 11px;">(Δ {delta_t:+.3f} s)</span>'
-        
-        html_str += "<br><hr style='margin: 4px 0;'>"
+        t_arr = ds["time"]
+        raw = ds["raw"]
+        cur_t = float(x_pos)
+        dt = t_arr[1] - t_arr[0]
 
-        for sig_id, values in raw_data.items():
-            if sig_id in self.signal_views and not self.signal_views[sig_id]["curve"].isVisible():
-                continue
-            
-            val = float(np.interp(current_time, time_arr, values))
-            color = self.signal_colors.get(sig_id, "#FFF")
-            row = f'<span style="color: {color};">{sig_id}: <b>{val:>8.4f}</b>'
-            
-            if self.anchor_time is not None and sig_id in self.anchor_values:
-                dy = val - self.anchor_values[sig_id]
-                row += f' <span style="color: #aaa; font-size: 10px;">(Δ {dy:+.4f})</span>'
-            html_str += row + '</span><br>'
-        
-        html_str += "</div>"
-        self.label.setHtml(html_str)
+        # Wyliczamy indeks (do statusu)
+        idx = int(np.clip((cur_t - t_arr[0]) / dt, 0, len(t_arr) - 1))
+        self.cursor_moved.emit(f"Cursor: {cur_t:.3f} s | Index: {idx}")
+
+        html = f'<div style="background-color: rgba(0, 0, 0, 0.7); padding: 6px; font-family: Consolas, monospace; border: 1px solid #444;">'
+        html += f'<b style="color: white; font-size: 12px;">T: {cur_t:.3f} s</b>'
+        if self.anchor_time:
+            html += f' <span style="color: #FFD700; font-size: 11px;">(Δ {cur_t - self.anchor_time:+.3f} s)</span>'
+        html += "<br><hr style='margin: 4px 0;'>"
+
+        for sid, vals in raw.items():
+            if sid in self.signal_views and self.signal_views[sid]["curve"].isVisible():
+                # DODATKOWE ZABEZPIECZENIE:
+                # Jeśli z jakiegoś powodu długości się różnią, bierzemy mniejszą
+                data_len = min(len(t_arr), len(vals))
+                if data_len < 2:
+                    continue
+
+                # Interpolacja na przyciętych danych (snapshotach)
+                v = float(np.interp(cur_t, t_arr[:data_len], vals[:data_len]))
+
+                color = self.signal_colors.get(sid, "#FFF")
+                row = f'<span style="color: {color};">{sid}: <b>{v:>8.4f}</b>'
+                if self.anchor_time and sid in self.anchor_values:
+                    row += f' <span style="color: #aaa; font-size: 10px;">(Δ {v - self.anchor_values[sid]:+.4f})</span>'
+                html += row + "</span><br>"
+
+        self.label.setHtml(html + "</div>")
         self.update_hud_position()
 
     @QtCore.pyqtSlot(dict)
     def configure_signals(self, signals_cfg: dict):
-        for sig_id in list(self.signal_views.keys()):
-            old_vb = self.signal_views[sig_id]["viewbox"]
-            self.plot.scene().removeItem(old_vb)
-        
+        for sid in list(self.signal_views.keys()):
+            self.plot.scene().removeItem(self.signal_views[sid]["viewbox"])
         self.plot.clear()
         self.signal_views.clear()
         self.signal_colors.clear()
-
         self.plot.addItem(self.vLine, ignoreBounds=True)
         self.plot.addItem(self.anchorLine, ignoreBounds=True)
         self.plot.addItem(self.label, ignoreBounds=True)
-        
         base_vb = self.plot.getViewBox()
-        for sig_id, sig in signals_cfg.items():
-            self.signal_colors[sig_id] = sig["color"]
+        for sid, sig in signals_cfg.items():
+            self.signal_colors[sid] = sig["color"]
             vb = pg.ViewBox()
             vb.setMouseEnabled(x=False, y=False)
-            vb.enableAutoRange(pg.ViewBox.YAxis, False)
-            vb.setYRange(0.0, 1.0) 
+            vb.setYRange(0.0, 1.0)
             self.plot.scene().addItem(vb)
             vb.setXLink(base_vb)
-            
-            pen = pg.mkPen(color=sig["color"], width=2)
-            curve = pg.PlotDataItem(pen=pen, skipFiniteCheck=True)
-            vb.addItem(curve)
-            self.signal_views[sig_id] = {"viewbox": vb, "curve": curve}
+            c = pg.PlotDataItem(pen=pg.mkPen(color=sig["color"], width=2), skipFiniteCheck=True)
+            vb.addItem(c)
+            self.signal_views[sid] = {"viewbox": vb, "curve": c}
         base_vb.sigResized.connect(self._update_views)
-    
+
     def _update_views(self):
         rect = self.plot.getViewBox().sceneBoundingRect()
         for s in self.signal_views.values():
@@ -665,15 +829,7 @@ class PlotArea(QtWidgets.QWidget):
     def set_signal_visible(self, sig_id, visible):
         if sig_id in self.signal_views:
             self.signal_views[sig_id]["curve"].setVisible(visible)
-            # Odśwież HUD używając odpowiedniego źródła danych
-            if self.mode == PlotMode.ANALYSIS and self.analysis_packet:
-                self._process_mouse_movement(self.vLine.value())
-            elif self.last_packet:
-                self._process_mouse_movement(self.vLine.value())
 
-    @QtCore.pyqtSlot(str, bool)
-    def set_signal_lock(self, sig_id, locked):
-        pass
 
 # -----------------------------
 # Main Window
@@ -684,7 +840,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("DiffBot Telemetry Viewer (Pro)")
         self.resize(1280, 800)
 
-        # --- STATUS BAR ---
         self.status_bar = self.statusBar()
         self.lbl_status = QtWidgets.QLabel("Ready")
         self.lbl_cursor = QtWidgets.QLabel("")
@@ -696,71 +851,93 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.panel = ControlPanel()
         self.plot = PlotArea()
-        
+
         splitter.addWidget(self.panel)
         splitter.addWidget(self.plot)
         splitter.setSizes([350, 930])
 
-        # --- Worker Setup ---
-        init_period = self.panel.sample_period_edit.value()
-        init_samples = self.panel.sample_count_edit.value()
-
-        self.worker = TelemetryWorker(init_period, init_samples)
+        self.worker = TelemetryWorker(
+            self.panel.sample_period_edit.value(), self.panel.sample_count_edit.value()
+        )
         self.thread = QtCore.QThread()
         self.worker.moveToThread(self.thread)
+        self.thread.start()
 
-        self.thread.started.connect(lambda: self.lbl_status.setText("Worker Thread Started"))
-        QtWidgets.QApplication.instance().aboutToQuit.connect(self._cleanup)
-
-        # Wiring
         self.panel.scale_changed.connect(self.worker.update_scale)
         self.panel.stream_changed.connect(self.worker.configure_signals)
         self.panel.time_config_changed.connect(self.worker.update_time_config)
-        
-        # Connect / Pause Logic wiring
         self.panel.connection_requested.connect(self._handle_connection)
         self.panel.pause_requested.connect(self._handle_pause)
-
         self.panel.stream_changed.connect(self.plot.configure_signals)
         self.panel.signal_visibility_changed.connect(self.plot.set_signal_visible)
-        self.panel.signal_lock_changed.connect(self.plot.set_signal_lock)
+        self.panel.pid_config_sent.connect(self.worker.send_pid_config)
 
         self.worker.data_ready.connect(self.plot.on_data_ready)
-        self.plot.cursor_moved.connect(self.lbl_cursor.setText) # Aktualizacja status bara
-
-        self.thread.start()
+        self.worker.status_msg.connect(self.lbl_status.setText)
+        self.plot.cursor_moved.connect(self.lbl_cursor.setText)
         self.panel._on_stream_changed(self.panel.payload_combo.currentIndex())
 
-    def _handle_connection(self, connect: bool):
-        if connect:
-            # Używamy invokeMethod, aby wywołać slot w wątku Workera (bezpiecznie)
-            QtCore.QMetaObject.invokeMethod(self.worker, "start_working", QtCore.Qt.ConnectionType.QueuedConnection)
-            self.lbl_status.setText("Connected: Receiving Data")
+    def _handle_connection(self, port, baud):
+        if port != "STOP":
+            QtCore.QMetaObject.invokeMethod(
+                self.worker,
+                "start_working",
+                QtCore.Qt.ConnectionType.QueuedConnection,
+                QtCore.Q_ARG(str, port),
+                QtCore.Q_ARG(int, baud),
+            )
+            self.lbl_status.setText(f"Connected to {port}")
             self.lbl_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
         else:
-            QtCore.QMetaObject.invokeMethod(self.worker, "stop_working", QtCore.Qt.ConnectionType.QueuedConnection)
+            QtCore.QMetaObject.invokeMethod(
+                self.worker, "stop_working", QtCore.Qt.ConnectionType.QueuedConnection
+            )
             self.lbl_status.setText("Disconnected")
             self.lbl_status.setStyleSheet("color: #F44336; font-weight: bold;")
 
-    def _handle_pause(self, paused: bool):
+    def _handle_pause(self, paused):
         self.plot.set_paused(paused)
-        if paused:
-            self.lbl_status.setText("PAUSED - Click chart to set Delta Anchor")
-            self.lbl_status.setStyleSheet("color: #FF9800; font-weight: bold;")
-        else:
-            self.lbl_status.setText("Connected: Receiving Data")
-            self.lbl_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
+        self.lbl_status.setText("PAUSED" if paused else "Connected")
 
-    def _cleanup(self):
+    def closeEvent(self, event):
+        # --- FIX: Używamy invokeMethod zamiast bezpośredniego wywołania ---
+        # To wrzuca polecenie "stop_working" do kolejki zdarzeń Wątku Roboczego.
+        # Dzięki temu wątek sam zatrzyma swój timer w swoim kontekście.
+        QtCore.QMetaObject.invokeMethod(
+            self.worker, "stop_working", QtCore.Qt.ConnectionType.QueuedConnection
+        )
+
+        # Mówimy wątkowi: "Jak skończysz przetwarzać obecne zdarzenia (w tym stop_working), to wyjdź"
         self.thread.quit()
-        self.thread.wait()
+
+        # Czekamy na bezpieczne zakończenie (z timeoutem 2s, żeby nie zawiesić okna na zawsze)
+        if not self.thread.wait(2000):
+            print("Wątek nie odpowiedział, wymuszam zamknięcie...")
+            self.thread.terminate()
+            self.thread.wait()
+
+        event.accept()
+
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
+
+    # App theme
     apply_dark_theme(app)
+
     win = MainWindow()
     win.show()
+
+    signal.signal(signal.SIGINT, lambda *args: app.quit())
+
+    # Every 500ms QTimer allows python interpreter to check systen signals
+    # It is to allow Ctrl+C to work in terminal
+    timer = QtCore.QTimer()
+    timer.start(500)
+    timer.timeout.connect(lambda: None)
+
     sys.exit(app.exec())
+
 
 if __name__ == "__main__":
     main()

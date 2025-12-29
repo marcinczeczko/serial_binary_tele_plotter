@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Uruchom Robot Station (Main)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py", // Zawsze uruchamia main.py, niezależnie od otwartego pliku
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}", // Ustawia katalog roboczy na root projektu
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}" // Kluczowe dla importów z folderów core/ i ui/
+            },
+            "justMyCode": true // Debuguje tylko Twój kod, pomija biblioteki (szybciej)
+        },
+        {
+            "name": "Debuguj Aktualny Plik",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        }
+    ]
+}

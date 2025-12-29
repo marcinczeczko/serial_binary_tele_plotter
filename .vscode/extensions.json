@@ -1,0 +1,9 @@
+{
+  "recommendations": [
+    "ms-python.python",              // Podstawa
+    "ms-python.vscode-pylance",      // Inteligencja kodu (podpowiadanie typów)
+    "ms-python.black-formatter",     // Najlepszy formatter (PEP 8)
+    "ms-python.isort",               // Sortowanie importów
+    "njpwerner.autodocstring"        // Szybkie generowanie docstringów
+  ]
+}
