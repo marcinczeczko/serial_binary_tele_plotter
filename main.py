@@ -1,19 +1,17 @@
-import copy
 import json
 import math
 import random
 import signal
 import struct
 import sys
-import time
 from collections import deque
 from enum import Enum
 from pathlib import Path
 
 import numpy as np
 import pyqtgraph as pg
-import serial  # Wymaga: pip install pyserial
-from PyQt6 import QtCore, QtGui, QtWidgets
+import serial
+from PyQt6 import QtCore, QtWidgets
 from serial.tools import list_ports
 
 

@@ -1,35 +1,39 @@
 {
-  // --- Wygląd i Eksplorator ---
   "files.exclude": {
     "**/.git": true,
     "**/.DS_Store": true,
-    "**/__pycache__": true,       // Ukrywa foldery cache Pythona
+    "**/__pycache__": true,
     "**/*.pyc": true
   },
   
-  // --- Python & Formatting ---
   "python.languageServer": "Pylance",
-  "python.analysis.typeCheckingMode": "basic", // Ostrzega o błędach typów, ale nie jest upierdliwy
+  "python.analysis.typeCheckingMode": "basic",
   
-  // Formatowanie przy zapisie (Black)
   "[python]": {
     "editor.defaultFormatter": "ms-python.black-formatter",
     "editor.formatOnSave": true,
     "editor.codeActionsOnSave": {
-      "source.organizeImports": "explicit" // Automatycznie sortuje importy (Isort)
+      "source.organizeImports": "explicit"
     }
   },
 
-  // Konfiguracja Black (Formatter)
   "black-formatter.args": [
-    "--line-length", "100"  // PyQt często ma długie linie, 88 (domyślnie) to za mało
+    "--line-length", "100"
   ],
 
-  // Terminal
-  "terminal.integrated.defaultProfile.osx": "zsh", // Na Macu domyślnie zsh
+  "terminal.integrated.defaultProfile.osx": "zsh",
   
-  // Aby VS Code widział Twoje moduły (core, ui) jako część projektu
   "python.analysis.extraPaths": [
-    "${workspaceFolder}"
+    "${workspaceFolder}",
+    "${workspaceFolder}/core", 
+    "${workspaceFolder}/ui"
+  ],
+
+  // ---PYLINT for PYQT6 ---
+  // Load PyQT6 plugin so classes are visible by linter
+  "pylint.args": [
+    "--extension-pkg-allow-list=PyQt6",
+    //"--variable-rgx=[a-z_][a-z0-9_]{1,30}$",  // Less restrictive nameology of variables
+   // "--disable=C0114,C0115,C0116"             // Disable the need for docstrings
   ]
 }
