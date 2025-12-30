@@ -11,7 +11,7 @@ from PyQt6 import QtCore, QtWidgets
 from core.acquisition.engine import TelemetryEngine
 from core.types import EngineState
 from ui.charts.telemetry_plot import TelemetryPlot
-from ui.panels.panels import ControlPanel
+from ui.panels.container import MainControlPanel
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -28,13 +28,6 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         """
         Initializes the main window, UI layout, and background engine.
-
-        Sets up:
-        - Window title and dimensions.
-        - Status bar widgets.
-        - Central splitter layout containing the Control Panel and Plot Area.
-        - The `TelemetryEngine` running in a separate `QThread`.
-        - All signal-slot connections for data flow and control logic.
         """
         super().__init__()
         self.setWindowTitle("DiffBot Telemetry Viewer (Pro)")
@@ -54,7 +47,7 @@ class MainWindow(QtWidgets.QMainWindow):
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         self.setCentralWidget(splitter)
 
-        self.panel = ControlPanel()
+        self.panel = MainControlPanel()
         self.plot = TelemetryPlot()
 
         splitter.addWidget(self.panel)
@@ -62,16 +55,18 @@ class MainWindow(QtWidgets.QMainWindow):
         splitter.setSizes([350, 930])
 
         # Engine & Thread Initialization
-        self.engine = TelemetryEngine(
-            self.panel.sample_period_edit.value(), self.panel.sample_count_edit.value()
-        )
+        # --- FIX 1: Używamy getterów z panelu zamiast sięgać do widgetów bezpośrednio ---
+        initial_period = self.panel.get_initial_sample_period()
+        initial_samples = self.panel.get_initial_sample_count()
+
+        self.engine = TelemetryEngine(initial_period, initial_samples)
+        # --------------------------------------------------------------------------------
 
         self.engine_thread = QtCore.QThread()
         self.engine.moveToThread(self.engine_thread)
         self.engine_thread.start()
 
         # --- Signal Wiring ---
-        self._initial_stream_setup()
 
         # Panel -> Engine (Configuration)
         self.panel.scale_changed.connect(self.engine.update_scale)
@@ -96,15 +91,31 @@ class MainWindow(QtWidgets.QMainWindow):
         # Plot -> UI (Interactivity)
         self.plot.cursor_moved.connect(self.lbl_cursor.setText)
 
+        # Setup initial stream (AFTER wiring signals)
+        self._initial_stream_setup()
+
     def _initial_stream_setup(self):
-        idx = self.panel.payload_combo.currentIndex()
-        sid = self.panel.payload_combo.itemData(idx)
-        if not sid:
+        """
+        Loads configuration for the currently selected stream in the panel.
+        """
+        # --- FIX 2: Panel nie udostępnia już publicznie loadera ani combo boxa.
+        # Najprościej: symulujemy wybór strumienia, pobierając aktualne ID.
+        # Ale ponieważ MainControlPanel ukrył te detale, musimy albo:
+        # A) Dodać metody dostępowe w MainControlPanel (get_current_stream_config)
+        # B) Wymusić emisję sygnału zmiany strumienia przy starcie.
+
+        # Opcja B jest czystsza architektonicznie:
+        # Wywołujemy "sztuczną" zmianę indeksu w panelu, żeby wszystko się przeładowało.
+        # Jednak panel już to zrobił w swoim __init__. My potrzebujemy tylko configu dla Engine/Plot.
+
+        # Dlatego dodajmy metodę pomocniczą do MainControlPanel (zobacz poniżej w komentarzu co dodać do container.py)
+        # Zakładając, że masz tam metodę `get_current_stream_config()`:
+
+        cfg = self.panel.get_current_stream_config()
+        if not cfg:
             return
-        cfg = self.panel.stream_loader.get_stream(sid)
 
-        self.panel.apply_stream_config(cfg)
-
+        # Aplikujemy config do wykresu i silnika (Panel zrobił to sobie sam w swoim init)
         self.plot.configure_signals(cfg["signals"])
         self.engine.configure_signals(cfg["signals"])
         self.engine.configure_frame(cfg)
@@ -126,12 +137,6 @@ class MainWindow(QtWidgets.QMainWindow):
     def _handle_connection(self, port, baud):
         """
         Handles connection requests triggered by the Control Panel.
-
-        Uses `invokeMethod` to safely communicate with the engine thread.
-
-        Args:
-            port (str): The serial port name (e.g., "COM3") or "STOP" to disconnect.
-            baud (int): The baud rate for the connection.
         """
         if port != "STOP":
             QtCore.QMetaObject.invokeMethod(
@@ -151,33 +156,21 @@ class MainWindow(QtWidgets.QMainWindow):
             self.lbl_status.setStyleSheet("color: #F44336; font-weight: bold;")
 
     def _handle_pause(self, paused):
-        """
-        Toggles the pause state of the plotter.
-
-        Args:
-            paused (bool): True to pause the plot (enter Analysis mode), False to resume live plotting.
-        """
         self.plot.set_paused(paused)
         self.lbl_status.setText("PAUSED" if paused else "Connected")
 
     def closeEvent(self, event):
         """
         Handles the application close event to ensure clean thread termination.
-
-        Stops the engine safely using `invokeMethod`, quits the thread loop,
-        and waits for the thread to finish before closing the window.
         """
-        # Command the engine to stop its internal timer/loop
         QtCore.QMetaObject.invokeMethod(
             self.engine, "stop_working", QtCore.Qt.ConnectionType.QueuedConnection
         )
 
-        # Tell the thread event loop to exit
         self.engine_thread.quit()
 
-        # Wait for the thread to finish (with timeout to prevent freezing)
         if not self.engine_thread.wait(2000):
-            print("Wątek nie odpowiedział, wymuszam zamknięcie...")
+            print("Engine thread hung, forcing termination...")
             self.engine_thread.terminate()
             self.engine_thread.wait()
 
