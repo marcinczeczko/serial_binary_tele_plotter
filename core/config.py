@@ -1,8 +1,5 @@
 """
 Module responsible for loading and managing telemetry stream configurations.
-
-This module loads telemetry stream definitions from a mandatory JSON file.
-If the configuration file is missing or invalid, the application must fail fast.
 """
 
 import json
@@ -12,9 +9,6 @@ from pathlib import Path
 class StreamConfigLoader:
     """
     Manages the configuration for data streams.
-
-    The configuration file is REQUIRED.
-    Missing or malformed configuration is treated as a fatal application error.
     """
 
     def __init__(self, path: str):
@@ -23,11 +17,17 @@ class StreamConfigLoader:
         if not self.path.exists():
             raise FileNotFoundError(f"Required configuration file not found: {self.path.resolve()}")
 
+        self.data = {}
         self._load()
 
         # Basic sanity validation
         if "streams" not in self.data or not isinstance(self.data["streams"], dict):
             raise ValueError("Invalid streams.json: missing or invalid 'streams' section")
+
+        # --- FIX: Ensure panel_type exists ---
+        for key, val in self.data["streams"].items():
+            if "panel_type" not in val:
+                val["panel_type"] = "none"
 
     def _load(self):
         """Loads and parses the JSON configuration file."""

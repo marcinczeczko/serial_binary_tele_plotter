@@ -2,187 +2,94 @@
     "streams": {
         "pid": {
             "name": "PID Telemetry",
+            "panel_type": "pid",
             "frame": {
                 "stream_id": 1,
                 "endianness": "little",
                 "packed": true,
                 "fields": [
-                    {
-                        "name": "loopCntr",
-                        "type": "u32"
-                    },
-                    {
-                        "name": "motor",
-                        "type": "u8"
-                    },
-                    {
-                        "name": "setpoint",
-                        "type": "f32"
-                    },
-                    {
-                        "name": "measurement",
-                        "type": "f32"
-                    },
-                    {
-                        "name": "measurementRaw",
-                        "type": "f32"
-                    },
-                    {
-                        "name": "error",
-                        "type": "f32"
-                    },
-                    {
-                        "name": "pTerm",
-                        "type": "f32"
-                    },
-                    {
-                        "name": "iTerm",
-                        "type": "f32"
-                    },
-                    {
-                        "name": "outputRaw",
-                        "type": "f32"
-                    },
-                    {
-                        "name": "output",
-                        "type": "f32"
-                    }
+                    { "name": "loopCntr", "type": "u32" },
+                    { "name": "motor", "type": "u8" },
+                    { "name": "setpoint", "type": "f32" },
+                    { "name": "measurement", "type": "f32" },
+                    { "name": "measurementRaw", "type": "f32" },
+                    { "name": "error", "type": "f32" },
+                    { "name": "pTerm", "type": "f32" },
+                    { "name": "iTerm", "type": "f32" },
+                    { "name": "outputRaw", "type": "f32" },
+                    { "name": "output", "type": "f32" }
                 ]
             },
             "groups": {
-                "core": {
-                    "label": "PID Core",
-                    "order": 1
-                },
-                "terms": {
-                    "label": "PID Terms",
-                    "order": 2
-                },
-                "actuator": {
-                    "label": "Actuator",
-                    "order": 3
-                }
+                "core": { "label": "PID Core", "order": 1 },
+                "terms": { "label": "PID Terms", "order": 2 },
+                "actuator": { "label": "Actuator", "order": 3 }
             },
             "signals": {
                 "setpoint": {
-                    "label": "Setpoint",
-                    "field": "setpoint",
-                    "group": "core",
-                    "color": "#4FC3F7",
-                    "line": {
-                        "style": "dashed",
-                        "width": 2
-                    },
-                    "y_range": {
-                        "min": -2.0,
-                        "max": 2.0
-                    },
-                    "visible": true
+                    "label": "Setpoint", "field": "setpoint", "group": "core", "color": "#4FC3F7",
+                    "line": { "style": "dashed", "width": 2 },
+                    "y_range": { "min": -2.0, "max": 2.0 }, "visible": true
                 },
                 "measurement": {
-                    "label": "Measurement",
-                    "field": "measurement",
-                    "group": "core",
-                    "color": "#81C784",
-                    "line": {
-                        "style": "solid",
-                        "width": 2
-                    },
-                    "y_range": {
-                        "min": 0.0,
-                        "max": 1.0
-                    },
-                    "visible": true
-                },
-                "measurementRaw": {
-                    "label": "Measurement Raw",
-                    "field": "measurementRaw",
-                    "group": "core",
-                    "color": "#8981c7",
-                    "line": {
-                        "style": "dashed",
-                        "width": 2
-                    },
-                    "y_range": {
-                        "min": 0.0,
-                        "max": 1.0
-                    },
-                    "visible": true
+                    "label": "Measurement", "field": "measurement", "group": "core", "color": "#81C784",
+                    "line": { "style": "solid", "width": 2 },
+                    "y_range": { "min": 0.0, "max": 1.0 }, "visible": true
                 },
                 "error": {
-                    "label": "Error",
-                    "field": "error",
-                    "group": "core",
-                    "color": "#BA68C8",
-                    "line": {
-                        "style": "solid",
-                        "width": 2
-                    },
-                    "y_range": {
-                        "min": -1.0,
-                        "max": 1.0
-                    },
-                    "visible": true
-                },
-                "pTerm": {
-                    "label": "pTerm",
-                    "field": "pTerm",
-                    "group": "terms",
-                    "color": "#FFD54F",
-                    "line": {
-                        "style": "solid",
-                        "width": 2
-                    },
-                    "y_range": {
-                        "min": -50,
-                        "max": 50
-                    },
-                    "visible": false
-                },
-                "iTerm": {
-                    "label": "iTerm",
-                    "field": "iTerm",
-                    "group": "terms",
-                    "color": "#4DB6AC",
-                    "line": {
-                        "style": "solid",
-                        "width": 2
-                    },
-                    "y_range": {
-                        "min": -50,
-                        "max": 50
-                    },
-                    "visible": false
-                },
-                "outputRaw": {
-                    "label": "Output Raw",
-                    "field": "outputRaw",
-                    "group": "actuator",
-                    "color": "#FF8A65",
-                    "line": {
-                        "style": "dotted",
-                        "width": 2
-                    },
-                    "y_range": {
-                        "min": -100,
-                        "max": 100
-                    },
-                    "visible": true
+                    "label": "Error", "field": "error", "group": "core", "color": "#BA68C8",
+                    "line": { "style": "solid", "width": 2 },
+                    "y_range": { "min": -1.0, "max": 1.0 }, "visible": true
                 },
                 "output": {
-                    "label": "Output",
-                    "field": "output",
-                    "group": "actuator",
-                    "color": "#FF8A65",
-                    "line": {
-                        "style": "solid",
-                        "width": 2
-                    },
-                    "y_range": {
-                        "min": -100,
-                        "max": 100
-                    },
-                    "visible": true
+                    "label": "Output", "field": "output", "group": "actuator", "color": "#FF8A65",
+                    "line": { "style": "solid", "width": 2 },
+                    "y_range": { "min": -100, "max": 100 }, "visible": true
+                }
+            }
+        },
+        "imu_6axis": {
+            "name": "IMU 6-Axis Raw",
+            "panel_type": "imu",
+            "frame": {
+                "stream_id": 2,
+                "endianness": "little",
+                "packed": true,
+                "fields": [
+                    { "name": "loopCntr", "type": "u32" },
+                    { "name": "motor", "type": "u8" },
+                    { "name": "acc_x", "type": "f32" },
+                    { "name": "acc_y", "type": "f32" },
+                    { "name": "acc_z", "type": "f32" },
+                    { "name": "gyro_x", "type": "f32" },
+                    { "name": "gyro_y", "type": "f32" },
+                    { "name": "gyro_z", "type": "f32" }
+                ]
+            },
+            "groups": {
+                "accel": { "label": "Accelerometer [g]", "order": 1 },
+                "gyro": { "label": "Gyroscope [dps]", "order": 2 }
+            },
+            "signals": {
+                "acc_x": {
+                    "label": "Acc X", "field": "acc_x", "group": "accel", "color": "#EF5350",
+                    "line": { "style": "solid", "width": 2 }, "y_range": { "min": -2.0, "max": 2.0 }, "visible": true
+                },
+                "acc_y": {
+                    "label": "Acc Y", "field": "acc_y", "group": "accel", "color": "#66BB6A",
+                    "line": { "style": "solid", "width": 2 }, "y_range": { "min": -2.0, "max": 2.0 }, "visible": true
+                },
+                "acc_z": {
+                    "label": "Acc Z", "field": "acc_z", "group": "accel", "color": "#42A5F5",
+                    "line": { "style": "solid", "width": 2 }, "y_range": { "min": -2.0, "max": 2.0 }, "visible": true
+                },
+                "gyro_x": {
+                    "label": "Gyro X", "field": "gyro_x", "group": "gyro", "color": "#FFCA28",
+                    "line": { "style": "dashed", "width": 1 }, "y_range": { "min": -250.0, "max": 250.0 }, "visible": false
+                },
+                "gyro_z": {
+                    "label": "Gyro Z", "field": "gyro_z", "group": "gyro", "color": "#AB47BC",
+                    "line": { "style": "dashed", "width": 1 }, "y_range": { "min": -250.0, "max": 250.0 }, "visible": false
                 }
             }
         }

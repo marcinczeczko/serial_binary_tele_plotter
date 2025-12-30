@@ -33,6 +33,10 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         super().__init__()
 
+        # --- State Tracking ---
+        self.active_port = None
+        self.active_baud = 115200
+
         # --- Window Setup ---
         self.setWindowTitle("DiffBot Telemetry Viewer (Pro)")
         self.resize(1280, 800)
@@ -62,14 +66,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # --- Engine & Thread Initialization ---
         # Retrieve initial settings via the Panel's public API (Facade)
-        # We do not access internal widgets (like spinboxes) directly.
         initial_period = self.panel.get_initial_sample_period()
         initial_samples = self.panel.get_initial_sample_count()
 
         self.engine = TelemetryEngine(initial_period, initial_samples)
 
         # Move the Engine object to a dedicated background thread.
-        # This prevents serial I/O and data parsing from freezing the GUI.
         self.engine_thread = QtCore.QThread()
         self.engine.moveToThread(self.engine_thread)
         self.engine_thread.start()
@@ -81,6 +83,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.panel.stream_changed.connect(self._on_stream_changed)
         self.panel.time_config_changed.connect(self.engine.update_time_config)
         self.panel.pid_config_sent.connect(self.engine.send_pid_config)
+        self.panel.imu_command_sent.connect(self.engine.send_imu_command)
 
         # 2. Control Logic: Panel -> Main Window
         self.panel.connection_requested.connect(self._handle_connection)
@@ -106,9 +109,6 @@ class MainWindow(QtWidgets.QMainWindow):
     def _initial_stream_setup(self) -> None:
         """
         Loads configuration for the currently selected stream in the panel.
-
-        This ensures the Engine and Plot know what data structure (JSON)
-        to expect before the user even clicks 'Connect'.
         """
         # Fetch config from the Panel Facade
         cfg = self.panel.get_current_stream_config()
@@ -123,35 +123,61 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_stream_changed(self, stream_cfg: dict) -> None:
         """
         Handles the event when the user selects a different stream type in the panel.
+        It safely restarts the engine if it was running.
         """
-        # Safety: Stop the engine if it's running to prevent parsing mismatches
-        # (e.g. parsing a PID packet using a IMU structure).
-        if self.engine.state == EngineState.RUNNING:
+        was_running = self.engine.state == EngineState.RUNNING
+
+        # 1. Update Plot (Main Thread UI - Immediate)
+        self.plot.configure_signals(stream_cfg["signals"])
+
+        # 2. Queue Stop Command (Worker Thread)
+        if was_running:
             QtCore.QMetaObject.invokeMethod(
                 self.engine,
                 "stop_working",
                 QtCore.Qt.ConnectionType.QueuedConnection,
             )
-            self.lbl_status.setText("Stream changed — stopped")
-            self.lbl_status.setStyleSheet("color: #FFA000; font-weight: bold;")
 
-        # Reconfigure components
-        self.plot.configure_signals(stream_cfg["signals"])
-        self.engine.configure_signals(stream_cfg["signals"])
-        self.engine.configure_frame(stream_cfg)
+        # 3. Queue Configuration Commands (Worker Thread)
+        # We use invokeMethod to ensure these happen AFTER 'stop_working' in the queue.
+        # Direct calls would race with the stop command.
+        QtCore.QMetaObject.invokeMethod(
+            self.engine,
+            "configure_signals",
+            QtCore.Qt.ConnectionType.QueuedConnection,
+            QtCore.Q_ARG(dict, stream_cfg["signals"]),
+        )
+        QtCore.QMetaObject.invokeMethod(
+            self.engine,
+            "configure_frame",
+            QtCore.Qt.ConnectionType.QueuedConnection,
+            QtCore.Q_ARG(dict, stream_cfg),
+        )
+
+        # 4. Queue Restart Command (Worker Thread)
+        # Only if it was running previously
+        if was_running and self.active_port:
+            self.lbl_status.setText(f"Switching stream... ({self.active_port})")
+
+            QtCore.QMetaObject.invokeMethod(
+                self.engine,
+                "start_working",
+                QtCore.Qt.ConnectionType.QueuedConnection,
+                QtCore.Q_ARG(str, self.active_port),
+                QtCore.Q_ARG(int, self.active_baud),
+            )
+        else:
+            self.lbl_status.setText("Stream configuration loaded.")
 
     def _handle_connection(self, port: str, baud: int) -> None:
         """
         Handles connection requests triggered by the Control Panel.
-
-        Uses `QMetaObject.invokeMethod` to safely communicate with the engine thread.
-        Direct method calls across threads can cause race conditions.
-
-        Args:
-            port (str): The serial port name (e.g., "COM3") or "STOP".
-            baud (int): The baud rate.
         """
         if port != "STOP":
+            # Store connection details for auto-reconnect logic
+            self.active_port = port
+            self.active_baud = baud
+
             # Start the Engine
             QtCore.QMetaObject.invokeMethod(
                 self.engine,
@@ -163,6 +189,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.lbl_status.setText(f"Connected to {port}")
             self.lbl_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
         else:
+            # Clear active port but keep baud preference maybe?
+            self.active_port = None
+
             # Stop the Engine
             QtCore.QMetaObject.invokeMethod(
                 self.engine, "stop_working", QtCore.Qt.ConnectionType.QueuedConnection
@@ -173,9 +202,6 @@ class MainWindow(QtWidgets.QMainWindow):
     def _handle_pause(self, paused: bool) -> None:
         """
         Toggles the pause state of the plotter.
-
-        Args:
-            paused (bool): True to pause (Analysis mode), False to resume (Live mode).
         """
         self.plot.set_paused(paused)
         self.lbl_status.setText("PAUSED" if paused else "Connected")
@@ -183,11 +209,6 @@ class MainWindow(QtWidgets.QMainWindow):
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         """
         Handles the application close event to ensure clean thread termination.
-
-        Steps:
-        1. Signals the Engine to stop its loop/timer.
-        2. Tells the Thread to quit its event loop.
-        3. Waits for the Thread to actually finish.
         """
         # 1. Stop the worker logic
         QtCore.QMetaObject.invokeMethod(
