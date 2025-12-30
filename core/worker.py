@@ -10,7 +10,6 @@ It also supports a 'VIRTUAL' mode for testing without hardware.
 import math
 import random
 import struct
-import traceback
 from collections import deque
 from enum import Enum, auto
 from typing import Deque, Dict, Union
@@ -78,6 +77,10 @@ class TelemetryWorker(QtCore.QObject):
         self.serial_port = None
         self.state: WorkerState = WorkerState.IDLE
 
+        self.gui_update_timer = QtCore.QTimer(self)
+        self.gui_update_timer.timeout.connect(self._emit_buffered_data)
+        self.gui_update_timer.setInterval(33)  # ~30 FPS
+
     @QtCore.pyqtSlot(str, int)
     def start_working(self, port_name, baudrate):
         """
@@ -90,11 +93,14 @@ class TelemetryWorker(QtCore.QObject):
             port_name (str): The name of the COM port (e.g., 'COM3', '/dev/ttyUSB0') or 'VIRTUAL'.
             baudrate (int): The communication speed.
         """
+        self.gui_update_timer.start()
         if self.state != WorkerState.CONFIGURED:
             self.status_msg.emit("Worker not configured yet")
             if TRACE_DECODE:
                 print(f"[STATE] start_working blocked, state={self.state}")
             return
+
+        self._clear_all_buffers()
 
         self.state = WorkerState.RUNNING
         if TRACE_DECODE:
@@ -119,6 +125,7 @@ class TelemetryWorker(QtCore.QObject):
             except ValueError as e:
                 self.status_msg.emit(f"Config Error: {e}")
                 self.state = WorkerState.CONFIGURED
+        self.gui_update_timer.start()
 
     @QtCore.pyqtSlot()
     def stop_working(self):
@@ -128,8 +135,7 @@ class TelemetryWorker(QtCore.QObject):
         Stops the internal timer, closes the serial port, and sets the running flag to False.
         This slot is typically connected to the GUI disconnection or close events.
         """
-        print("[STOP] stop_working called from:")
-        traceback.print_stack(limit=5)
+        self.gui_update_timer.stop()
 
         if self.state != WorkerState.RUNNING:
             return
@@ -149,6 +155,11 @@ class TelemetryWorker(QtCore.QObject):
                 pass
             self.serial_port = None
 
+    def _clear_all_buffers(self):
+        for motor_bufs in self.buffers.values():
+            for buf in motor_bufs.values():
+                buf.clear()
+
     def _serial_read_step(self):
         """
         Performs a single non-blocking read cycle from the serial port.
@@ -159,10 +170,16 @@ class TelemetryWorker(QtCore.QObject):
         process other events (like signals) between reads, ensuring the thread
         remains responsive to 'stop' commands.
         """
-        if self.state != WorkerState.RUNNING or not self.serial_port:
+        if self.state != WorkerState.RUNNING:
+            return
+
+        if self.serial_port is None:
             return
 
         try:
+            if not self.serial_port.is_open:
+                raise serial.SerialException("Port closed unexpectedly")
+
             n = self.serial_port.in_waiting
             if n > 0:
                 data = self.serial_port.read(n)
@@ -173,13 +190,10 @@ class TelemetryWorker(QtCore.QObject):
                     if TRACE_DECODE:
                         print(f"[RX][BUF] size={len(self.rx_buffer)}")
                     self._parse_rx_buffer()
-        except serial.SerialException as e:
-            msg = str(e)
-            self.status_msg.emit(f"Serial error: {msg}")
-
-            if "returned no data" not in msg:
-                self.stop_working()
-                return
+        except (serial.SerialException, OSError) as e:
+            self.status_msg.emit(f"Serial error: {str(e)}")
+            self.stop_working()
+            return
 
         if self.state == WorkerState.RUNNING:
             QtCore.QTimer.singleShot(0, self._serial_read_step)
@@ -308,11 +322,6 @@ class TelemetryWorker(QtCore.QObject):
         for sig_id, field in self.signal_field_map.items():
             motor_buffers[sig_id].append(decoded[field])
 
-        # Emit only if this motor is currently selected
-        if motor == self.selected_motor:
-            # self._debug_print_frame(f"id={p_type}, motor={motor}", values)
-            self._update_buffers_from_motor(motor)
-
     @QtCore.pyqtSlot(int, int, float, float, float, float, float)
     def send_pid_config(self, ramp_type, motor_id, kp, ki, kff, alpha, rps):
         """
@@ -358,6 +367,7 @@ class TelemetryWorker(QtCore.QObject):
         # --- simulate signals ---
         setpoint = math.sin(t * 0.5)
         measurement = setpoint + random.uniform(-0.05, 0.05)
+        measurement_raw = setpoint + random.uniform(-0.08, 0.08)
         error = setpoint - measurement
 
         decoded = {
@@ -365,6 +375,7 @@ class TelemetryWorker(QtCore.QObject):
             "motor": self.selected_motor,
             "setpoint": setpoint,
             "measurement": measurement,
+            "measurementRaw": measurement_raw,
             "error": error,
             "pTerm": error * 20.0,
             "iTerm": math.sin(t * 0.2) * 5.0,
@@ -383,40 +394,56 @@ class TelemetryWorker(QtCore.QObject):
         self._handle_payload(self.active_stream_id, payload)
         self._virtual_loop_cntr += 1
 
-    def _update_buffers_from_motor(self, motor_id: int):
-        """_summary_
+    def _emit_buffered_data(self):
+        # 1. Sprawdzenia wstępne (czy Worker działa, czy jest wybrany silnik)
+        if self.state != WorkerState.RUNNING:
+            return
 
-        Args:
-            motor_id (_type_): _description_
-            current_time (_type_): _description_
-        """
-        motor_buffers = self.buffers[motor_id]
+        if self.selected_motor not in self.buffers:
+            return
 
+        motor_buffers = self.buffers[self.selected_motor]
         loops_cntr = motor_buffers["__loop__"]
+
         if len(loops_cntr) < 2:
             return
 
-        # build time axis from loopCntr
+        # 2. Budowanie osi czasu (to już miałeś)
         loop_cntr_arr = np.asarray(loops_cntr, dtype=float)
         time_axis = loop_cntr_arr * self.sample_period_s
 
         snapshot_raw: Dict[str, np.ndarray] = {}
         out_norm: Dict[str, np.ndarray] = {}
 
+        # Iterujemy po każdym sygnale w buforze silnika
         for sig_id, buf in motor_buffers.items():
+            # Pomijamy bufor czasu/licznika, bo obsłużyliśmy go wyżej
             if sig_id == "__loop__":
                 continue
 
+            # Konwersja deque na numpy array (to jest operacja kosztowna, dlatego robimy ją w timerze)
             arr = np.asarray(buf, dtype=float)
+
+            # Zabezpieczenie: jeśli długość sygnału różni się od osi czasu, pomijamy, żeby nie wysypać wykresu
             if len(arr) != len(time_axis):
                 continue
 
+            # Zapisujemy surowe dane (potrzebne do tooltipów i analizy po pauzie)
             snapshot_raw[sig_id] = arr
 
-            ymin, ymax = self.scale[sig_id]
-            scale = max(ymax - ymin, 1e-12)
-            out_norm[sig_id] = np.clip((arr - ymin) / scale, 0.0, 1.0)
+            # Pobieramy zakres skalowania (min, max) dla danego sygnału
+            # self.scale jest słownikiem wypełnianym przy konfiguracji
+            if sig_id in self.scale:
+                ymin, ymax = self.scale[sig_id]
 
+                # Obliczamy skalę, zabezpieczając się przed dzieleniem przez zero
+                scale = max(ymax - ymin, 1e-12)
+
+                # Normalizujemy dane do zakresu 0.0 - 1.0 (dla pyqtgraph ViewBox)
+                # np.clip ucina wartości, które wykraczają poza zakres
+                out_norm[sig_id] = np.clip((arr - ymin) / scale, 0.0, 1.0)
+
+        # 3. Emitowanie gotowej paczki do UI
         self.data_ready.emit(
             {
                 "time": time_axis,
