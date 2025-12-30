@@ -41,7 +41,7 @@ class TelemetryEngine(QtCore.QObject):
 
     def __init__(self, sample_period_ms: float, max_samples: int):
         """
-        Initializes the Worker and its sub-components.
+        Initializes the Engine and its sub-components.
 
         Args:
             sample_period_ms (float): Sampling period in milliseconds (e.g., 5.0).
