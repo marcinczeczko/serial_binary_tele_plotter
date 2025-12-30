@@ -24,6 +24,10 @@
                         "type": "f32"
                     },
                     {
+                        "name": "measurementRaw",
+                        "type": "f32"
+                    },
+                    {
                         "name": "error",
                         "type": "f32"
                     },
@@ -85,8 +89,23 @@
                         "width": 2
                     },
                     "y_range": {
-                        "min": -2.0,
-                        "max": 2.0
+                        "min": 0.0,
+                        "max": 1.0
+                    },
+                    "visible": true
+                },
+                "measurementRaw": {
+                    "label": "Measurement Raw",
+                    "field": "measurementRaw",
+                    "group": "core",
+                    "color": "#8981c7",
+                    "line": {
+                        "style": "dashed",
+                        "width": 2
+                    },
+                    "y_range": {
+                        "min": 0.0,
+                        "max": 1.0
                     },
                     "visible": true
                 },

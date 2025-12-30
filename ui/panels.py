@@ -36,7 +36,7 @@ class ControlPanel(QtWidgets.QWidget):
         connection_requested (str, int): Emitted when Connect/Disconnect is clicked.
                                          Payload: (port_name, baudrate) or ("STOP", 0).
         pause_requested (bool): Emitted when Pause/Resume is clicked.
-        pid_config_sent (int, float, float, float): Emitted when PID update is requested.
+        pid_config_sent (int, int, float, float, float, float, float): Emitted when PID update is requested.
                                                     Payload: (motor_id, kp, ki, kff).
     """
 
@@ -47,7 +47,7 @@ class ControlPanel(QtWidgets.QWidget):
     signal_lock_changed = QtCore.pyqtSignal(str, bool)
     connection_requested = QtCore.pyqtSignal(str, int)
     pause_requested = QtCore.pyqtSignal(bool)
-    pid_config_sent = QtCore.pyqtSignal(int, float, float, float)
+    pid_config_sent = QtCore.pyqtSignal(int, int, float, float, float, float, float)
     motor_changed = QtCore.pyqtSignal(int)
 
     def __init__(self):
@@ -92,11 +92,13 @@ class ControlPanel(QtWidgets.QWidget):
         self.motor_selector = QtWidgets.QComboBox()
         self.motor_selector.addItem("Left Motor", 0)
         self.motor_selector.addItem("Right Motor", 1)
-        self.motor_selector.addItem("Both Motors", 2)
         self.kp_sb = self._make_sb(1.0)
-        self.ki_sb = self._make_sb(0.1)
-        self.kff_sb = self._make_sb(0.5)
-        self.pid_update_btn = QtWidgets.QPushButton("Update PID Parameters")
+        self.ki_sb = self._make_sb(0.0)
+        self.kff_sb = self._make_sb(0.0)
+        self.rps = self._make_sb(0.5)
+        self.alpha = self._make_sb(0.5)
+        self.ramp = self._make_cb()
+        self.pid_update_btn = QtWidgets.QPushButton("Update PI and Run")
         self.pid_update_btn.clicked.connect(self._on_pid_update)
         l_pid.addWidget(QtWidgets.QLabel("Motor:"), 0, 0)
         l_pid.addWidget(self.motor_selector, 0, 1)
@@ -106,7 +108,13 @@ class ControlPanel(QtWidgets.QWidget):
         l_pid.addWidget(self.ki_sb, 2, 1)
         l_pid.addWidget(QtWidgets.QLabel("Kff:"), 3, 0)
         l_pid.addWidget(self.kff_sb, 3, 1)
-        l_pid.addWidget(self.pid_update_btn, 4, 0, 1, 2)
+        l_pid.addWidget(QtWidgets.QLabel("Alpha:"), 4, 0)
+        l_pid.addWidget(self.alpha, 4, 1)
+        l_pid.addWidget(QtWidgets.QLabel("Rps:"), 5, 0)
+        l_pid.addWidget(self.rps, 5, 1)
+        l_pid.addWidget(QtWidgets.QLabel("Ramp :"), 6, 0)
+        l_pid.addWidget(self.ramp, 6, 1)
+        l_pid.addWidget(self.pid_update_btn, 7, 0, 1, 2)
         layout.addWidget(grp_pid)
 
         # --- Time Window Group ---
@@ -114,11 +122,11 @@ class ControlPanel(QtWidgets.QWidget):
         l_time = QtWidgets.QGridLayout(grp_time)
         self.sample_period_edit = QtWidgets.QDoubleSpinBox()
         self.sample_period_edit.setRange(1, 1000)
-        self.sample_period_edit.setValue(50.0)
+        self.sample_period_edit.setValue(5.0)
         self.sample_period_edit.setSuffix(" ms")
         self.sample_count_edit = QtWidgets.QSpinBox()
         self.sample_count_edit.setRange(10, 10000)
-        self.sample_count_edit.setValue(200)
+        self.sample_count_edit.setValue(2000)
         self.sample_period_edit.valueChanged.connect(self._emit_time_config)
         self.sample_count_edit.valueChanged.connect(self._emit_time_config)
         l_time.addWidget(QtWidgets.QLabel("Period:"), 0, 0)
@@ -188,8 +196,13 @@ class ControlPanel(QtWidgets.QWidget):
         """Helper to create standard double spin boxes."""
         sb = QtWidgets.QDoubleSpinBox()
         sb.setRange(0, 1000)
-        sb.setDecimals(4)
+        sb.setDecimals(2)
         sb.setValue(val)
+        return sb
+
+    def _make_cb(self):
+        """Helper to create standard checkbox."""
+        sb = QtWidgets.QCheckBox()
         return sb
 
     def refresh_ports(self):
@@ -203,7 +216,13 @@ class ControlPanel(QtWidgets.QWidget):
         """Collects PID values and emits a configuration signal."""
         motor_id = self.motor_selector.currentData()
         self.pid_config_sent.emit(
-            motor_id, self.kp_sb.value(), self.ki_sb.value(), self.kff_sb.value()
+            1 if self.ramp.isChecked() else 0,
+            motor_id,
+            self.kp_sb.value(),
+            self.ki_sb.value(),
+            self.kff_sb.value(),
+            self.alpha.value(),
+            self.rps.value(),
         )
 
     def _emit_time_config(self):

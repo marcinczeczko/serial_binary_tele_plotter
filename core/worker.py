@@ -22,7 +22,7 @@ from PyQt6 import QtCore
 from core.frame_decoder import FrameDecoder
 from core.protocol import MAGIC_0, MAGIC_1, RTP_REQ_PID, calculate_crc8
 
-DEBUG_DECODE = True
+DEBUG_DECODE = False
 TRACE_DECODE = False
 
 BufferValue = Union[float, int]
@@ -313,8 +313,8 @@ class TelemetryWorker(QtCore.QObject):
             # self._debug_print_frame(f"id={p_type}, motor={motor}", values)
             self._update_buffers_from_motor(motor)
 
-    @QtCore.pyqtSlot(int, float, float, float)
-    def send_pid_config(self, motor_id, kp, ki, kff):
+    @QtCore.pyqtSlot(int, int, float, float, float, float, float)
+    def send_pid_config(self, ramp_type, motor_id, kp, ki, kff, alpha, rps):
         """
         Constructs and sends a PID configuration packet to the robot.
 
@@ -323,11 +323,13 @@ class TelemetryWorker(QtCore.QObject):
             kp (float): Proportional gain.
             ki (float): Integral gain.
             kff (float): Feed-forward gain.
+            alpha (float): Filter alpha
+            rps (float): rps of the motor to spin
         """
         if not self.serial_port or not self.serial_port.is_open:
             return
         try:
-            payload = struct.pack("<Bfff", motor_id, kp, ki, kff)
+            payload = struct.pack("<BfffffB", motor_id, kp, ki, kff, alpha, rps, ramp_type)
             h_base = struct.pack("BBBB", MAGIC_0, MAGIC_1, RTP_REQ_PID, len(payload))
             h_crc = calculate_crc8(h_base)
             p_crc = calculate_crc8(payload)
@@ -500,7 +502,7 @@ class TelemetryWorker(QtCore.QObject):
             f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}" for k, v in values.items()
         )
 
-        print(f"[RX][{stream_name}] {items}")
+        # print(f"[RX][{stream_name}] {items}")
 
     @QtCore.pyqtSlot(int)
     def set_selected_motor(self, motor_id: int):
@@ -516,4 +518,4 @@ class TelemetryWorker(QtCore.QObject):
         for buf in self.buffers[motor_id].values():
             buf.clear()
 
-        print(f"[UI] Active motor set to {motor_id}")
+        # print(f"[UI] Active motor set to {motor_id}")
