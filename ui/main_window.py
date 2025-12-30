@@ -10,8 +10,8 @@ from PyQt6 import QtCore, QtWidgets
 
 from core.acquisition.engine import TelemetryEngine
 from core.types import EngineState
-from ui.panels import ControlPanel
-from ui.plot_area import PlotArea
+from ui.charts.telemetry_plot import TelemetryPlot
+from ui.panels.panels import ControlPanel
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -55,7 +55,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(splitter)
 
         self.panel = ControlPanel()
-        self.plot = PlotArea()
+        self.plot = TelemetryPlot()
 
         splitter.addWidget(self.panel)
         splitter.addWidget(self.plot)

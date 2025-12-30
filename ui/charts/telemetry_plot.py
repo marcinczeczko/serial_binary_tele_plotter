@@ -18,7 +18,7 @@ from PyQt6 import QtCore, QtWidgets
 from core.types import PlotMode
 
 
-class PlotArea(QtWidgets.QWidget):
+class TelemetryPlot(QtWidgets.QWidget):
     """
     Widget responsible for rendering the telemetry graphs.
 

@@ -12,7 +12,7 @@ from PyQt6 import QtCore, QtWidgets
 from serial.tools import list_ports
 
 from core.config import StreamConfigLoader
-from ui.widgets import CollapsibleGroup, YAxisControlWidget
+from ui.common.widgets import CollapsibleGroup, YAxisControlWidget
 
 
 class ControlPanel(QtWidgets.QWidget):
