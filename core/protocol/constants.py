@@ -1,3 +1,9 @@
+# Protocol constants
+MAGIC_0 = 0xAA
+MAGIC_1 = 0x55
+RTP_PID = 0x01
+RTP_REQ_PID = 0x10
+
 STRUCT_TYPE_MAP = {
     "u8": ("B", 1),
     "i8": ("b", 1),

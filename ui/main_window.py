@@ -2,13 +2,14 @@
 Main Application Window.
 
 This module defines the primary GUI window that integrates the control panel,
-plotting area, and the background telemetry worker. It handles high-level
+plotting area, and the background telemetry engine. It handles high-level
 signal wiring, thread management, and application lifecycle events.
 """
 
 from PyQt6 import QtCore, QtWidgets
 
-from core.worker import TelemetryWorker, WorkerState
+from core.acquisition.engine import TelemetryEngine
+from core.types import EngineState
 from ui.panels import ControlPanel
 from ui.plot_area import PlotArea
 
@@ -19,20 +20,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
     This class acts as the central hub of the application. It:
     1. Instantiates the UI components (ControlPanel, PlotArea).
-    2. Sets up the background worker thread (`TelemetryWorker`) for data processing.
-    3. Connects signals and slots between the UI and the worker to ensure thread safety.
+    2. Sets up the background engine thread (`TelemetryEngine`) for data processing.
+    3. Connects signals and slots between the UI and the engine to ensure thread safety.
     4. Manages the status bar and global application events (like closing).
     """
 
     def __init__(self):
         """
-        Initializes the main window, UI layout, and background worker.
+        Initializes the main window, UI layout, and background engine.
 
         Sets up:
         - Window title and dimensions.
         - Status bar widgets.
         - Central splitter layout containing the Control Panel and Plot Area.
-        - The `TelemetryWorker` running in a separate `QThread`.
+        - The `TelemetryEngine` running in a separate `QThread`.
         - All signal-slot connections for data flow and control logic.
         """
         super().__init__()
@@ -60,23 +61,23 @@ class MainWindow(QtWidgets.QMainWindow):
         splitter.addWidget(self.plot)
         splitter.setSizes([350, 930])
 
-        # Worker & Thread Initialization
-        self.worker = TelemetryWorker(
+        # Engine & Thread Initialization
+        self.engine = TelemetryEngine(
             self.panel.sample_period_edit.value(), self.panel.sample_count_edit.value()
         )
 
-        self.worker_thread = QtCore.QThread()
-        self.worker.moveToThread(self.worker_thread)
-        self.worker_thread.start()
+        self.engine_thread = QtCore.QThread()
+        self.engine.moveToThread(self.engine_thread)
+        self.engine_thread.start()
 
         # --- Signal Wiring ---
         self._initial_stream_setup()
 
-        # Panel -> Worker (Configuration)
-        self.panel.scale_changed.connect(self.worker.update_scale)
+        # Panel -> Engine (Configuration)
+        self.panel.scale_changed.connect(self.engine.update_scale)
         self.panel.stream_changed.connect(self._on_stream_changed)
-        self.panel.time_config_changed.connect(self.worker.update_time_config)
-        self.panel.pid_config_sent.connect(self.worker.send_pid_config)
+        self.panel.time_config_changed.connect(self.engine.update_time_config)
+        self.panel.pid_config_sent.connect(self.engine.send_pid_config)
 
         # Panel -> Main Window (Connection logic)
         self.panel.connection_requested.connect(self._handle_connection)
@@ -85,12 +86,12 @@ class MainWindow(QtWidgets.QMainWindow):
         # Panel -> Plot (Visuals)
         self.panel.signal_visibility_changed.connect(self.plot.set_signal_visible)
 
-        # Worker -> Plot/UI (Data flow)
-        self.worker.data_ready.connect(self.plot.on_data_ready)
-        self.worker.status_msg.connect(self.lbl_status.setText)
+        # Engine -> Plot/UI (Data flow)
+        self.engine.data_ready.connect(self.plot.on_data_ready)
+        self.engine.status_msg.connect(self.lbl_status.setText)
 
         # Motor filter
-        self.panel.motor_changed.connect(self.worker.set_selected_motor)
+        self.panel.motor_changed.connect(self.engine.set_selected_motor)
 
         # Plot -> UI (Interactivity)
         self.plot.cursor_moved.connect(self.lbl_cursor.setText)
@@ -105,13 +106,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.panel.apply_stream_config(cfg)
 
         self.plot.configure_signals(cfg["signals"])
-        self.worker.configure_signals(cfg["signals"])
-        self.worker.configure_frame(cfg)
+        self.engine.configure_signals(cfg["signals"])
+        self.engine.configure_frame(cfg)
 
     def _on_stream_changed(self, stream_cfg: dict):
-        if self.worker.state == WorkerState.RUNNING:
+        if self.engine.state == EngineState.RUNNING:
             QtCore.QMetaObject.invokeMethod(
-                self.worker,
+                self.engine,
                 "stop_working",
                 QtCore.Qt.ConnectionType.QueuedConnection,
             )
@@ -119,14 +120,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self.lbl_status.setStyleSheet("color: #FFA000; font-weight: bold;")
 
         self.plot.configure_signals(stream_cfg["signals"])
-        self.worker.configure_signals(stream_cfg["signals"])
-        self.worker.configure_frame(stream_cfg)
+        self.engine.configure_signals(stream_cfg["signals"])
+        self.engine.configure_frame(stream_cfg)
 
     def _handle_connection(self, port, baud):
         """
         Handles connection requests triggered by the Control Panel.
 
-        Uses `invokeMethod` to safely communicate with the worker thread.
+        Uses `invokeMethod` to safely communicate with the engine thread.
 
         Args:
             port (str): The serial port name (e.g., "COM3") or "STOP" to disconnect.
@@ -134,7 +135,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         if port != "STOP":
             QtCore.QMetaObject.invokeMethod(
-                self.worker,
+                self.engine,
                 "start_working",
                 QtCore.Qt.ConnectionType.QueuedConnection,
                 QtCore.Q_ARG(str, port),
@@ -144,7 +145,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.lbl_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
         else:
             QtCore.QMetaObject.invokeMethod(
-                self.worker, "stop_working", QtCore.Qt.ConnectionType.QueuedConnection
+                self.engine, "stop_working", QtCore.Qt.ConnectionType.QueuedConnection
             )
             self.lbl_status.setText("Disconnected")
             self.lbl_status.setStyleSheet("color: #F44336; font-weight: bold;")
@@ -163,21 +164,21 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         Handles the application close event to ensure clean thread termination.
 
-        Stops the worker safely using `invokeMethod`, quits the thread loop,
+        Stops the engine safely using `invokeMethod`, quits the thread loop,
         and waits for the thread to finish before closing the window.
         """
-        # Command the worker to stop its internal timer/loop
+        # Command the engine to stop its internal timer/loop
         QtCore.QMetaObject.invokeMethod(
-            self.worker, "stop_working", QtCore.Qt.ConnectionType.QueuedConnection
+            self.engine, "stop_working", QtCore.Qt.ConnectionType.QueuedConnection
         )
 
         # Tell the thread event loop to exit
-        self.worker_thread.quit()
+        self.engine_thread.quit()
 
         # Wait for the thread to finish (with timeout to prevent freezing)
-        if not self.worker_thread.wait(2000):
+        if not self.engine_thread.wait(2000):
             print("Wątek nie odpowiedział, wymuszam zamknięcie...")
-            self.worker_thread.terminate()
-            self.worker_thread.wait()
+            self.engine_thread.terminate()
+            self.engine_thread.wait()
 
         event.accept()

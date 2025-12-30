@@ -1,6 +1,6 @@
 import struct
 
-from core.frame_types import STRUCT_TYPE_MAP
+from core.protocol.constants import STRUCT_TYPE_MAP
 
 
 class FrameDecoder:

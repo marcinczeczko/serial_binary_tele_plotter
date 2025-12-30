@@ -11,7 +11,7 @@ This module provides the widget containing all user controls, including:
 from PyQt6 import QtCore, QtWidgets
 from serial.tools import list_ports
 
-from core.loader import StreamConfigLoader
+from core.config import StreamConfigLoader
 from ui.widgets import CollapsibleGroup, YAxisControlWidget
 
 
