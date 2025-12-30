@@ -19,6 +19,7 @@ from core.protocol.decoder import FrameDecoder
 
 DEBUG_DECODE = False
 TRACE_DECODE = False
+DEBUG_DECODE_PAYLOAD = False
 
 
 class ProtocolHandler:
@@ -83,7 +84,7 @@ class ProtocolHandler:
         # Safety: Prevent infinite memory growth if sync is never found
         if len(self.rx_buffer) > 4096:
             if TRACE_DECODE:
-                print(f"[RX][WARN] Buffer overflow (>4KB), clearing to reset sync.")
+                print("[RX][WARN] Buffer overflow (>4KB), clearing to reset sync.")
             self.rx_buffer.clear()
             return
 
@@ -141,7 +142,7 @@ class ProtocolHandler:
 
     def _decode_payload(self, p_type: int, payload: bytes) -> Optional[dict]:
         """
-        Internal helper to decode validated bytes using the configured FrameDecoder.
+        Decodes payload ONLY if p_type matches the active stream configuration.
         """
         if not self.decoder or self.active_stream_id is None:
             return None
@@ -152,10 +153,21 @@ class ProtocolHandler:
 
         # Double check size (though header validation usually covers this)
         if len(payload) != self.decoder.size:
+            if DEBUG_DECODE:
+                print(
+                    f"[RX][ERR] Size mismatch for ID {p_type}. Got {len(payload)}, expected {self.decoder.size}"
+                )
             return None
-
+        else:
+            if DEBUG_DECODE:
+                print(
+                    f"[RX][OK] Size match for ID {p_type}. Got {len(payload)}, expected {self.decoder.size}"
+                )
         try:
-            return self.decoder.decode(payload)
+            decoded = self.decoder.decode(payload)
+            if DEBUG_DECODE_PAYLOAD:
+                print(f"[RX][DATA] {decoded}")
+            return decoded
         except struct.error:
             return None
 

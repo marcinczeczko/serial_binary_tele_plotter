@@ -154,6 +154,15 @@ class MainWindow(QtWidgets.QMainWindow):
             QtCore.Q_ARG(dict, stream_cfg),
         )
 
+        # --- NOWE: ZAWSZE RESETUJ SILNIK NA 0 PRZY ZMIANIE STRUMIENIA ---
+        # Naprawia błąd pustego wykresu po przejściu z PID (Motor 1) na Control Loop.
+        QtCore.QMetaObject.invokeMethod(
+            self.engine,
+            "set_selected_motor",
+            QtCore.Qt.ConnectionType.QueuedConnection,
+            QtCore.Q_ARG(int, 0),
+        )
+
         # 4. Queue Restart Command (Worker Thread)
         # Only if it was running previously
         if was_running and self.active_port:

@@ -63,7 +63,7 @@ class SignalDataManager:
             self.scale[sig_id] = (ymin, ymax)
 
     def store_frame(self, decoded_frame: dict):
-        motor = decoded_frame.get("motor")
+        motor = decoded_frame.get("motor", 0)
         if motor not in self.buffers:
             return
 

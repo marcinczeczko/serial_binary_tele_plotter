@@ -61,6 +61,8 @@
                     { "name": "setpointR", "type": "f32" },
                     { "name": "rampSetpointL", "type": "f32" },
                     { "name": "rampSetpointR", "type": "f32" },
+                    { "name": "measuredRpsL", "type": "f32" },
+                    { "name": "measuredRpsR", "type": "f32" },
                     { "name": "deltaLticks", "type": "f32" },
                     { "name": "deltaRticks", "type": "f32" }
                 ]
@@ -89,7 +91,17 @@
                     "line": { "style": "solid", "width": 2 },
                     "y_range": { "min": -1.0, "max": 1.0 }, "visible": true
                 },
-                 "deltaLticks": {
+                "measuredRpsL": {
+                    "label": "Measured L", "field": "measuredRpsL", "group": "main", "color": "#EF5350",
+                    "line": { "style": "solid", "width": 2 },
+                    "y_range": { "min": -1.0, "max": 1.0 }, "visible": true
+                },
+                "measuredRpsR": {
+                    "label": "Measured R", "field": "measuredRpsR", "group": "main", "color": "#FFCA28",
+                    "line": { "style": "solid", "width": 2 },
+                    "y_range": { "min": -1.0, "max": 1.0 }, "visible": true
+                },
+                "deltaLticks": {
                     "label": "Delta Ticks L", "field": "deltaLticks", "group": "main", "color": "#AB47BC",
                     "line": { "style": "solid", "width": 2 },
                     "y_range": { "min": -1.0, "max": 1.0 }, "visible": true

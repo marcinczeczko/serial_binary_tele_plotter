@@ -90,6 +90,8 @@ class VirtualDevice(QtCore.QObject):
         name = stream_type.lower()
         if "imu" in name:
             self._stream_type = "imu"
+        elif "control" in name:
+            self._stream_type = "control"
         else:
             self._stream_type = "pid"
 
@@ -151,6 +153,23 @@ class VirtualDevice(QtCore.QObject):
                     "gyro_x": random.uniform(-5, 5),
                     "gyro_y": random.uniform(-5, 5),
                     "gyro_z": math.sin(t) * 50.0,
+                }
+            )
+        elif self._stream_type == "control":
+            # --- CONTROL LOOP SIMULATION ---
+            sp_l = math.sin(t * 1.0)
+            sp_r = math.cos(t * 1.0)
+
+            frame.update(
+                {
+                    "setpointL": sp_l,
+                    "setpointR": sp_r,
+                    "rampSetpointL": sp_l * 0.9,
+                    "rampSetpointR": sp_r * 0.9,
+                    "measuredRpsL": sp_l * 0.9 + random.uniform(-0.05, 0.05),
+                    "measuredRpsR": sp_r * 0.9 + random.uniform(-0.05, 0.05),
+                    "deltaLticks": random.uniform(-1, 1),
+                    "deltaRticks": random.uniform(-1, 1),
                 }
             )
 
