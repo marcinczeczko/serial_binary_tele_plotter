@@ -65,7 +65,8 @@ class FrameDecoder:
             if f["type"] not in STRUCT_TYPE_MAP:
                 raise ValueError(f"Unknown type '{f['type']}' in field definition.")
 
-            code, _ = STRUCT_TYPE_MAP[f["type"]]
+            type_info = STRUCT_TYPE_MAP[f["type"]]
+            code = type_info[0]
             fmt += code
         return fmt
 

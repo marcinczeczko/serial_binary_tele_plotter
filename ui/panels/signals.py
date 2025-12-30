@@ -2,7 +2,7 @@
 Signal List Panel Module.
 
 This module provides the `SignalListPanel` widget, which manages the dynamic display
-of signal controls (Y-axis scaling, visibility).
+of signal controls (visibility).
 
 Features:
 - **Dynamic Content**: The list is rebuilt at runtime based on the JSON stream configuration.
@@ -20,19 +20,16 @@ from ui.common.widgets import CollapsibleGroup, YAxisControlWidget
 
 class SignalListPanel(QtWidgets.QWidget):
     """
-    Manages the dynamic list of signals and their visibility/scaling controls.
+    Manages the dynamic list of signals and their visibility controls.
 
     This widget acts as a container for `YAxisControlWidget` items, organized
     into `CollapsibleGroup` categories.
 
     Attributes:
-        scale_changed (pyqtSignal): Emitted when a manual Y-axis scale is edited.
-            Payload: (signal_id: str, min_val: float, max_val: float).
         signal_visibility_changed (pyqtSignal): Emitted when a signal checkbox is toggled.
             Payload: (signal_id: str, is_visible: bool).
     """
 
-    scale_changed = QtCore.pyqtSignal(str, float, float)
     signal_visibility_changed = QtCore.pyqtSignal(str, bool)
 
     def __init__(self):
@@ -117,20 +114,11 @@ class SignalListPanel(QtWidgets.QWidget):
             w = YAxisControlWidget(sdata["label"], sdata["color"])
             w.signal_id = sid  # Inject ID for later reference
 
-            # Set initial values from config
-            w.min_edit.setValue(sdata["y_range"]["min"])
-            w.max_edit.setValue(sdata["y_range"]["max"])
-
             # Connect Signals
             # Note: We use default argument `s=sid` to capture the current loop variable value
             w.enable_checkbox.toggled.connect(
                 lambda c, s=sid: self.signal_visibility_changed.emit(s, c)
             )
-
-            # Auto-emit scale change when user finishes editing (losing focus or pressing Enter)
-            w.min_edit.editingFinished.connect(lambda s=sid: self._emit_single_scale(s))
-            w.max_edit.editingFinished.connect(lambda s=sid: self._emit_single_scale(s))
-
             # Add widget to the appropriate group layout
             target_group = groups_map.get(sdata["group"])
             if target_group:
@@ -154,15 +142,3 @@ class SignalListPanel(QtWidgets.QWidget):
             if g is not sender:
                 # Collapse all other groups
                 g.toggle.setChecked(False)
-
-    def _emit_single_scale(self, signal_id: str) -> None:
-        """
-        Helper to find the specific widget by ID and emit its current scale values.
-
-        Args:
-            signal_id (str): The ID of the signal to update.
-        """
-        for w in self.y_controls:
-            if w.signal_id == signal_id:
-                self.scale_changed.emit(signal_id, w.min_edit.value(), w.max_edit.value())
-                break

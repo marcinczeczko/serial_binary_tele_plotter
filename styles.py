@@ -42,17 +42,46 @@ def apply_dark_theme(app: QtWidgets.QApplication):
     # --- Stylesheet Overrides ---
     app.setStyleSheet(
         """
+        /* --- General Inputs --- */
         QCheckBox { spacing: 6px; color: #ddd; }
         QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #666; background-color: #111; }
         QCheckBox::indicator:checked { background-color: #4FC3F7; border: 1px solid #4FC3F7; }
+        
         QDoubleSpinBox, QSpinBox, QLineEdit { padding: 2px; background-color: #1e1e1e; border: 1px solid #333; color: #fff; }
+        
         QGroupBox { border: 1px solid #333; margin-top: 6px; padding-top: 10px; font-weight: bold; color: #aaa; }
         QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 3px; }
+        
         QPushButton { background-color: #333; border: 1px solid #555; border-radius: 3px; padding: 5px; color: white; }
         QPushButton:hover { background-color: #444; }
         QPushButton:pressed { background-color: #222; }
         QPushButton:checked { background-color: #555; border: 1px solid #888; }
+        
         QComboBox { background-color: #1e1e1e; border: 1px solid #333; color: white; padding: 4px; }
+        
         QStatusBar { color: #888; }
-    """
+
+        /* --- Tabs Styling (FIX for grey background) --- */
+        QTabWidget::pane { 
+            border: 1px solid #333; 
+            background-color: black; /* Force black background for content area */
+        }
+        QTabBar::tab {
+            background: #222;
+            color: #888;
+            padding: 8px 20px;
+            border-top-left-radius: 4px;
+            border-top-right-radius: 4px;
+            border: 1px solid #333;
+            margin-right: 2px;
+        }
+        QTabBar::tab:selected {
+            background: #444;
+            color: white;
+            border-bottom: 2px solid #4FC3F7; /* Blue highlight for active tab */
+        }
+        QTabBar::tab:hover {
+            background: #333;
+        }
+        """
     )

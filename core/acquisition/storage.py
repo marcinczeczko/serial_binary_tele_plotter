@@ -1,5 +1,6 @@
 """
 Data Manager Module.
+FIXED: Removed normalization logic. Returns RAW values in 'signals' key.
 """
 
 from collections import deque
@@ -12,26 +13,24 @@ BufferValue = Union[float, int]
 
 class SignalDataManager:
     """
-    Manages telemetry data buffers, scaling configurations, and signal mappings.
+    Manages telemetry data buffers.
+    CLEANED: No scaling, no normalization. Pure raw data storage.
     """
 
     def __init__(self, max_samples: int):
         self.max_samples = max_samples
         self.selected_motor = 0
         self.buffers: Dict[int, Dict[str, Deque[BufferValue]]] = {}
-        self.scale: Dict[str, tuple] = {}
+        # field_map mapuje nazwę sygnału (np. "setpoint") na pole w ramce C++
         self.field_map: Dict[str, str] = {}
 
     def configure(self, signals_cfg: dict):
         """Initializes buffers based on configuration."""
         self.buffers.clear()
-        self.scale.clear()
         self.field_map.clear()
 
         for sig_id, sig in signals_cfg.items():
             self.field_map[sig_id] = sig["field"]
-            yr = sig["y_range"]
-            self.scale[sig_id] = (yr["min"], yr["max"])
 
         # Create buffers for Motors 0 and 1
         for motor_id in (0, 1):
@@ -47,7 +46,6 @@ class SignalDataManager:
                 motor_bufs[sig_id] = deque(old_buf, maxlen=max_samples)
 
     def clear_all(self):
-        """Clears all data from all buffers (resets history)."""
         for motor_bufs in self.buffers.values():
             for buf in motor_bufs.values():
                 buf.clear()
@@ -57,10 +55,6 @@ class SignalDataManager:
             self.selected_motor = motor_id
             for buf in self.buffers[motor_id].values():
                 buf.clear()
-
-    def update_scale(self, sig_id: str, ymin: float, ymax: float):
-        if sig_id in self.scale:
-            self.scale[sig_id] = (ymin, ymax)
 
     def store_frame(self, decoded_frame: dict):
         motor = decoded_frame.get("motor", 0)
@@ -73,8 +67,6 @@ class SignalDataManager:
         motor_bufs["__loop__"].append(loop_cntr)
 
         for sig_id, field in self.field_map.items():
-            # --- CRITICAL FIX: Use .get() default to 0.0 ---
-            # Prevents KeyError if old packets arrive during switchover
             val = decoded_frame.get(field, 0.0)
             motor_bufs[sig_id].append(val)
 
@@ -88,32 +80,24 @@ class SignalDataManager:
         if len(loops_cntr) < 2:
             return None
 
-        # Convert to numpy
         loop_cntr_arr = np.asarray(loops_cntr, dtype=float)
         time_axis = loop_cntr_arr * sample_period_s
 
         snapshot_raw = {}
-        out_norm = {}
 
         for sig_id, buf in motor_bufs.items():
             if sig_id == "__loop__":
                 continue
 
             arr = np.asarray(buf, dtype=float)
-
-            # Sync check
             if len(arr) != len(time_axis):
                 continue
 
             snapshot_raw[sig_id] = arr
-
-            if sig_id in self.scale:
-                ymin, ymax = self.scale[sig_id]
-                scale = max(ymax - ymin, 1e-12)
-                out_norm[sig_id] = np.clip((arr - ymin) / scale, 0.0, 1.0)
+            # USUNIĘTO: obliczanie out_norm
 
         return {
             "time": time_axis,
-            "signals": out_norm,
+            "signals": snapshot_raw,  # Teraz signals to to samo co raw
             "raw": snapshot_raw,
         }

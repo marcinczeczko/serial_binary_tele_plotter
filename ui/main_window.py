@@ -12,6 +12,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from core.acquisition.engine import TelemetryEngine
 from core.types import EngineState
 from ui.charts.telemetry_plot import TelemetryPlot
+from ui.config.tab import ConfiguratorTab
 from ui.panels.container import MainControlPanel
 
 
@@ -41,6 +42,42 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("DiffBot Telemetry Viewer (Pro)")
         self.resize(1280, 800)
 
+        # --- MAIN LAYOUT (TABS) ---
+        # Zamiast ustawiać splitter jako główne okno, tworzymy zakładki
+        self.tabs = QtWidgets.QTabWidget()
+        self.setCentralWidget(self.tabs)
+
+        # ================= TAB 1: DASHBOARD =================
+        self.dashboard_widget = QtWidgets.QWidget()
+        dashboard_layout = QtWidgets.QVBoxLayout(self.dashboard_widget)
+        dashboard_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Splitter (Panel + Wykres)
+        self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+
+        # Instantiate the main view components
+        self.panel = MainControlPanel()
+        self.plot = TelemetryPlot()
+
+        self.splitter.addWidget(self.panel)
+        self.splitter.addWidget(self.plot)
+        self.splitter.setSizes([350, 930])
+
+        # Dodajemy splitter do layoutu zakładki
+        dashboard_layout.addWidget(self.splitter)
+
+        # Dodajemy zakładkę do głównego widgetu
+        self.tabs.addTab(self.dashboard_widget, "📊 Dashboard")
+
+        # ================= TAB 2: CONFIGURATION =================
+        # Tworzymy instancję konfiguratora
+        self.configurator = ConfiguratorTab("streams.json")
+
+        # Podłączamy sygnał zapisu do metody przeładowania (którą dodałeś wcześniej)
+        self.configurator.config_saved.connect(self._reload_configuration)
+
+        self.tabs.addTab(self.configurator, "⚙️ Configuration")
+
         # --- Status Bar Initialization ---
         self.status_bar = QtWidgets.QStatusBar()
         self.setStatusBar(self.status_bar)
@@ -51,27 +88,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_bar.addWidget(self.lbl_status)
         self.status_bar.addPermanentWidget(self.lbl_cursor)
 
-        # --- Main Layout (Splitter) ---
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
-        self.setCentralWidget(splitter)
-
-        # Instantiate the main view components
-        self.panel = MainControlPanel()
-        self.plot = TelemetryPlot()
-
-        splitter.addWidget(self.panel)
-        splitter.addWidget(self.plot)
-        # Set initial ratio (Panel : Plot)
-        splitter.setSizes([350, 930])
-
         # --- Engine & Thread Initialization ---
-        # Retrieve initial settings via the Panel's public API (Facade)
+        # Retrieve initial settings via the Panel's public API
         initial_period = self.panel.get_initial_sample_period()
         initial_samples = self.panel.get_initial_sample_count()
 
         self.engine = TelemetryEngine(initial_period, initial_samples)
 
-        # Move the Engine object to a dedicated background thread.
         self.engine_thread = QtCore.QThread()
         self.engine.moveToThread(self.engine_thread)
         self.engine_thread.start()
@@ -79,11 +102,12 @@ class MainWindow(QtWidgets.QMainWindow):
         # --- Signal Wiring ---
 
         # 1. Configuration: Panel -> Engine
-        self.panel.scale_changed.connect(self.engine.update_scale)
         self.panel.stream_changed.connect(self._on_stream_changed)
         self.panel.time_config_changed.connect(self.engine.update_time_config)
         self.panel.pid_config_sent.connect(self.engine.send_pid_config)
-        self.panel.imu_command_sent.connect(self.engine.send_imu_command)
+
+        # Jeśli usunąłeś panel IMU, usuń też tę linię (lub zostaw, jeśli już go masz)
+        # self.panel.imu_command_sent.connect(self.engine.send_imu_command)
 
         # 2. Control Logic: Panel -> Main Window
         self.panel.connection_requested.connect(self._handle_connection)
@@ -103,8 +127,32 @@ class MainWindow(QtWidgets.QMainWindow):
         self.plot.cursor_moved.connect(self.lbl_cursor.setText)
 
         # --- Final Setup ---
-        # Configure the plot and engine based on the default selected stream
         self._initial_stream_setup()
+
+    def _reload_configuration(self):
+        """
+        Called when streams.json is modified via the Configurator tab.
+        We need to reload the StreamConfigLoader in the panel and refresh lists.
+        """
+        # 1. Przeładuj loader w panelu bocznym
+        # (Musisz dodać metodę reload() do MainControlPanel lub utworzyć loader na nowo)
+
+        # Najprościej: Wymuś odświeżenie listy w panelu
+        self.panel.stream_loader.load()  # Przeładuj JSON z dysku
+
+        # Wyczyść i wypełnij combobox od nowa
+        self.panel.payload_combo.blockSignals(True)
+        self.panel.payload_combo.clear()
+        for sid, s in self.panel.stream_loader.list_streams().items():
+            self.panel.payload_combo.addItem(s["name"], sid)
+        self.panel.payload_combo.blockSignals(False)
+
+        # Ustaw pierwszy element
+        if self.panel.payload_combo.count() > 0:
+            self.panel.payload_combo.setCurrentIndex(0)
+            self.panel.reload_streams()
+
+        self.lbl_status.setText("Configuration reloaded from disk.")
 
     def _initial_stream_setup(self) -> None:
         """

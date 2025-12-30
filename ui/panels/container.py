@@ -30,7 +30,6 @@ class MainControlPanel(QtWidgets.QWidget):
     motor_changed = QtCore.pyqtSignal(int)
     time_config_changed = QtCore.pyqtSignal(float, int)
     stream_changed = QtCore.pyqtSignal(dict)
-    scale_changed = QtCore.pyqtSignal(str, float, float)
     signal_visibility_changed = QtCore.pyqtSignal(str, bool)
     imu_command_sent = QtCore.pyqtSignal(int)
 
@@ -105,7 +104,6 @@ class MainControlPanel(QtWidgets.QWidget):
         self.conn_panel.connection_requested.connect(self.connection_requested)
         self.conn_panel.pause_requested.connect(self.pause_requested)
         self.time_panel.time_config_changed.connect(self.time_config_changed)
-        self.sig_panel.scale_changed.connect(self.scale_changed)
         self.sig_panel.signal_visibility_changed.connect(self.signal_visibility_changed)
 
         # PID Panel
@@ -163,3 +161,27 @@ class MainControlPanel(QtWidgets.QWidget):
         if sid:
             return self.stream_loader.get_stream(sid)
         return {}
+
+    def reload_streams(self) -> None:
+        """
+        Reloads configuration from disk and refreshes the UI list.
+        This allows external controllers to force a refresh safely.
+        """
+        # 1. Reload JSON data (using the new public method)
+        self.stream_loader.load()
+
+        # 2. Refresh Combo Box content
+        self.payload_combo.blockSignals(True)
+        self.payload_combo.clear()
+
+        for sid, s in self.stream_loader.list_streams().items():
+            self.payload_combo.addItem(s["name"], sid)
+
+        self.payload_combo.blockSignals(False)
+
+        # 3. Force selection of the first item
+        if self.payload_combo.count() > 0:
+            self.payload_combo.setCurrentIndex(0)
+            # Explicitly call the handler to ensure the app state syncs up
+            # (Calling internal method from within the class is allowed)
+            self._on_stream_selection(0)

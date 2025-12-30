@@ -18,7 +18,7 @@ class StreamConfigLoader:
             raise FileNotFoundError(f"Required configuration file not found: {self.path.resolve()}")
 
         self.data = {}
-        self._load()
+        self.load()
 
         # Basic sanity validation
         if "streams" not in self.data or not isinstance(self.data["streams"], dict):
@@ -29,7 +29,7 @@ class StreamConfigLoader:
             if "panel_type" not in val:
                 val["panel_type"] = "none"
 
-    def _load(self):
+    def load(self):
         """Loads and parses the JSON configuration file."""
         try:
             with self.path.open("r", encoding="utf-8") as f:

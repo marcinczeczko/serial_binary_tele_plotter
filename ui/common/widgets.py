@@ -107,25 +107,9 @@ class YAxisControlWidget(QtWidgets.QWidget):
         h_layout.addWidget(self.enable_checkbox)
         h_layout.addStretch()
 
-        # Range Row: Min/Max inputs
-        r_layout = QtWidgets.QHBoxLayout()
-        self.min_edit = QtWidgets.QDoubleSpinBox()
-        self.max_edit = QtWidgets.QDoubleSpinBox()
-
-        for w in (self.min_edit, self.max_edit):
-            w.setRange(-1e6, 1e6)
-            w.setDecimals(2)
-            w.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
-
-        r_layout.addWidget(QtWidgets.QLabel("Min:"))
-        r_layout.addWidget(self.min_edit)
-        r_layout.addWidget(QtWidgets.QLabel("Max:"))
-        r_layout.addWidget(self.max_edit)
-
         # Optional Lock (Reserved for future auto-scale locking logic)
         self.lock_checkbox = QtWidgets.QCheckBox("Lock Y")
 
         # Final Assembly
         layout.addLayout(h_layout)
-        layout.addLayout(r_layout)
         layout.addWidget(self.lock_checkbox)

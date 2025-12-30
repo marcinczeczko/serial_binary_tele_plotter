@@ -155,11 +155,6 @@ class TelemetryEngine(QtCore.QObject):
         except ValueError as e:
             self.status_msg.emit(f"Frame Config Error: {e}")
 
-    @QtCore.pyqtSlot(str, float, float)
-    def update_scale(self, sig_id, ymin, ymax):
-        """Delegates scale updates to the Data Manager."""
-        self.data_mgr.update_scale(sig_id, ymin, ymax)
-
     @QtCore.pyqtSlot(int)
     def set_selected_motor(self, motor_id: int):
         """Sets the active motor filter."""

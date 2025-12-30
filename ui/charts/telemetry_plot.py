@@ -1,8 +1,9 @@
 """
-Telemetry Plotting Module.
+Telemetry Plotting Module (Absolute Raw Mode).
+No normalization. No scaling math. No ViewBox stacking.
+What comes in packet['signals'] is displayed exactly on the Y-axis.
 """
 
-# ... importy bez zmian ...
 import copy
 from typing import Any, Dict, Optional
 
@@ -18,62 +19,123 @@ class TelemetryPlot(QtWidgets.QWidget):
 
     def __init__(self):
         super().__init__()
-        # ... init bez zmian ...
-        self.mode: PlotMode = PlotMode.LIVE
+
+        # --- State ---
+        self.mode = PlotMode.LIVE
+
+        # signal_views: trzymamy tu tylko referencje do krzywych
+        # Format: { "signal_id": { "curve": pg.PlotDataItem, "config": dict } }
         self.signal_views: Dict[str, Dict[str, Any]] = {}
-        self.signal_colors: Dict[str, str] = {}
+
         self.last_packet: Optional[dict] = None
         self.analysis_packet: Optional[dict] = None
+
         self.anchor_time: Optional[float] = None
         self.anchor_values: Dict[str, float] = {}
 
+        # --- UI Layout ---
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.graphics = pg.GraphicsLayoutWidget()
         layout.addWidget(self.graphics)
-        self.plot: pg.PlotItem = self.graphics.addPlot()  # type: ignore
 
+        # Główny PlotItem
+        self.plot: pg.PlotItem = self.graphics.addPlot()
         self.plot.showGrid(x=True, y=True, alpha=0.3)
         self.plot.setLabel("bottom", "Time [s]")
-        self.plot.getAxis("left").setVisible(False)
 
+        # WŁĄCZAMY lewą oś Y i włączamy auto-skalowanie
+        self.plot.getAxis("left").setVisible(True)
+        self.plot.enableAutoRange(axis="y")
+        # Opcjonalnie: zablokuj minimalny zakres, żeby nie szalało przy zerach
+        # self.plot.setLimits(yMin=-1000, yMax=1000)
+
+        # --- Interactive Tools ---
         self.vLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen("#888", width=1))
         self.plot.addItem(self.vLine, ignoreBounds=True)
+
         self.anchorLine = pg.InfiniteLine(
-            angle=90, movable=False, pen=pg.mkPen("y", style=QtCore.Qt.PenStyle.DashLine, width=2)
+            angle=90,
+            movable=False,
+            pen=pg.mkPen("#00E676", style=QtCore.Qt.PenStyle.DashLine, width=2),
         )
         self.anchorLine.setVisible(False)
         self.plot.addItem(self.anchorLine, ignoreBounds=True)
-        self.label = pg.TextItem(anchor=(0, 0))
+
+        self.label = pg.TextItem(anchor=(0, 0), color="#FFF")
         self.plot.addItem(self.label, ignoreBounds=True)
 
+        # --- Events ---
         scene = self.plot.scene()
-        scene.sigMouseMoved.connect(self.mouse_moved_handler)  # type: ignore
-        scene.sigMouseClicked.connect(self.on_mouse_clicked)  # type: ignore
-        self.plot.sigRangeChanged.connect(self.update_hud_position)  # type: ignore
+        scene.sigMouseMoved.connect(self.mouse_moved_handler)
+        scene.sigMouseClicked.connect(self.on_mouse_clicked)
+        self.plot.sigRangeChanged.connect(self.update_hud_position)
+
+    @QtCore.pyqtSlot(dict)
+    def configure_signals(self, signals_cfg: dict):
+        """
+        Recreates curves on the single shared plot.
+        IGNORES min/max/range settings completely.
+        """
+        # 1. CLEANUP
+        self.plot.clear()
+        self.signal_views.clear()
+
+        # Restore tools
+        self.plot.addItem(self.vLine, ignoreBounds=True)
+        self.plot.addItem(self.anchorLine, ignoreBounds=True)
+        self.plot.addItem(self.label, ignoreBounds=True)
+
+        # 2. REBUILD
+        for sid, sig in signals_cfg.items():
+            # Styl linii
+            style = sig["line"].get("style", "solid")
+            pen_style = QtCore.Qt.PenStyle.SolidLine
+            if style == "dashed":
+                pen_style = QtCore.Qt.PenStyle.DashLine
+            elif style == "dotted":
+                pen_style = QtCore.Qt.PenStyle.DotLine
+
+            # Tworzymy krzywą bezpośrednio w głównym oknie
+            c = pg.PlotDataItem(
+                pen=pg.mkPen(color=sig["color"], width=sig["line"]["width"], style=pen_style),
+                name=sig.get("label", sid),
+                skipFiniteCheck=True,
+            )
+
+            # Widoczność
+            c.setVisible(sig.get("visible", True))
+            self.plot.addItem(c)
+
+            self.signal_views[sid] = {"curve": c, "config": sig}
 
     @QtCore.pyqtSlot(dict)
     def on_data_ready(self, packet: dict):
+        """
+        Takes RAW floats from packet and puts them on the chart.
+        NO MATH HERE.
+        """
         self.last_packet = packet
         if self.mode == PlotMode.ANALYSIS:
             return
 
-        time = packet["time"]
-        signals = packet["signals"]
-        if len(time) == 0:
+        time_arr = packet["time"]
+        # Pobieramy SUROWE sygnały (floats)
+        signals_data = packet["signals"]
+
+        if len(time_arr) == 0:
             return
 
-        for sig_id, y in signals.items():
-            if sig_id in self.signal_views:
-                self.signal_views[sig_id]["curve"].setData(time, y)
+        for sid, raw_y in signals_data.items():
+            if sid in self.signal_views:
+                # RAW_Y idzie prosto do setData. Bez odejmowania, bez dzielenia.
+                self.signal_views[sid]["curve"].setData(time_arr, raw_y)
 
-        # Fix: ViewBox check
-        vb = self.plot.getViewBox()
-        if vb is not None:
-            vb.setXRange(time[0], time[-1], padding=0)
+        # Przesuwanie osi X (czas)
+        self.plot.setXRange(time_arr[0], time_arr[-1], padding=0)
+
         self.update_hud_position()
 
-    # ... set_paused, mouse_moved_handler, on_mouse_clicked etc bez zmian ...
     @QtCore.pyqtSlot(bool)
     def set_paused(self, paused: bool):
         if paused:
@@ -92,23 +154,28 @@ class TelemetryPlot(QtWidgets.QWidget):
             mousePoint = vb.mapSceneToView(pos)
             self._process_mouse_movement(mousePoint.x())
 
-    def _process_mouse_movement(self, x_raw: float):
+    def _process_mouse_movement(self, x_curr: float):
         ds = self.analysis_packet if self.mode == PlotMode.ANALYSIS else self.last_packet
         if not ds or len(ds["time"]) < 2:
             return
-        x_clamped = float(np.clip(x_raw, ds["time"][0], ds["time"][-1]))
+
+        t_arr = ds["time"]
+        x_clamped = float(np.clip(x_curr, t_arr[0], t_arr[-1]))
+
         self.vLine.setPos(x_clamped)
-        self.update_tooltip(x_clamped)
+        self.update_tooltip(x_clamped, ds)
 
     def on_mouse_clicked(self, evt):
         if self.mode != PlotMode.ANALYSIS:
             return
         if evt.button() != QtCore.Qt.MouseButton.LeftButton:
             return
+
         vb = self.plot.getViewBox()
         if vb.sceneBoundingRect().contains(evt.scenePos()):
             mousePoint = vb.mapSceneToView(evt.scenePos())
             t_stamp = mousePoint.x()
+
             self.anchor_time = t_stamp
             self.anchorLine.setPos(t_stamp)
             self.anchorLine.setVisible(True)
@@ -119,113 +186,56 @@ class TelemetryPlot(QtWidgets.QWidget):
         if not self.analysis_packet:
             return
         t_arr = self.analysis_packet["time"]
-        raw = self.analysis_packet["raw"]
-        self.anchor_values = {s: np.interp(t_anchor, t_arr, v) for s, v in raw.items()}
+        raw_map = self.analysis_packet["signals"]
+
+        self.anchor_values = {
+            sid: float(np.interp(t_anchor, t_arr, vals)) for sid, vals in raw_map.items()
+        }
 
     def update_hud_position(self):
         vb = self.plot.getViewBox()
         ranges = vb.viewRange()
-        xr: list[float] = ranges[0]
-        yr: list[float] = ranges[1]
+        xr, yr = ranges[0], ranges[1]
         x_pos = xr[0] + 0.01 * (xr[1] - xr[0])
         y_pos = yr[1] - 0.02 * (yr[1] - yr[0])
         self.label.setPos(x_pos, y_pos)
 
-    def update_tooltip(self, x_pos: float):
-        # ... (Logika tooltipa bez zmian) ...
-        ds = self.analysis_packet if self.mode == PlotMode.ANALYSIS else self.last_packet
-        if not ds or len(ds["time"]) < 2:
-            return
+    def update_tooltip(self, cur_t: float, ds: dict):
         t_arr = ds["time"]
-        raw = ds["raw"]
-        cur_t = float(x_pos)
-        dt = t_arr[1] - t_arr[0]
-        idx = int(np.clip((cur_t - t_arr[0]) / dt, 0, len(t_arr) - 1))
-        self.cursor_moved.emit(f"Cursor: {cur_t:.3f} s | Index: {idx}")
+        raw_map = ds["signals"]
 
-        html = f'<div style="background-color: rgba(0, 0, 0, 0.7); padding: 6px; font-family: Consolas; border: 1px solid #444;">'
+        html = f'<div style="background-color: rgba(0, 0, 0, 0.7); padding: 6px; font-family: monospace; border: 1px solid #444;">'
         html += f'<b style="color: white;">T: {cur_t:.3f} s</b>'
         if self.anchor_time:
-            html += f' <span style="color: #FFD700;">(Δ {cur_t - self.anchor_time:+.3f} s)</span>'
-        html += "<br><hr style='margin: 4px 0;'>"
+            dt = cur_t - self.anchor_time
+            html += f' <span style="color: #00E676;">(Δ {dt:+.3f} s)</span>'
+        html += "<br><hr style='margin: 4px 0; border: 0; border-top: 1px solid #555;'>"
 
-        for sid, vals in raw.items():
-            if sid in self.signal_views and self.signal_views[sid]["curve"].isVisible():
-                data_len = min(len(t_arr), len(vals))
-                if data_len < 2:
-                    continue
-                v = float(np.interp(cur_t, t_arr[:data_len], vals[:data_len]))
-                color = self.signal_colors.get(sid, "#FFF")
-                row = f'<span style="color: {color};">{sid}: <b>{v:>8.4f}</b>'
-                if self.anchor_time and sid in self.anchor_values:
-                    delta_v = v - self.anchor_values[sid]
-                    row += f' <span style="color: #aaa;">(Δ {delta_v:+.4f})</span>'
-                html += row + "</span><br>"
+        sorted_sids = sorted(raw_map.keys())
+        for sid in sorted_sids:
+            if sid not in self.signal_views:
+                continue
+            view_data = self.signal_views[sid]
+            if not view_data["curve"].isVisible():
+                continue
+
+            vals = raw_map[sid]
+            data_len = min(len(t_arr), len(vals))
+            if data_len < 2:
+                continue
+
+            v = float(np.interp(cur_t, t_arr[:data_len], vals[:data_len]))
+            color = view_data["config"]["color"]
+            label = view_data["config"].get("label", sid)
+
+            row = f'<span style="color: {color};">{label}: <b>{v:+.3f}</b>'
+            if self.anchor_time and sid in self.anchor_values:
+                d_val = v - self.anchor_values[sid]
+                row += f' <span style="color: #aaa; font-size: smaller;">(Δ {d_val:+.3f})</span>'
+            html += row + "</span><br>"
+
         self.label.setHtml(html + "</div>")
         self.update_hud_position()
-
-    @QtCore.pyqtSlot(dict)
-    def configure_signals(self, signals_cfg: dict):
-        """Reconfigures the plot area based on the stream definition."""
-        # 1. CLEANUP
-        for view_info in self.signal_views.values():
-            self.plot.scene().removeItem(view_info["viewbox"])
-        self.signal_views.clear()
-        self.signal_colors.clear()
-        self.plot.clear()
-
-        # Restore static tools
-        self.plot.addItem(self.vLine, ignoreBounds=True)
-        self.plot.addItem(self.anchorLine, ignoreBounds=True)
-        self.plot.addItem(self.label, ignoreBounds=True)
-
-        base_vb = self.plot.getViewBox()
-
-        # 2. REBUILD
-        for sid, sig in signals_cfg.items():
-            self.signal_colors[sid] = sig["color"]
-
-            vb = pg.ViewBox()
-            vb.setMouseEnabled(x=False, y=False)
-            vb.setYRange(0.0, 1.0)
-            self.plot.scene().addItem(vb)
-            vb.setXLink(base_vb)
-
-            pen_style = QtCore.Qt.PenStyle.SolidLine
-            if sig["line"]["style"] == "dashed":
-                pen_style = QtCore.Qt.PenStyle.DashLine
-            elif sig["line"]["style"] == "dotted":
-                pen_style = QtCore.Qt.PenStyle.DotLine
-
-            c = pg.PlotDataItem(
-                pen=pg.mkPen(color=sig["color"], width=sig["line"]["width"], style=pen_style),
-                skipFiniteCheck=True,
-            )
-            # Apply initial visibility
-            is_visible = sig.get("visible", True)
-            c.setVisible(is_visible)
-
-            vb.addItem(c)
-            self.signal_views[sid] = {"viewbox": vb, "curve": c}
-
-        try:
-            base_vb.sigResized.disconnect(self._update_views)
-        except TypeError:
-            pass
-        base_vb.sigResized.connect(self._update_views)
-
-        # --- CRITICAL FIX: Force geometry update immediately ---
-        self._update_views()
-
-    def _update_views(self):
-        base_vb = self.plot.getViewBox()
-        if base_vb is None:
-            return
-        rect = base_vb.sceneBoundingRect()
-        if rect.width() <= 0 or rect.height() <= 0:
-            return
-        for s in self.signal_views.values():
-            s["viewbox"].setGeometry(rect)
 
     @QtCore.pyqtSlot(str, bool)
     def set_signal_visible(self, sig_id: str, visible: bool):
