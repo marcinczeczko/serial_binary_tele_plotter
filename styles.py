@@ -41,12 +41,19 @@ def apply_dark_theme(app: QtWidgets.QApplication):
 
     # --- Stylesheet Overrides ---
     app.setStyleSheet(
-        """
-        /* --- General Inputs --- */
-        QCheckBox { spacing: 6px; color: #ddd; }
-        QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #666; background-color: #111; }
-        QCheckBox::indicator:checked { background-color: #4FC3F7; border: 1px solid #4FC3F7; }
-        
+        """  
+        QCheckBox::indicator {
+            width: 16px;
+            height: 16px;
+            border: 1px solid #777;
+            border-radius: 3px;
+            background: transparent;
+        }
+
+        QCheckBox::indicator:checked {
+            background-color: gray;
+        }
+  
         QDoubleSpinBox, QSpinBox, QLineEdit { padding: 2px; background-color: #1e1e1e; border: 1px solid #333; color: #fff; }
         
         QGroupBox { border: 1px solid #333; margin-top: 6px; padding-top: 10px; font-weight: bold; color: #aaa; }

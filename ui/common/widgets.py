@@ -74,42 +74,29 @@ class CollapsibleGroup(QtWidgets.QWidget):
 
 class YAxisControlWidget(QtWidgets.QWidget):
     """
-    A widget for configuring the visualization parameters of a single signal.
-
-    It provides controls for:
-    - Toggling signal visibility (Checkbox).
-    - Setting manual Y-axis limits (Min/Max SpinBoxes).
-    - Visualizing the signal color.
+    Simple widget for a single signal: [X] Color_Icon Label_Name
     """
 
-    def __init__(self, name: str, color: str):
-        """
-        Initializes the control widget for a specific signal.
-
-        Args:
-            name (str): The display name of the signal.
-            color (str): Hex color code string (e.g., "#FF0000") for the indicator.
-        """
+    def __init__(self, label: str, color: str):
         super().__init__()
-        self.signal_id = None
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(2, 2, 2, 8)
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(5, 2, 5, 2)
+        layout.setSpacing(10)
 
-        # Header Row: Color Indicator + Name Checkbox
-        h_layout = QtWidgets.QHBoxLayout()
-        color_lbl = QtWidgets.QLabel("●")
-        color_lbl.setStyleSheet(f"color: {color}; font-size: 16px;")
-
-        self.enable_checkbox = QtWidgets.QCheckBox(name)
+        # Checkbox widoczności
+        self.enable_checkbox = QtWidgets.QCheckBox()
         self.enable_checkbox.setChecked(True)
 
-        h_layout.addWidget(color_lbl)
-        h_layout.addWidget(self.enable_checkbox)
-        h_layout.addStretch()
+        # Ikona koloru (mały kwadrat)
+        self.color_icon = QtWidgets.QFrame()
+        self.color_icon.setFixedSize(12, 12)
+        self.color_icon.setStyleSheet(f"background-color: {color}; border-radius: 2px;")
 
-        # Optional Lock (Reserved for future auto-scale locking logic)
-        self.lock_checkbox = QtWidgets.QCheckBox("Lock Y")
+        # Nazwa sygnału
+        self.name_label = QtWidgets.QLabel(label)
+        self.name_label.setStyleSheet("font-weight: bold; color: #ddd;")
 
-        # Final Assembly
-        layout.addLayout(h_layout)
-        layout.addWidget(self.lock_checkbox)
+        layout.addWidget(self.enable_checkbox)
+        layout.addWidget(self.color_icon)
+        layout.addWidget(self.name_label)
+        layout.addStretch()  # Wszystko do lewej

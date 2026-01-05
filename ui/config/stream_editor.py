@@ -1,6 +1,6 @@
 """
 Stream Editor Module.
-Handles the UI logic for editing a single stream definition (Frame & Signals).
+Simplified Version: Flat signal list (no groups), removed Lock/Scale features.
 """
 
 import re
@@ -21,7 +21,7 @@ PANEL_TYPES = ["none", "pid", "imu", "control"]
 class StreamEditor(QtWidgets.QWidget):
     """
     The form for editing a single stream definition.
-    Manages Frame Table and Signal Tree.
+    Manages Frame Table and a Flat Signal List.
     """
 
     def __init__(self, parent=None):
@@ -65,7 +65,7 @@ class StreamEditor(QtWidgets.QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        # Metadata Section
+        # --- Metadata Section ---
         grp_info = QtWidgets.QGroupBox("Stream Metadata")
         form = QtWidgets.QFormLayout(grp_info)
         self.key_edit = QtWidgets.QLineEdit()
@@ -81,7 +81,7 @@ class StreamEditor(QtWidgets.QWidget):
         form.addRow("Panel Type:", self.panel_combo)
         layout.addWidget(grp_info)
 
-        # Tabs
+        # --- Tabs ---
         self.tabs = QtWidgets.QTabWidget()
         layout.addWidget(self.tabs)
 
@@ -91,7 +91,7 @@ class StreamEditor(QtWidgets.QWidget):
 
         self.sig_widget = QtWidgets.QWidget()
         self._init_signal_tab()
-        self.tabs.addTab(self.sig_widget, "2. Signals & Groups")
+        self.tabs.addTab(self.sig_widget, "2. Signals (Flat List)")
 
     def _init_frame_tab(self):
         l = QtWidgets.QVBoxLayout(self.frame_widget)
@@ -117,24 +117,27 @@ class StreamEditor(QtWidgets.QWidget):
 
     def _init_signal_tab(self):
         l = QtWidgets.QVBoxLayout(self.sig_widget)
+
         self.sig_tree = QtWidgets.QTreeWidget()
-        self.sig_cols = ["Label / Group", "Field Map", "Color", "Vis", "Style"]
+        self.sig_tree.setRootIsDecorated(False)  # Ukrywamy strzałki (bo brak grup)
+
+        # Cols: Label | Field | Color | Vis | Style
+        self.sig_cols = ["Label Name", "Field Map", "Color", "Vis", "Style"]
         self.sig_tree.setColumnCount(len(self.sig_cols))
         self.sig_tree.setHeaderLabels(self.sig_cols)
+
         h = self.sig_tree.header()
-        h.resizeSection(0, 220)
+        h.resizeSection(0, 200)
         h.resizeSection(1, 150)
         h.resizeSection(2, 80)
         h.resizeSection(3, 40)
 
         btns = QtWidgets.QHBoxLayout()
-        b_grp = QtWidgets.QPushButton("📁 Group")
-        b_grp.clicked.connect(self.add_group_item)
-        b_sig = QtWidgets.QPushButton("📈 Signal")
+        # Usunięto przycisk "Add Group"
+        b_sig = QtWidgets.QPushButton("📈 Add Signal")
         b_sig.clicked.connect(self.add_signal_item)
         b_rem = QtWidgets.QPushButton("❌ Remove")
         b_rem.clicked.connect(self.remove_tree_item)
-        btns.addWidget(b_grp)
         btns.addWidget(b_sig)
         btns.addWidget(b_rem)
         btns.addStretch()
@@ -157,18 +160,15 @@ class StreamEditor(QtWidgets.QWidget):
         for f in data.get("frame", {}).get("fields", []):
             self.add_frame_row(f.get("name"), f.get("type"))
 
-        # Signals
+        # Signals (Flattened)
         self.sig_tree.clear()
-        groups = sorted(data.get("groups", {}).items(), key=lambda x: x[1].get("order", 999))
-        grp_map = {}
-        for gid, ginfo in groups:
-            grp_map[gid] = self.add_group_item(ginfo.get("label", gid))
 
-        for skey, sdata in data.get("signals", {}).items():
-            gid = sdata.get("group", "default")
-            if gid not in grp_map:
-                grp_map[gid] = self.add_group_item(gid.capitalize())
+        # Pobieramy sygnały. Ignorujemy klucz "groups" całkowicie.
+        signals_data = data.get("signals", {})
 
+        # Jeśli sygnały mają pole 'order', możemy posortować, w przeciwnym razie wg klucza lub kolejności JSON
+        # W Python 3.7+ słowniki zachowują kolejność wstawiania, więc powinno być ok.
+        for skey, sdata in signals_data.items():
             row = {
                 "label": sdata.get("label", skey),
                 "field": sdata.get("field", ""),
@@ -176,8 +176,7 @@ class StreamEditor(QtWidgets.QWidget):
                 "visible": sdata.get("visible", True),
                 "style": sdata.get("line", {}).get("style", "solid"),
             }
-            self.add_signal_to_parent(grp_map[gid], row)
-        self.sig_tree.expandAll()
+            self.add_signal_row(row)
 
     def get_data(self):
         data = OrderedDict()
@@ -199,33 +198,31 @@ class StreamEditor(QtWidgets.QWidget):
             "fields": fields,
         }
 
-        # Signals
-        groups, signals = {}, {}
+        # Signals (Flat Structure)
+        signals = {}
         root = self.sig_tree.invisibleRootItem()
         for i in range(root.childCount()):
-            grp = root.child(i)
-            gid = re.sub(r"[^a-z0-9]", "", grp.text(0).lower()) or f"group{i}"
-            groups[gid] = {"label": grp.text(0), "order": i + 1}
+            item = root.child(i)
 
-            for j in range(grp.childCount()):
-                sig = grp.child(j)
-                label = sig.text(0)
-                fld = self.sig_tree.itemWidget(sig, 1).currentText()
-                col = self.sig_tree.itemWidget(sig, 2).text()
-                vis = self.sig_tree.itemWidget(sig, 3).findChild(QtWidgets.QCheckBox).isChecked()
-                style = self.sig_tree.itemWidget(sig, 4).currentText()
+            label = item.text(0)
+            fld = self.sig_tree.itemWidget(item, 1).currentText()
+            col = self.sig_tree.itemWidget(item, 2).text()
+            vis = self.sig_tree.itemWidget(item, 3).findChild(QtWidgets.QCheckBox).isChecked()
+            style = self.sig_tree.itemWidget(item, 4).currentText()
 
-                skey = fld if fld else re.sub(r"[^a-zA-Z0-9]", "", label)
-                signals[skey] = {
-                    "label": label,
-                    "field": fld,
-                    "group": gid,
-                    "color": col,
-                    "visible": vis,
-                    "line": {"style": style, "width": 2},
-                }
+            # Klucz sygnału: jeśli pole mapowania jest puste, generujemy z etykiety
+            skey = fld if fld else re.sub(r"[^a-zA-Z0-9]", "", label)
 
-        data["groups"] = groups
+            signals[skey] = {
+                "label": label,
+                "field": fld,
+                "color": col,
+                "visible": vis,
+                "line": {"style": style, "width": 2},
+                # Brak grup, brak min/max, brak lock
+            }
+
+        # Nie zapisujemy już sekcji "groups"
         data["signals"] = signals
         return self.key_edit.text(), data
 
@@ -251,37 +248,37 @@ class StreamEditor(QtWidgets.QWidget):
             if self.frame_table.item(r, 0).text().strip()
         ]
 
-    def add_group_item(self, label="Group"):
-        item = QtWidgets.QTreeWidgetItem(self.sig_tree)
-        item.setText(0, label)
-        item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsEditable)
-        for c in range(5):
-            item.setBackground(c, QtGui.QBrush(QtGui.QColor("#1e1e1e")))
-            item.setForeground(c, QtGui.QBrush(QtGui.QColor("#bbb")))
-        self.sig_tree.addTopLevelItem(item)
-        item.setExpanded(True)
-        return item
-
     def add_signal_item(self):
-        sel = self.sig_tree.selectedItems()
-        if not sel:
-            return
-        parent = sel[0] if sel[0].parent() is None else sel[0].parent()
-        self.add_signal_to_parent(parent)
+        # Adds directly to root (flat list)
+        self.add_signal_row()
 
-    def add_signal_to_parent(self, parent, d=None):
+    def add_signal_row(self, d=None):
         if not d:
-            d = {"label": "Sig", "field": "", "color": "#4FC3F7", "visible": True, "style": "solid"}
-        item = QtWidgets.QTreeWidgetItem(parent)
+            d = {
+                "label": "New Signal",
+                "field": "",
+                "color": "#4FC3F7",
+                "visible": True,
+                "style": "solid",
+            }
+
+        item = QtWidgets.QTreeWidgetItem(self.sig_tree)
         item.setText(0, d["label"])
         item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsEditable)
 
+        # Style row
+        for c in range(5):
+            item.setSizeHint(c, QtCore.QSize(0, 30))
+            item.setForeground(c, QtGui.QBrush(QtGui.QColor("#e0e0e0")))
+
+        # Col 1: Field Map
         cb_fld = QtWidgets.QComboBox()
         cb_fld.addItems(self.get_fields())
         if d["field"] and d["field"] not in self.get_fields():
             cb_fld.addItem(d["field"])
         cb_fld.setCurrentText(d["field"])
 
+        # Col 3: Visible Checkbox
         chk = QtWidgets.QCheckBox()
         chk.setChecked(d["visible"])
         w_chk = QtWidgets.QWidget()
@@ -290,6 +287,7 @@ class StreamEditor(QtWidgets.QWidget):
         l.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         l.addWidget(chk)
 
+        # Col 4: Style
         cb_sty = QtWidgets.QComboBox()
         cb_sty.addItems(["solid", "dashed", "dotted"])
         cb_sty.setCurrentText(d["style"])
@@ -300,5 +298,7 @@ class StreamEditor(QtWidgets.QWidget):
         self.sig_tree.setItemWidget(item, 4, cb_sty)
 
     def remove_tree_item(self):
+        # Removes selected signal
         for item in self.sig_tree.selectedItems():
-            (self.sig_tree if item.parent() is None else item.parent()).removeChild(item)
+            index = self.sig_tree.indexOfTopLevelItem(item)
+            self.sig_tree.takeTopLevelItem(index)

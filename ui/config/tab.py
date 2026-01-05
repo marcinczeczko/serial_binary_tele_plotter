@@ -107,11 +107,12 @@ class ConfiguratorTab(QtWidgets.QWidget):
         while f"new_stream_{i}" in self.data:
             i += 1
         key = f"new_stream_{i}"
+
+        # Uproszczona struktura nowego strumienia (brak grup)
         self.data[key] = {
             "name": "New Stream",
             "panel_type": "none",
             "frame": {"stream_id": 0, "fields": []},
-            "groups": {"main": {"label": "Main", "order": 1}},
             "signals": {},
         }
         self.stream_list.addItem(key)

@@ -47,6 +47,7 @@ class PidTuningPanel(QtWidgets.QGroupBox):
         self.motor_selector = QtWidgets.QComboBox()
         self.motor_selector.addItem("Left Motor", 0)
         self.motor_selector.addItem("Right Motor", 1)
+        self.motor_selector.addItem("Both Motors", 2)
         self.motor_selector.setToolTip("Select which motor to tune")
         self.motor_selector.currentIndexChanged.connect(self._on_motor_changed)
 
