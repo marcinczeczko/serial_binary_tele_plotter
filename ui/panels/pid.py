@@ -9,7 +9,9 @@ class PidTuningPanel(QtWidgets.QWidget):
 
     pid_left_sent = QtCore.pyqtSignal(int, float, float, float, float, float)
     pid_right_sent = QtCore.pyqtSignal(int, float, float, float, float, float)
-    run_test_sent = QtCore.pyqtSignal(float, float)
+    run_test_sent = QtCore.pyqtSignal(
+        int, float, float, float, float, float, int, float, float, float, float, float
+    )
 
     def __init__(self):
         super().__init__()
@@ -99,4 +101,17 @@ class PidTuningPanel(QtWidgets.QWidget):
         )
 
     def _emit_run_test(self):
-        self.run_test_sent.emit(self.left["Rps"].value(), self.right["Rps"].value())
+        self.run_test_sent.emit(
+            int(self.left["Ramp"].isChecked()),
+            self.left["Kp"].value(),
+            self.left["Ki"].value(),
+            self.left["Kff"].value(),
+            self.left["Alpha"].value(),
+            self.left["Rps"].value(),
+            int(self.right["Ramp"].isChecked()),
+            self.right["Kp"].value(),
+            self.right["Ki"].value(),
+            self.right["Kff"].value(),
+            self.right["Alpha"].value(),
+            self.right["Rps"].value(),
+        )

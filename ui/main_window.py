@@ -106,7 +106,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.panel.time_config_changed.connect(self.engine.update_time_config)
         self.panel.pid_left_sent.connect(self.engine.send_left_config)
         self.panel.pid_right_sent.connect(self.engine.send_right_config)
-        self.panel.run_test_sent.connect(self.engine.send_run_test)
+        self.panel.pid_all_sent.connect(self.engine.send_all_config)
 
         # Jeśli usunąłeś panel IMU, usuń też tę linię (lub zostaw, jeśli już go masz)
         # self.panel.imu_command_sent.connect(self.engine.send_imu_command)

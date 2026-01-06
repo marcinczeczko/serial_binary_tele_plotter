@@ -10,7 +10,9 @@ MAGIC_0 = 0xAA
 MAGIC_1 = 0x55
 
 # Packet IDs
-RTP_REQ_PID = 0x10  # Configuration Request
+RTP_REQ_PID_SINGLE = 0x10  # Configuration Request - single motor
+RTP_REQ_PID_ALL = 0x11  # Configuration Request - all motors
+
 
 # Mapping: JSON type string -> (struct format char, size in bytes)
 STRUCT_TYPE_MAP = {

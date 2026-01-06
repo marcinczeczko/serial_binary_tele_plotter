@@ -13,7 +13,12 @@ low-level details of the binary communication protocol. It handles:
 import struct
 from typing import Generator, Optional
 
-from core.protocol.constants import MAGIC_0, MAGIC_1, RTP_REQ_PID
+from core.protocol.constants import (
+    MAGIC_0,
+    MAGIC_1,
+    RTP_REQ_PID_ALL,
+    RTP_REQ_PID_SINGLE,
+)
 from core.protocol.crc import calculate_crc8
 from core.protocol.decoder import FrameDecoder
 
@@ -185,25 +190,47 @@ class ProtocolHandler:
         """
         payload = struct.pack("<BfffffB", motor_id, kp, ki, kff, alpha, rps, ramp_type)
 
-        h_base = struct.pack("BBBB", MAGIC_0, MAGIC_1, RTP_REQ_PID, len(payload))
+        h_base = struct.pack("BBBB", MAGIC_0, MAGIC_1, RTP_REQ_PID_SINGLE, len(payload))
         h_crc = calculate_crc8(h_base)
         p_crc = calculate_crc8(payload)
 
         return h_base + struct.pack("B", h_crc) + payload + struct.pack("B", p_crc)
 
-    def create_run_test_packet(self, left_rps: float, right_rps: float) -> bytes:
+    def create_pid_packet_all_motors(
+        self,
+        l_ramp_type,
+        l_kp,
+        l_ki,
+        l_kff,
+        l_alpha,
+        l_rps,
+        r_ramp_type,
+        r_kp,
+        r_ki,
+        r_kff,
+        r_alpha,
+        r_rps,
+    ) -> bytes:
         """
-        Constructs a binary packet for PID configuration to be sent to the MCU.
-
-        Structure:
-        [Header: MAGIC0, MAGIC1, PID_REQ_ID, LEN] + [H_CRC] + [Payload] + [P_CRC]
-
-        Payload format (<ff):
-        - f32: left_rps, right_rps
+        Constructs a binary packet for PID configuration to be sent to the MCU for both motors
         """
-        payload = struct.pack("<ff", left_rps, right_rps)
+        payload = struct.pack(
+            "<fffffBfffffB",
+            l_kp,
+            l_ki,
+            l_kff,
+            l_alpha,
+            l_rps,
+            l_ramp_type,
+            r_kp,
+            r_ki,
+            r_kff,
+            r_alpha,
+            r_rps,
+            r_ramp_type,
+        )
 
-        h_base = struct.pack("BBBB", MAGIC_0, MAGIC_1, RTP_REQ_PID, len(payload))
+        h_base = struct.pack("BBBB", MAGIC_0, MAGIC_1, RTP_REQ_PID_ALL, len(payload))
         h_crc = calculate_crc8(h_base)
         p_crc = calculate_crc8(payload)
 

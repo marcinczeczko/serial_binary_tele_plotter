@@ -174,12 +174,39 @@ class TelemetryEngine(QtCore.QObject):
         except (serial.SerialTimeoutException, serial.SerialException) as e:
             print(f"Write Error: {e}")
 
-    @QtCore.pyqtSlot(float, float)
-    def send_run_test(self, rps_left, rps_right):
+    @QtCore.pyqtSlot(int, float, float, float, float, float, int, float, float, float, float, float)
+    def send_all_config(
+        self,
+        l_ramp_type,
+        l_kp,
+        l_ki,
+        l_kff,
+        l_alpha,
+        l_rps,
+        r_ramp_type,
+        r_kp,
+        r_ki,
+        r_kff,
+        r_alpha,
+        r_rps,
+    ):
         if not self.serial_port or not self.serial_port.is_open:
             return
 
-        packet = self.protocol.create_run_test_packet(rps_left, rps_right)
+        packet = self.protocol.create_pid_packet_all_motors(
+            l_ramp_type,
+            l_kp,
+            l_ki,
+            l_kff,
+            l_alpha,
+            l_rps,
+            r_ramp_type,
+            r_kp,
+            r_ki,
+            r_kff,
+            r_alpha,
+            r_rps,
+        )
         try:
             self.serial_port.write(packet)
         except (serial.SerialTimeoutException, serial.SerialException) as e:

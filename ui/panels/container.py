@@ -29,7 +29,9 @@ class MainControlPanel(QtWidgets.QWidget):
     pause_requested = QtCore.pyqtSignal(bool)
     pid_left_sent = QtCore.pyqtSignal(int, float, float, float, float, float)
     pid_right_sent = QtCore.pyqtSignal(int, float, float, float, float, float)
-    run_test_sent = QtCore.pyqtSignal(float, float)
+    pid_all_sent = QtCore.pyqtSignal(
+        int, float, float, float, float, float, int, float, float, float, float, float
+    )
 
     time_config_changed = QtCore.pyqtSignal(float, int)
     stream_changed = QtCore.pyqtSignal(dict)
@@ -114,7 +116,7 @@ class MainControlPanel(QtWidgets.QWidget):
         # PID Panel
         self.pid_panel.pid_left_sent.connect(self.pid_left_sent)
         self.pid_panel.pid_right_sent.connect(self.pid_right_sent)
-        self.pid_panel.run_test_sent.connect(self.run_test_sent)
+        self.pid_panel.run_test_sent.connect(self.pid_all_sent)
 
         # IMU Panel
         self.imu_panel.calibration_requested.connect(self.imu_command_sent)
