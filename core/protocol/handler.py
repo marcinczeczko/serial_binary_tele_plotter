@@ -190,3 +190,21 @@ class ProtocolHandler:
         p_crc = calculate_crc8(payload)
 
         return h_base + struct.pack("B", h_crc) + payload + struct.pack("B", p_crc)
+
+    def create_run_test_packet(self, left_rps: float, right_rps: float) -> bytes:
+        """
+        Constructs a binary packet for PID configuration to be sent to the MCU.
+
+        Structure:
+        [Header: MAGIC0, MAGIC1, PID_REQ_ID, LEN] + [H_CRC] + [Payload] + [P_CRC]
+
+        Payload format (<ff):
+        - f32: left_rps, right_rps
+        """
+        payload = struct.pack("<ff", left_rps, right_rps)
+
+        h_base = struct.pack("BBBB", MAGIC_0, MAGIC_1, RTP_REQ_PID, len(payload))
+        h_crc = calculate_crc8(h_base)
+        p_crc = calculate_crc8(payload)
+
+        return h_base + struct.pack("B", h_crc) + payload + struct.pack("B", p_crc)

@@ -156,12 +156,30 @@ class TelemetryEngine(QtCore.QObject):
             self.status_msg.emit(f"Frame Config Error: {e}")
 
     @QtCore.pyqtSlot(int, float, float, float, float, float)
-    def send_pid_config(self, ramp_type, kp, ki, kff, alpha, rps):
+    def send_left_config(self, ramp_type, kp, ki, kff, alpha, rps):
+        self._send_motor_config(0, ramp_type, kp, ki, kff, alpha, rps)
+
+    @QtCore.pyqtSlot(int, float, float, float, float, float)
+    def send_right_config(self, ramp_type, kp, ki, kff, alpha, rps):
+        self._send_motor_config(1, ramp_type, kp, ki, kff, alpha, rps)
+
+    def _send_motor_config(self, motor_id, ramp_type, kp, ki, kff, alpha, rps):
         """Constructs and sends a PID configuration packet to the MCU."""
         if not self.serial_port or not self.serial_port.is_open:
             return
 
-        packet = self.protocol.create_pid_packet(ramp_type, 0, kp, ki, kff, alpha, rps)
+        packet = self.protocol.create_pid_packet(ramp_type, motor_id, kp, ki, kff, alpha, rps)
+        try:
+            self.serial_port.write(packet)
+        except (serial.SerialTimeoutException, serial.SerialException) as e:
+            print(f"Write Error: {e}")
+
+    @QtCore.pyqtSlot(float, float)
+    def send_run_test(self, rps_left, rps_right):
+        if not self.serial_port or not self.serial_port.is_open:
+            return
+
+        packet = self.protocol.create_run_test_packet(rps_left, rps_right)
         try:
             self.serial_port.write(packet)
         except (serial.SerialTimeoutException, serial.SerialException) as e:

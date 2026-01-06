@@ -1,123 +1,102 @@
-"""
-PID Tuning Panel Module.
-
-This module provides a specialized widget for configuring PID controller parameters.
-It encapsulates inputs for Proportional (Kp), Integral (Ki), and Feed-Forward (Kff)
-gains, as well as setpoint generation settings (Ramp/Step, Target Velocity).
-"""
-
 from PyQt6 import QtCore, QtWidgets
 
 
-class PidTuningPanel(QtWidgets.QGroupBox):
+class PidTuningPanel(QtWidgets.QWidget):
     """
-    A group box widget containing controls for real-time PID tuning.
-
-    It collects parameters from the UI and emits a unified signal to update
-    the controller state on the MCU.
-
-    Attributes:
-        pid_config_sent (pyqtSignal): Emitted when the update button is clicked.
-            Payload signature: (ramp_type, kp, ki, kff, alpha, rps).
+    Pure content widget for PID tuning.
+    Collapsing/expanding is handled EXTERNALLY by CollapsableSection.
     """
 
-    # Signal Payload Definition:
-    # 1. ramp_type (int): 0 = Step Input, 1 = Ramp Input
-    # 3. kp (float): Proportional Gain
-    # 4. ki (float): Integral Gain
-    # 5. kff (float): Feed-Forward Gain
-    # 6. alpha (float): Derivative Filter / Low-Pass Filter Coefficient
-    # 7. rps (float): Target Rotations Per Second
-    pid_config_sent = QtCore.pyqtSignal(int, float, float, float, float, float)
+    pid_left_sent = QtCore.pyqtSignal(int, float, float, float, float, float)
+    pid_right_sent = QtCore.pyqtSignal(int, float, float, float, float, float)
+    run_test_sent = QtCore.pyqtSignal(float, float)
 
     def __init__(self):
-        """Initializes the PID tuning layout and widgets."""
-        super().__init__("PID Tuning")
+        super().__init__()
 
-        layout = QtWidgets.QGridLayout(self)
-        layout.setSpacing(8)
+        grid = QtWidgets.QGridLayout(self)
+        grid.setContentsMargins(8, 6, 8, 6)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(6)
 
-        # --- Tuning Parameters ---
-        # We use a helper method to ensure consistent styling and ranges
-        self.kp_sb = self._make_sb(1.0, "Proportional Gain")
-        self.ki_sb = self._make_sb(0.0, "Integral Gain")
-        self.kff_sb = self._make_sb(0.0, "Feed-Forward Gain")
+        # ===== Header Row =====
+        grid.addWidget(QtWidgets.QLabel(""), 0, 0)
+        grid.addWidget(QtWidgets.QLabel("<b>Left</b>"), 0, 1)
+        grid.addWidget(QtWidgets.QLabel("<b>Right</b>"), 0, 2)
 
-        # Alpha usually represents a filter coefficient (0.0 - 1.0) or similar factor
-        self.alpha_sb = self._make_sb(0.5, "Filter Coefficient (Alpha)")
+        self.left = {}
+        self.right = {}
 
-        # Target Velocity
-        self.rps_sb = self._make_sb(0.5, "Target Velocity (RPS)")
+        params = [
+            ("Kp", 1.0),
+            ("Ki", 0.0),
+            ("Kff", 0.0),
+            ("Alpha", 0.5),
+            ("Rps", 0.5),
+        ]
 
-        # Input Type Selector
-        self.ramp_cb = QtWidgets.QCheckBox()
-        self.ramp_cb.setToolTip("Checked = Ramp Input, Unchecked = Step Input")
+        row = 1
+        for name, val in params:
+            grid.addWidget(QtWidgets.QLabel(f"{name}:"), row, 0)
+            self.left[name] = self._sb(val)
+            self.right[name] = self._sb(val)
+            grid.addWidget(self.left[name], row, 1)
+            grid.addWidget(self.right[name], row, 2)
+            row += 1
 
-        # --- Update Action ---
-        self.update_btn = QtWidgets.QPushButton("Update PI and Run")
-        self.update_btn.setToolTip("Send parameters to MCU and trigger motion")
-        self.update_btn.clicked.connect(self._on_update_clicked)
+        # ===== Ramp =====
+        grid.addWidget(QtWidgets.QLabel("Ramp:"), row, 0)
+        self.left["Ramp"] = QtWidgets.QCheckBox()
+        self.right["Ramp"] = QtWidgets.QCheckBox()
+        grid.addWidget(self.left["Ramp"], row, 1)
+        grid.addWidget(self.right["Ramp"], row, 2)
+        row += 1
 
-        # --- Layout Assembly ---
-        # Row 1: Kp
-        layout.addWidget(QtWidgets.QLabel("Kp:"), 1, 0)
-        layout.addWidget(self.kp_sb, 1, 1)
+        # ===== Update buttons =====
+        btn_l = QtWidgets.QPushButton("Update Left PID")
+        btn_r = QtWidgets.QPushButton("Update Right PID")
+        btn_l.clicked.connect(self._emit_left)
+        btn_r.clicked.connect(self._emit_right)
 
-        # Row 2: Ki
-        layout.addWidget(QtWidgets.QLabel("Ki:"), 2, 0)
-        layout.addWidget(self.ki_sb, 2, 1)
+        grid.addWidget(btn_l, row, 1)
+        grid.addWidget(btn_r, row, 2)
+        row += 1
 
-        # Row 3: Kff
-        layout.addWidget(QtWidgets.QLabel("Kff:"), 3, 0)
-        layout.addWidget(self.kff_sb, 3, 1)
+        # ===== Run test =====
+        run_btn = QtWidgets.QPushButton("Run Test (Both Motors)")
+        run_btn.clicked.connect(self._emit_run_test)
+        grid.addWidget(run_btn, row, 0, 1, 3)
 
-        # Row 4: Alpha
-        layout.addWidget(QtWidgets.QLabel("Alpha:"), 4, 0)
-        layout.addWidget(self.alpha_sb, 4, 1)
-
-        # Row 5: Setpoint (RPS)
-        layout.addWidget(QtWidgets.QLabel("Rps:"), 5, 0)
-        layout.addWidget(self.rps_sb, 5, 1)
-
-        # Row 6: Input Type
-        layout.addWidget(QtWidgets.QLabel("Ramp:"), 6, 0)
-        layout.addWidget(self.ramp_cb, 6, 1)
-
-        # Row 7: Action Button (Spanning 2 columns)
-        layout.addWidget(self.update_btn, 7, 0, 1, 2)
-
-    def _make_sb(self, val: float, tooltip: str = "") -> QtWidgets.QDoubleSpinBox:
-        """
-        Factory method for creating consistent QDoubleSpinBox widgets.
-
-        Args:
-            val (float): Initial value.
-            tooltip (str): Tooltip text for UI guidance.
-
-        Returns:
-            QtWidgets.QDoubleSpinBox: Configured spinbox widget.
-        """
+    # ======================================================
+    # Helpers
+    # ======================================================
+    def _sb(self, val: float) -> QtWidgets.QDoubleSpinBox:
         sb = QtWidgets.QDoubleSpinBox()
         sb.setRange(0.0, 1000.0)
-        sb.setDecimals(2)
+        sb.setDecimals(3)
         sb.setSingleStep(0.1)
         sb.setValue(val)
-        if tooltip:
-            sb.setToolTip(tooltip)
         return sb
 
-    def _on_update_clicked(self) -> None:
-        """
-        Collects values from all widgets and emits the configuration signal.
-        This triggers the packet transmission in the Engine.
-        """
-        # Convert Checkbox state to Integer (0 or 1) for binary protocol
-        ramp_type = 1 if self.ramp_cb.isChecked() else 0
+    def _emit_left(self):
+        self.pid_left_sent.emit(
+            int(self.left["Ramp"].isChecked()),
+            self.left["Kp"].value(),
+            self.left["Ki"].value(),
+            self.left["Kff"].value(),
+            self.left["Alpha"].value(),
+            self.left["Rps"].value(),
+        )
 
-        kp = self.kp_sb.value()
-        ki = self.ki_sb.value()
-        kff = self.kff_sb.value()
-        alpha = self.alpha_sb.value()
-        rps = self.rps_sb.value()
+    def _emit_right(self):
+        self.pid_right_sent.emit(
+            int(self.right["Ramp"].isChecked()),
+            self.right["Kp"].value(),
+            self.right["Ki"].value(),
+            self.right["Kff"].value(),
+            self.right["Alpha"].value(),
+            self.right["Rps"].value(),
+        )
 
-        self.pid_config_sent.emit(ramp_type, kp, ki, kff, alpha, rps)
+    def _emit_run_test(self):
+        self.run_test_sent.emit(self.left["Rps"].value(), self.right["Rps"].value())

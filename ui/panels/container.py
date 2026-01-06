@@ -11,6 +11,7 @@ from typing import Dict
 from PyQt6 import QtCore, QtWidgets
 
 from core.config import StreamConfigLoader
+from ui.common.widgets import CollapsableSection
 from ui.panels.connection import ConnectionPanel
 from ui.panels.imu import ImuCalibrationPanel
 from ui.panels.pid import PidTuningPanel
@@ -26,7 +27,10 @@ class MainControlPanel(QtWidgets.QWidget):
     # --- Public Signals ---
     connection_requested = QtCore.pyqtSignal(str, int)
     pause_requested = QtCore.pyqtSignal(bool)
-    pid_config_sent = QtCore.pyqtSignal(int, float, float, float, float, float)
+    pid_left_sent = QtCore.pyqtSignal(int, float, float, float, float, float)
+    pid_right_sent = QtCore.pyqtSignal(int, float, float, float, float, float)
+    run_test_sent = QtCore.pyqtSignal(float, float)
+
     time_config_changed = QtCore.pyqtSignal(float, int)
     stream_changed = QtCore.pyqtSignal(dict)
     signal_visibility_changed = QtCore.pyqtSignal(str, bool)
@@ -59,7 +63,9 @@ class MainControlPanel(QtWidgets.QWidget):
 
         # -- A: PID Panel --
         self.pid_panel = PidTuningPanel()
+        self.pid_section = CollapsableSection("PID Tunning", self.pid_panel)
         self.imu_panel = ImuCalibrationPanel()
+        self.imu_section = CollapsableSection("IMU Calibration", self.imu_panel)
 
         # -- B: Empty Panel (for streams with no controls) --
         self.empty_panel = QtWidgets.QWidget()
@@ -67,14 +73,14 @@ class MainControlPanel(QtWidgets.QWidget):
         # l_empty.addWidget(QtWidgets.QLabel("No settings for this stream."))
 
         self.dynamic_stack.addWidget(self.empty_panel)  # Index 0
-        self.dynamic_stack.addWidget(self.pid_panel)  # Index 1
-        self.dynamic_stack.addWidget(self.imu_panel)
+        self.dynamic_stack.addWidget(self.pid_section)  # Index 1
+        self.dynamic_stack.addWidget(self.imu_section)
 
         # Map string keys from JSON ('panel_type') to widget instances
         self.panel_map: Dict[str, QtWidgets.QWidget] = {
             "none": self.empty_panel,
-            "pid": self.pid_panel,
-            "imu": self.imu_panel,
+            "pid": self.pid_section,
+            "imu": self.imu_section,
         }
 
         # 4. Fixed Bottom Panels
@@ -106,7 +112,9 @@ class MainControlPanel(QtWidgets.QWidget):
         self.sig_panel.signal_visibility_changed.connect(self.signal_visibility_changed)
 
         # PID Panel
-        self.pid_panel.pid_config_sent.connect(self.pid_config_sent)
+        self.pid_panel.pid_left_sent.connect(self.pid_left_sent)
+        self.pid_panel.pid_right_sent.connect(self.pid_right_sent)
+        self.pid_panel.run_test_sent.connect(self.run_test_sent)
 
         # IMU Panel
         self.imu_panel.calibration_requested.connect(self.imu_command_sent)

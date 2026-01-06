@@ -100,3 +100,36 @@ class YAxisControlWidget(QtWidgets.QWidget):
         layout.addWidget(self.color_icon)
         layout.addWidget(self.name_label)
         layout.addStretch()  # Wszystko do lewej
+
+
+class CollapsableSection(QtWidgets.QWidget):
+    def __init__(self, title: str, content: QtWidgets.QWidget):
+        super().__init__()
+
+        self.content = content
+
+        self.layout = QtWidgets.QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(0)
+
+        self.header = QtWidgets.QToolButton(text=title)
+        self.header.setCheckable(True)
+        self.header.setChecked(False)
+        self.header.setArrowType(QtCore.Qt.ArrowType.RightArrow)
+        self.header.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.header.clicked.connect(self.toggle)
+
+        self.layout.addWidget(self.header)
+
+    def toggle(self):
+        expanded = self.header.isChecked()
+
+        if expanded:
+            self.layout.addWidget(self.content)
+            self.header.setArrowType(QtCore.Qt.ArrowType.DownArrow)
+        else:
+            self.layout.removeWidget(self.content)
+            self.content.setParent(None)
+            self.header.setArrowType(QtCore.Qt.ArrowType.RightArrow)
+
+        self.updateGeometry()
