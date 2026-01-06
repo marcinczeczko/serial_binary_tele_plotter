@@ -26,8 +26,7 @@ class MainControlPanel(QtWidgets.QWidget):
     # --- Public Signals ---
     connection_requested = QtCore.pyqtSignal(str, int)
     pause_requested = QtCore.pyqtSignal(bool)
-    pid_config_sent = QtCore.pyqtSignal(int, int, float, float, float, float, float)
-    motor_changed = QtCore.pyqtSignal(int)
+    pid_config_sent = QtCore.pyqtSignal(int, float, float, float, float, float)
     time_config_changed = QtCore.pyqtSignal(float, int)
     stream_changed = QtCore.pyqtSignal(dict)
     signal_visibility_changed = QtCore.pyqtSignal(str, bool)
@@ -108,7 +107,6 @@ class MainControlPanel(QtWidgets.QWidget):
 
         # PID Panel
         self.pid_panel.pid_config_sent.connect(self.pid_config_sent)
-        self.pid_panel.motor_changed.connect(self.motor_changed)
 
         # IMU Panel
         self.imu_panel.calibration_requested.connect(self.imu_command_sent)

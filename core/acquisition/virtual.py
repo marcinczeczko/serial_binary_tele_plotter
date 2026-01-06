@@ -12,6 +12,8 @@ from typing import Any, Dict, Optional
 
 from PyQt6 import QtCore
 
+from core.protocol.constants import LOOP_CNTR_NAME
+
 
 class VirtualDevice(QtCore.QObject):
     """
@@ -45,19 +47,30 @@ class VirtualDevice(QtCore.QObject):
 
         self._loop_cntr = 0
         self._period_s = 0.05
-        self._motor_id = 0
         self._stream_type = "pid"  # Default stream type
+        self._pid_sim = {
+            "left": {
+                "measurement": 0.0,
+                "integral": 0.0,
+                "velocity": 0.0,
+                "ramp_setpoint": 0.0,
+            },
+            "right": {
+                "measurement": 0.0,
+                "integral": 0.0,
+                "velocity": 0.0,
+                "ramp_setpoint": 0.0,
+            },
+        }
 
-    def start(self, period_s: float, motor_id: int):
+    def start(self, period_s: float):
         """
         Starts the data generation loop.
 
         Args:
             period_s (float): Sampling period in seconds.
-            motor_id (int): ID of the motor to simulate (0 or 1).
         """
         self._period_s = period_s
-        self._motor_id = motor_id
         self._loop_cntr = 0  # Reset time on start
 
         # Interval expects milliseconds
@@ -67,16 +80,14 @@ class VirtualDevice(QtCore.QObject):
         """Stops the data generation loop."""
         self.timer.stop()
 
-    def update_params(self, period_s: float, motor_id: int):
+    def update_params(self, period_s: float):
         """
         Updates simulation parameters on the fly without resetting the counter.
 
         Args:
             period_s (float): New sampling period in seconds.
-            motor_id (int): New motor ID to simulate.
         """
         self._period_s = period_s
-        self._motor_id = motor_id
 
         # If running, update the timer interval immediately
         if self.timer.isActive():
@@ -100,45 +111,88 @@ class VirtualDevice(QtCore.QObject):
         Internal slot called by the timer.
         Generates one frame of synthetic data based on the selected stream type.
         """
+
+        def ramp(current, target, rate, dt):
+            delta = target - current
+            max_step = rate * dt
+            if abs(delta) <= max_step:
+                return target
+            return current + math.copysign(max_step, delta)
+
         t = self._loop_cntr * self._period_s
 
         # --- FIX: Explicit Type Hinting ---
         # Definiujemy frame jako słownik string->cokolwiek, żeby Pylance
         # nie krzyczał, gdy dodajemy floaty do intów.
         frame: Dict[str, Any] = {
-            "loopCntr": self._loop_cntr,
-            "motor": self._motor_id,
+            LOOP_CNTR_NAME: self._loop_cntr,
         }
 
         if self._stream_type == "pid":
-            # --- PID SIMULATION ---
-            setpoint = math.sin(t * 0.5)
-            # Add some noise
-            noise = random.uniform(-0.05, 0.05)
-            measurement = setpoint + noise
+            dt = 0.005  # 5ms
+            ticks_per_rev = 3800
+            ramp_rate = 1.5  # RPS/s – jak w MCU
 
-            # Calculate derived values (PID logic simulation)
-            error = setpoint - measurement
+            base_target = math.sin(t * 0.5) * 1.0
 
-            # Mocking internal PID terms
-            p_term = error * 20.0
-            i_term = math.sin(t * 0.2) * 5.0
+            for side in ("left", "right"):
+                sim = self._pid_sim[side]
 
-            raw_output = error * 30.0
-            clamped_output = max(min(raw_output, 100), -100)
+                # --- external command ---
+                target_setpoint = base_target + (0.05 if side == "right" else 0.0)
 
-            frame.update(
-                {
-                    "setpoint": setpoint,
-                    "measurement": measurement,
-                    "measurementRaw": measurement + random.uniform(-0.02, 0.02),
-                    "error": error,
-                    "pTerm": p_term,
-                    "iTerm": i_term,
-                    "outputRaw": raw_output,
-                    "output": clamped_output,
-                }
-            )
+                # --- RAMP (this is what PID sees) ---
+                sim["ramp_setpoint"] = ramp(
+                    sim["ramp_setpoint"],
+                    target_setpoint,
+                    ramp_rate,
+                    dt,
+                )
+                setpoint = sim["ramp_setpoint"]
+
+                # --- plant ---
+                tau = 0.15
+                sim["velocity"] += (setpoint - sim["velocity"]) * (dt / tau)
+
+                delta_ticks = int(sim["velocity"] * ticks_per_rev * dt)
+
+                measurement_raw = sim["velocity"] + random.uniform(-0.02, 0.02)
+                measurement = sim["measurement"] * 0.7 + measurement_raw * 0.3
+                sim["measurement"] = measurement
+
+                # --- PI ---
+                error = setpoint - measurement
+
+                kp, ki, kff = 20.0, 10.0, 30.0
+
+                sim["integral"] += error * dt
+                sim["integral"] = max(min(sim["integral"], 50.0), -50.0)
+
+                p_term = kp * error
+                i_term = ki * sim["integral"]
+                ff_term = kff * setpoint
+
+                raw_output = p_term + i_term + ff_term
+                output = max(min(raw_output, 100.0), -100.0)
+
+                if raw_output != output:
+                    sim["integral"] -= error * dt
+
+                frame.update(
+                    {
+                        f"{side}_target_setpoint": target_setpoint,
+                        f"{side}_setpoint": setpoint,
+                        f"{side}_measurement": measurement,
+                        f"{side}_measurementRaw": measurement_raw,
+                        f"{side}_error": error,
+                        f"{side}_integral": sim["integral"],
+                        f"{side}_pTerm": p_term,
+                        f"{side}_iTerm": i_term,
+                        f"{side}_outputRaw": raw_output,
+                        f"{side}_output": output,
+                        f"{side}_delta_ticks": delta_ticks,
+                    }
+                )
 
         elif self._stream_type == "imu":
             # --- IMU SIMULATION ---

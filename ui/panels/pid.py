@@ -18,23 +18,17 @@ class PidTuningPanel(QtWidgets.QGroupBox):
 
     Attributes:
         pid_config_sent (pyqtSignal): Emitted when the update button is clicked.
-            Payload signature: (ramp_type, motor_id, kp, ki, kff, alpha, rps).
-        motor_changed (pyqtSignal): Emitted when the motor selection combo box changes.
-            Payload: motor_id (int).
+            Payload signature: (ramp_type, kp, ki, kff, alpha, rps).
     """
 
     # Signal Payload Definition:
     # 1. ramp_type (int): 0 = Step Input, 1 = Ramp Input
-    # 2. motor_id (int): 0 = Left, 1 = Right
     # 3. kp (float): Proportional Gain
     # 4. ki (float): Integral Gain
     # 5. kff (float): Feed-Forward Gain
     # 6. alpha (float): Derivative Filter / Low-Pass Filter Coefficient
     # 7. rps (float): Target Rotations Per Second
-    pid_config_sent = QtCore.pyqtSignal(int, int, float, float, float, float, float)
-
-    # Signal for local UI synchronization (e.g., changing plot visibility based on motor)
-    motor_changed = QtCore.pyqtSignal(int)
+    pid_config_sent = QtCore.pyqtSignal(int, float, float, float, float, float)
 
     def __init__(self):
         """Initializes the PID tuning layout and widgets."""
@@ -42,14 +36,6 @@ class PidTuningPanel(QtWidgets.QGroupBox):
 
         layout = QtWidgets.QGridLayout(self)
         layout.setSpacing(8)
-
-        # --- Motor Selector ---
-        self.motor_selector = QtWidgets.QComboBox()
-        self.motor_selector.addItem("Left Motor", 0)
-        self.motor_selector.addItem("Right Motor", 1)
-        self.motor_selector.addItem("Both Motors", 2)
-        self.motor_selector.setToolTip("Select which motor to tune")
-        self.motor_selector.currentIndexChanged.connect(self._on_motor_changed)
 
         # --- Tuning Parameters ---
         # We use a helper method to ensure consistent styling and ranges
@@ -73,10 +59,6 @@ class PidTuningPanel(QtWidgets.QGroupBox):
         self.update_btn.clicked.connect(self._on_update_clicked)
 
         # --- Layout Assembly ---
-        # Row 0: Target Selection
-        layout.addWidget(QtWidgets.QLabel("Motor:"), 0, 0)
-        layout.addWidget(self.motor_selector, 0, 1)
-
         # Row 1: Kp
         layout.addWidget(QtWidgets.QLabel("Kp:"), 1, 0)
         layout.addWidget(self.kp_sb, 1, 1)
@@ -124,24 +106,11 @@ class PidTuningPanel(QtWidgets.QGroupBox):
             sb.setToolTip(tooltip)
         return sb
 
-    def _on_motor_changed(self, index: int) -> None:
-        """
-        Slot handling motor selection changes.
-
-        Args:
-            index (int): The new index of the combo box (unused, we fetch data).
-        """
-        # Retrieve the user data (motor ID) associated with the item
-        motor_id = int(self.motor_selector.currentData())
-        self.motor_changed.emit(motor_id)
-
     def _on_update_clicked(self) -> None:
         """
         Collects values from all widgets and emits the configuration signal.
         This triggers the packet transmission in the Engine.
         """
-        motor_id = int(self.motor_selector.currentData())
-
         # Convert Checkbox state to Integer (0 or 1) for binary protocol
         ramp_type = 1 if self.ramp_cb.isChecked() else 0
 
@@ -151,4 +120,4 @@ class PidTuningPanel(QtWidgets.QGroupBox):
         alpha = self.alpha_sb.value()
         rps = self.rps_sb.value()
 
-        self.pid_config_sent.emit(ramp_type, motor_id, kp, ki, kff, alpha, rps)
+        self.pid_config_sent.emit(ramp_type, kp, ki, kff, alpha, rps)

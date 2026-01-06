@@ -60,7 +60,7 @@ class TelemetryEngine(QtCore.QObject):
         self.state = EngineState.RUNNING
 
         if port_name == "VIRTUAL":
-            self.virtual.start(self.sample_period_s, self.data_mgr.selected_motor)
+            self.virtual.start(self.sample_period_s)
         else:
             try:
                 self.serial_port = serial.Serial(port_name, baudrate, timeout=0.1)
@@ -135,7 +135,7 @@ class TelemetryEngine(QtCore.QObject):
         """Updates sampling settings and resizes buffers."""
         self.sample_period_s = period_ms / 1000.0
         self.data_mgr.update_max_samples(max_samples)
-        self.virtual.update_params(self.sample_period_s, self.data_mgr.selected_motor)
+        self.virtual.update_params(self.sample_period_s)
 
     @QtCore.pyqtSlot(dict)
     def configure_signals(self, signals_cfg: dict):
@@ -155,19 +155,13 @@ class TelemetryEngine(QtCore.QObject):
         except ValueError as e:
             self.status_msg.emit(f"Frame Config Error: {e}")
 
-    @QtCore.pyqtSlot(int)
-    def set_selected_motor(self, motor_id: int):
-        """Sets the active motor filter."""
-        self.data_mgr.set_motor(motor_id)
-        self.virtual.update_params(self.sample_period_s, motor_id)
-
-    @QtCore.pyqtSlot(int, int, float, float, float, float, float)
-    def send_pid_config(self, ramp_type, motor_id, kp, ki, kff, alpha, rps):
+    @QtCore.pyqtSlot(int, float, float, float, float, float)
+    def send_pid_config(self, ramp_type, kp, ki, kff, alpha, rps):
         """Constructs and sends a PID configuration packet to the MCU."""
         if not self.serial_port or not self.serial_port.is_open:
             return
 
-        packet = self.protocol.create_pid_packet(ramp_type, motor_id, kp, ki, kff, alpha, rps)
+        packet = self.protocol.create_pid_packet(ramp_type, 0, kp, ki, kff, alpha, rps)
         try:
             self.serial_port.write(packet)
         except (serial.SerialTimeoutException, serial.SerialException) as e:

@@ -120,9 +120,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.engine.data_ready.connect(self.plot.on_data_ready)
         self.engine.status_msg.connect(self.lbl_status.setText)
 
-        # 5. Logic: Motor selection filters
-        self.panel.motor_changed.connect(self.engine.set_selected_motor)
-
         # 6. Interactivity: Plot -> UI
         self.plot.cursor_moved.connect(self.lbl_cursor.setText)
 
@@ -200,15 +197,6 @@ class MainWindow(QtWidgets.QMainWindow):
             "configure_frame",
             QtCore.Qt.ConnectionType.QueuedConnection,
             QtCore.Q_ARG(dict, stream_cfg),
-        )
-
-        # --- NOWE: ZAWSZE RESETUJ SILNIK NA 0 PRZY ZMIANIE STRUMIENIA ---
-        # Naprawia błąd pustego wykresu po przejściu z PID (Motor 1) na Control Loop.
-        QtCore.QMetaObject.invokeMethod(
-            self.engine,
-            "set_selected_motor",
-            QtCore.Qt.ConnectionType.QueuedConnection,
-            QtCore.Q_ARG(int, 0),
         )
 
         # 4. Queue Restart Command (Worker Thread)
