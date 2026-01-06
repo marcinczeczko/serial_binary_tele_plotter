@@ -57,6 +57,10 @@
                         "type": "f32"
                     },
                     {
+                        "name": "left_pwm_cmd",
+                        "type": "f32"
+                    },
+                    {
                         "name": "right_target_setpoint",
                         "type": "f32"
                     },
@@ -98,6 +102,10 @@
                     },
                     {
                         "name": "right_output",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "right_pwm_cmd",
                         "type": "f32"
                     }
                 ]
@@ -213,6 +221,16 @@
                         "width": 2
                     }
                 },
+                "left_pwm_cmd": {
+                    "label": "L: PWM cmd",
+                    "field": "left_pwm_cmd",
+                    "color": "#FFB74D",
+                    "visible": true,
+                    "line": {
+                        "style": "dotted",
+                        "width": 2
+                    }
+                },
                 "right_target_setpoint": {
                     "label": "R: Target Setpoint",
                     "field": "right_target_setpoint",
@@ -318,6 +336,16 @@
                     "field": "right_outputRaw",
                     "color": "#FFB74D",
                     "visible": false,
+                    "line": {
+                        "style": "dotted",
+                        "width": 2
+                    }
+                },
+                "right_pwm_cmd": {
+                    "label": "R: PWM cmd",
+                    "field": "right_pwm_cmd",
+                    "color": "#FFB74D",
+                    "visible": true,
                     "line": {
                         "style": "dotted",
                         "width": 2

@@ -19,7 +19,7 @@ from core.protocol.decoder import FrameDecoder
 
 DEBUG_DECODE = False
 TRACE_DECODE = False
-DEBUG_DECODE_PAYLOAD = False
+DEBUG_DECODE_PAYLOAD = True
 
 
 class ProtocolHandler:
