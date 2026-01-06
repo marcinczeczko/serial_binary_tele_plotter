@@ -77,7 +77,7 @@ class YAxisControlWidget(QtWidgets.QWidget):
     Simple widget for a single signal: [X] Color_Icon Label_Name
     """
 
-    def __init__(self, label: str, color: str):
+    def __init__(self, label: str, color: str, checked: bool):
         super().__init__()
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(5, 2, 5, 2)
@@ -85,7 +85,7 @@ class YAxisControlWidget(QtWidgets.QWidget):
 
         # Checkbox widoczności
         self.enable_checkbox = QtWidgets.QCheckBox()
-        self.enable_checkbox.setChecked(True)
+        self.enable_checkbox.setChecked(checked)
 
         # Ikona koloru (mały kwadrat)
         self.color_icon = QtWidgets.QFrame()

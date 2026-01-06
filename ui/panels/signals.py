@@ -44,9 +44,6 @@ class SignalListPanel(QtWidgets.QWidget):
         l_sigs.addWidget(scroll)
         layout.addWidget(grp_sigs)
 
-        # Internal storage
-        self.y_controls: List[YAxisControlWidget] = []
-
     def rebuild_list(self, cfg: dict) -> None:
         """
         Rebuilds the flat list of signals.
@@ -57,15 +54,9 @@ class SignalListPanel(QtWidgets.QWidget):
             if item and item.widget():
                 item.widget().deleteLater()
 
-        self.y_controls.clear()
-
         # 2. Create Signal Controls (Flat List)
-        # Sortujemy sygnały alfabetycznie po etykiecie dla porządku
-        sorted_signals = sorted(cfg["signals"].items(), key=lambda x: x[1]["label"])
-
-        for sid, sdata in sorted_signals:
-            w = YAxisControlWidget(sdata["label"], sdata["color"])
-            w.signal_id = sid
+        for sid, sdata in cfg["signals"].items():
+            w = YAxisControlWidget(sdata["label"], sdata["color"], sdata["visible"])
 
             # Podpięcie checkboxa widoczności
             # captured_sid gwarantuje, że lambda użyje poprawnego ID w pętli
@@ -77,4 +68,3 @@ class SignalListPanel(QtWidgets.QWidget):
 
             # Wstawiamy do głównego layoutu przed spacerem
             self.signals_layout.insertWidget(self.signals_layout.count() - 1, w)
-            self.y_controls.append(w)

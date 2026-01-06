@@ -138,16 +138,10 @@ class MainControlPanel(QtWidgets.QWidget):
         # ----------------------------
 
         # Update Signal List & Notify Main Window
-        self.apply_stream_config(cfg)
+        self.sig_panel.rebuild_list(cfg)
         self.stream_changed.emit(cfg)
 
     # --- Public API ---
-
-    def apply_stream_config(self, cfg: dict) -> None:
-        self.sig_panel.rebuild_list(cfg)
-
-    def refresh_ports(self) -> None:
-        self.conn_panel.refresh_ports()
 
     def get_initial_sample_period(self) -> float:
         return self.time_panel.get_period()

@@ -9,66 +9,123 @@
                 "packed": true,
                 "fields": [
                     {
-                        "name": "loopCntr",
+                        "name": "loop_cntr",
                         "type": "u32"
                     },
                     {
-                        "name": "motor",
-                        "type": "u8"
-                    },
-                    {
-                        "name": "setpoint",
+                        "name": "left_target_setpoint",
                         "type": "f32"
                     },
                     {
-                        "name": "measurement",
+                        "name": "left_delta_ticks",
+                        "type": "i32"
+                    },
+                    {
+                        "name": "left_setpoint",
                         "type": "f32"
                     },
                     {
-                        "name": "measurementRaw",
+                        "name": "left_measurement",
                         "type": "f32"
                     },
                     {
-                        "name": "error",
+                        "name": "left_measurementRaw",
                         "type": "f32"
                     },
                     {
-                        "name": "pTerm",
+                        "name": "left_error",
                         "type": "f32"
                     },
                     {
-                        "name": "iTerm",
+                        "name": "left_integral",
                         "type": "f32"
                     },
                     {
-                        "name": "outputRaw",
+                        "name": "left_pTerm",
                         "type": "f32"
                     },
                     {
-                        "name": "output",
+                        "name": "left_iTerm",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "left_outputRaw",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "left_output",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "right_target_setpoint",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "right_delta_ticks",
+                        "type": "i32"
+                    },
+                    {
+                        "name": "right_setpoint",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "right_measurement",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "right_measurementRaw",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "right_error",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "right_integral",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "right_pTerm",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "right_iTerm",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "right_outputRaw",
+                        "type": "f32"
+                    },
+                    {
+                        "name": "right_output",
                         "type": "f32"
                     }
                 ]
             },
-            "groups": {
-                "pidcore": {
-                    "label": "PID Core",
-                    "order": 1
-                },
-                "pidterms": {
-                    "label": "PID Terms",
-                    "order": 2
-                },
-                "actuator": {
-                    "label": "Actuator",
-                    "order": 3
-                }
-            },
             "signals": {
-                "setpoint": {
-                    "label": "Setpoint",
-                    "field": "setpoint",
-                    "group": "pidcore",
+                "left_target_setpoint": {
+                    "label": "L: Target Setpoint",
+                    "field": "left_target_setpoint",
+                    "color": "#4FC3F7",
+                    "visible": true,
+                    "line": {
+                        "style": "dotted",
+                        "width": 2
+                    }
+                },
+                "left_delta_ticks": {
+                    "label": "L: Delta Ticks",
+                    "field": "left_delta_ticks",
+                    "color": "#BA68C8",
+                    "visible": false,
+                    "line": {
+                        "style": "solid",
+                        "width": 2
+                    }
+                },
+                "left_setpoint": {
+                    "label": "L: Setpoint",
+                    "field": "left_setpoint",
                     "color": "#4FC3F7",
                     "visible": true,
                     "line": {
@@ -76,10 +133,9 @@
                         "width": 2
                     }
                 },
-                "measurement": {
-                    "label": "Measurement",
-                    "field": "measurement",
-                    "group": "pidcore",
+                "left_measurement": {
+                    "label": "L: Measurement",
+                    "field": "left_measurement",
                     "color": "#81C784",
                     "visible": true,
                     "line": {
@@ -87,10 +143,9 @@
                         "width": 2
                     }
                 },
-                "measurementRaw": {
-                    "label": "Meas Raw",
-                    "field": "measurementRaw",
-                    "group": "pidcore",
+                "left_measurementRaw": {
+                    "label": "L: Meas Raw",
+                    "field": "left_measurementRaw",
                     "color": "#43A047",
                     "visible": false,
                     "line": {
@@ -98,10 +153,9 @@
                         "width": 2
                     }
                 },
-                "error": {
-                    "label": "Error",
-                    "field": "error",
-                    "group": "pidcore",
+                "left_error": {
+                    "label": "L: Error",
+                    "field": "left_error",
                     "color": "#BA68C8",
                     "visible": true,
                     "line": {
@@ -109,21 +163,19 @@
                         "width": 2
                     }
                 },
-                "pTerm": {
-                    "label": "P Term",
-                    "field": "pTerm",
-                    "group": "pidterms",
-                    "color": "#E57373",
-                    "visible": true,
+                "left_integral": {
+                    "label": "L: Integral",
+                    "field": "left_integral",
+                    "color": "#64B5F6",
+                    "visible": false,
                     "line": {
                         "style": "solid",
                         "width": 2
                     }
                 },
-                "iTerm": {
-                    "label": "I Term",
-                    "field": "iTerm",
-                    "group": "pidterms",
+                "left_iTerm": {
+                    "label": "L: I Term",
+                    "field": "left_iTerm",
                     "color": "#64B5F6",
                     "visible": true,
                     "line": {
@@ -131,10 +183,29 @@
                         "width": 2
                     }
                 },
-                "outputRaw": {
-                    "label": "Output Raw",
-                    "field": "outputRaw",
-                    "group": "actuator",
+                "left_pTerm": {
+                    "label": "L: P Term",
+                    "field": "left_pTerm",
+                    "color": "#E57373",
+                    "visible": true,
+                    "line": {
+                        "style": "solid",
+                        "width": 2
+                    }
+                },
+                "left_output": {
+                    "label": "L: Output",
+                    "field": "left_output",
+                    "color": "#FFB74D",
+                    "visible": true,
+                    "line": {
+                        "style": "dotted",
+                        "width": 2
+                    }
+                },
+                "left_outputRaw": {
+                    "label": "L: Output Raw",
+                    "field": "left_outputRaw",
                     "color": "#FFB74D",
                     "visible": false,
                     "line": {
@@ -142,12 +213,111 @@
                         "width": 2
                     }
                 },
-                "output": {
-                    "label": "Output",
-                    "field": "output",
-                    "group": "actuator",
-                    "color": "#FF8A65",
+                "right_target_setpoint": {
+                    "label": "R: Target Setpoint",
+                    "field": "right_target_setpoint",
+                    "color": "#4FC3F7",
                     "visible": true,
+                    "line": {
+                        "style": "dotted",
+                        "width": 2
+                    }
+                },
+                "right_delta_ticks": {
+                    "label": "R: Delta Ticks",
+                    "field": "right_delta_ticks",
+                    "color": "#BA68C8",
+                    "visible": false,
+                    "line": {
+                        "style": "solid",
+                        "width": 2
+                    }
+                },
+                "right_setpoint": {
+                    "label": "R: Setpoint",
+                    "field": "right_setpoint",
+                    "color": "#4FC3F7",
+                    "visible": true,
+                    "line": {
+                        "style": "dashed",
+                        "width": 2
+                    }
+                },
+                "right_measurement": {
+                    "label": "R: Measurement",
+                    "field": "right_measurement",
+                    "color": "#81C784",
+                    "visible": true,
+                    "line": {
+                        "style": "solid",
+                        "width": 2
+                    }
+                },
+                "right_measurementRaw": {
+                    "label": "R: Meas Raw",
+                    "field": "right_measurementRaw",
+                    "color": "#43A047",
+                    "visible": false,
+                    "line": {
+                        "style": "dotted",
+                        "width": 2
+                    }
+                },
+                "right_error": {
+                    "label": "R: Error",
+                    "field": "right_error",
+                    "color": "#BA68C8",
+                    "visible": true,
+                    "line": {
+                        "style": "solid",
+                        "width": 2
+                    }
+                },
+                "right_integral": {
+                    "label": "R: Integral",
+                    "field": "right_integral",
+                    "color": "#64B5F6",
+                    "visible": false,
+                    "line": {
+                        "style": "solid",
+                        "width": 2
+                    }
+                },
+                "right_iTerm": {
+                    "label": "R: I Term",
+                    "field": "right_iTerm",
+                    "color": "#64B5F6",
+                    "visible": true,
+                    "line": {
+                        "style": "solid",
+                        "width": 2
+                    }
+                },
+                "right_pTerm": {
+                    "label": "R: P Term",
+                    "field": "right_pTerm",
+                    "color": "#E57373",
+                    "visible": true,
+                    "line": {
+                        "style": "solid",
+                        "width": 2
+                    }
+                },
+                "right_output": {
+                    "label": "R: Output",
+                    "field": "right_output",
+                    "color": "#FFB74D",
+                    "visible": true,
+                    "line": {
+                        "style": "dotted",
+                        "width": 2
+                    }
+                },
+                "right_outputRaw": {
+                    "label": "R: Output Raw",
+                    "field": "right_outputRaw",
+                    "color": "#FFB74D",
+                    "visible": false,
                     "line": {
                         "style": "dotted",
                         "width": 2
