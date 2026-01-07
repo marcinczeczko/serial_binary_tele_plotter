@@ -46,7 +46,11 @@ class TelemetryEngine(QtCore.QObject):
         # --- GUI Update Timer ---
         self.gui_update_timer = QtCore.QTimer(self)
         self.gui_update_timer.timeout.connect(self._emit_buffered_data)
-        self.gui_update_timer.setInterval(33)  # ~30 FPS
+        self.gui_update_timer.setInterval(100)  # ~10 FPS
+
+        self.serial_timer = QtCore.QTimer(self)
+        self.serial_timer.timeout.connect(self._serial_read_step)
+        self.serial_timer.setInterval(1)  # 1 ms is MORE than enough
 
     @QtCore.pyqtSlot(str, int)
     def start_working(self, port_name, baudrate):
@@ -65,6 +69,7 @@ class TelemetryEngine(QtCore.QObject):
             try:
                 self.serial_port = serial.Serial(port_name, baudrate, timeout=0.1)
                 self.serial_port.reset_input_buffer()
+                self.serial_timer.start()
                 QtCore.QTimer.singleShot(0, self._serial_read_step)
             except (ValueError, serial.SerialException) as e:
                 self.status_msg.emit(f"Connection Error: {e}")
@@ -77,6 +82,7 @@ class TelemetryEngine(QtCore.QObject):
     def stop_working(self):
         """Safely stops all operations."""
         self.gui_update_timer.stop()
+        self.serial_timer.stop()
 
         if self.state != EngineState.RUNNING:
             return
@@ -119,7 +125,7 @@ class TelemetryEngine(QtCore.QObject):
             self.stop_working()
             return
 
-        QtCore.QTimer.singleShot(0, self._serial_read_step)
+        # QtCore.QTimer.singleShot(0, self._serial_read_step)
 
     def _emit_buffered_data(self):
         """Periodic task (triggered by gui_update_timer)."""

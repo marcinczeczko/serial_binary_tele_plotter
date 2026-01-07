@@ -4,7 +4,7 @@ No normalization. No scaling math. No ViewBox stacking.
 What comes in packet['signals'] is displayed exactly on the Y-axis.
 """
 
-import copy
+import time
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -22,6 +22,10 @@ class TelemetryPlot(QtWidgets.QWidget):
 
         # --- State ---
         self.mode = PlotMode.LIVE
+
+        self._render_busy = False
+        self._last_render_ts = 0.0
+        self._min_render_interval = 0.07
 
         # signal_views: trzymamy tu tylko referencje do krzywych
         # Format: { "signal_id": { "curve": pg.PlotDataItem, "config": dict } }
@@ -43,6 +47,11 @@ class TelemetryPlot(QtWidgets.QWidget):
         self.plot: pg.PlotItem = self.graphics.addPlot()
         self.plot.showGrid(x=True, y=True, alpha=0.3)
         self.plot.setLabel("bottom", "Time [s]")
+
+        # --- PERFORMANCE CRITICAL ---
+        self.plot.setDownsampling(mode="peak")
+        self.plot.setClipToView(True)
+        self.plot.setDownsampling(mode="peak")
 
         # WŁĄCZAMY lewą oś Y i włączamy auto-skalowanie
         self.plot.getAxis("left").setVisible(True)
@@ -109,38 +118,78 @@ class TelemetryPlot(QtWidgets.QWidget):
 
             self.signal_views[sid] = {"curve": c, "config": sig}
 
+    def _compute_y_bounds(self, signals: dict) -> tuple[float, float]:
+        lo = float("inf")
+        hi = float("-inf")
+
+        for arr in signals.values():
+            if len(arr):
+                lo = min(lo, float(np.min(arr)))
+                hi = max(hi, float(np.max(arr)))
+
+        if not np.isfinite(lo) or not np.isfinite(hi):
+            return -1.0, 1.0
+
+        return lo, hi
+
     @QtCore.pyqtSlot(dict)
     def on_data_ready(self, packet: dict):
         """
         Takes RAW floats from packet and puts them on the chart.
         NO MATH HERE.
         """
-        self.last_packet = packet
-        if self.mode == PlotMode.ANALYSIS:
+        # --- FRAME SKIP GUARD ---
+        now = time.perf_counter()
+
+        if self._render_busy:
             return
 
-        time_arr = packet["time"]
-        # Pobieramy SUROWE sygnały (floats)
-        signals_data = packet["signals"]
-
-        if len(time_arr) == 0:
+        if (now - self._last_render_ts) < self._min_render_interval:
             return
 
-        for sid, raw_y in signals_data.items():
-            if sid in self.signal_views:
-                # RAW_Y idzie prosto do setData. Bez odejmowania, bez dzielenia.
-                self.signal_views[sid]["curve"].setData(time_arr, raw_y)
+        self._render_busy = True
+        self._last_render_ts = now
 
-        # Przesuwanie osi X (czas)
-        self.plot.setXRange(time_arr[0], time_arr[-1], padding=0)
+        try:
+            self.last_packet = packet
+            if self.mode == PlotMode.ANALYSIS:
+                return
 
-        self.update_hud_position()
+            time_arr = packet["time"]
+            # Pobieramy SUROWE sygnały (floats)
+            signals_data = packet["signals"]
+
+            if len(time_arr) == 0:
+                return
+
+            for sid, raw_y in signals_data.items():
+                if sid in self.signal_views:
+                    # RAW_Y idzie prosto do setData. Bez odejmowania, bez dzielenia.
+                    self.signal_views[sid]["curve"].setData(time_arr, raw_y, clear=False)
+
+            # Przesuwanie osi X (czas)
+            self.plot.setXRange(time_arr[0], time_arr[-1], padding=0)
+
+            # --- Y AXIS (ANCHOR ZERO, NO DANCING) ---
+            y_min, y_max = self._compute_y_bounds(signals_data)
+
+            span = max(abs(y_min), abs(y_max), 1e-6)
+            pad = 0.1 * span
+
+            lo = min(y_min - pad, -pad)
+            hi = max(y_max + pad, pad)
+
+            self.plot.setYRange(lo, hi, padding=0)
+
+            self.update_hud_position()
+        finally:
+            self._render_busy = False
 
     @QtCore.pyqtSlot(bool)
     def set_paused(self, paused: bool):
         if paused:
             self.mode = PlotMode.ANALYSIS
-            self.analysis_packet = copy.deepcopy(self.last_packet)
+            self.analysis_packet = self.last_packet  # copy.deepcopy(self.last_packet)
         else:
             self.mode = PlotMode.LIVE
             self.analysis_packet = None

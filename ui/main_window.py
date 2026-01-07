@@ -250,6 +250,11 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         Toggles the pause state of the plotter.
         """
+        if paused:
+            self.engine.data_ready.disconnect(self.plot.on_data_ready)
+        else:
+            self.engine.data_ready.connect(self.plot.on_data_ready)
+
         self.plot.set_paused(paused)
         self.lbl_status.setText("PAUSED" if paused else "Connected")
 

@@ -1,0 +1,3302 @@
+################################################################################
+# FILE: core/__init__.py
+################################################################################
+
+
+
+################################################################################
+# FILE: core/acquisition/__init__.py
+################################################################################
+
+
+
+################################################################################
+# FILE: core/acquisition/engine.py
+################################################################################
+
+"""
+Background engine module for telemetry data processing.
+
+This module handles the core logic of the application running in a separate thread.
+It acts as a Controller, orchestrating the flow of data between:
+1. Input Sources (Serial Hardware or Virtual Simulator)
+2. Protocol Logic (Parsing/Encoding)
+3. Data Storage (Buffering/Normalization)
+4. GUI Output (Signaling via Timer)
+"""
+
+import serial
+from PyQt6 import QtCore
+
+from core.acquisition.storage import SignalDataManager
+from core.acquisition.virtual import VirtualDevice
+from core.protocol.handler import ProtocolHandler
+from core.types import EngineState
+
+
+class TelemetryEngine(QtCore.QObject):
+    """
+    The main controller class for the background thread.
+    """
+
+    data_ready = QtCore.pyqtSignal(dict)
+    status_msg = QtCore.pyqtSignal(str)
+
+    def __init__(self, sample_period_ms: float, max_samples: int):
+        super().__init__()
+        self.sample_period_s = sample_period_ms / 1000.0
+
+        # --- Sub-components (Composition Pattern) ---
+        self.data_mgr = SignalDataManager(max_samples)
+        self.protocol = ProtocolHandler()
+
+        # 'parent=self' is crucial here! It ensures that when TelemetryEngine is moved
+        # to a new QThread, the VirtualDevice (and its internal QTimer) moves with it.
+        self.virtual = VirtualDevice(parent=self)
+        self.virtual.frame_generated.connect(self.data_mgr.store_frame)
+
+        # --- IO & State ---
+        self.serial_port = None
+        self.state: EngineState = EngineState.IDLE
+
+        # --- GUI Update Timer ---
+        self.gui_update_timer = QtCore.QTimer(self)
+        self.gui_update_timer.timeout.connect(self._emit_buffered_data)
+        self.gui_update_timer.setInterval(33)  # ~30 FPS
+
+    @QtCore.pyqtSlot(str, int)
+    def start_working(self, port_name, baudrate):
+        """Initiates the data acquisition process."""
+        if self.state != EngineState.CONFIGURED:
+            self.status_msg.emit("Worker not configured yet")
+            return
+
+        # Clear buffers to prevent "time travel" artifacts
+        self.data_mgr.clear_all()
+        self.state = EngineState.RUNNING
+
+        if port_name == "VIRTUAL":
+            self.virtual.start(self.sample_period_s)
+        else:
+            try:
+                self.serial_port = serial.Serial(port_name, baudrate, timeout=0.1)
+                self.serial_port.reset_input_buffer()
+                QtCore.QTimer.singleShot(0, self._serial_read_step)
+            except (ValueError, serial.SerialException) as e:
+                self.status_msg.emit(f"Connection Error: {e}")
+                self.state = EngineState.CONFIGURED
+                return
+
+        self.gui_update_timer.start()
+
+    @QtCore.pyqtSlot()
+    def stop_working(self):
+        """Safely stops all operations."""
+        self.gui_update_timer.stop()
+
+        if self.state != EngineState.RUNNING:
+            return
+
+        self.state = EngineState.CONFIGURED
+        self.virtual.stop()
+
+        if self.serial_port and self.serial_port.is_open:
+            try:
+                self.serial_port.close()
+            except (OSError, serial.SerialException):
+                pass
+            self.serial_port = None
+
+    @QtCore.pyqtSlot(int)
+    def send_imu_command(self, cmd_id):
+        # Tutaj logika wysyłania pakietu binarnego do MCU
+        # self.protocol.create_imu_packet(cmd_id)...
+        self.status_msg.emit(f"Sending IMU command: {cmd_id}")
+
+    def _serial_read_step(self):
+        """Performs a single, non-blocking read operation from the serial port."""
+        if self.state != EngineState.RUNNING or not self.serial_port:
+            return
+
+        try:
+            if not self.serial_port.is_open:
+                raise serial.SerialException("Port closed unexpectedly")
+
+            n = self.serial_port.in_waiting
+            if n > 0:
+                data = self.serial_port.read(n)
+                if data:
+                    self.protocol.add_data(data)
+                    for frame in self.protocol.process_available_frames():
+                        self.data_mgr.store_frame(frame)
+
+        except (serial.SerialException, OSError) as e:
+            self.status_msg.emit(f"Serial error: {str(e)}")
+            self.stop_working()
+            return
+
+        QtCore.QTimer.singleShot(0, self._serial_read_step)
+
+    def _emit_buffered_data(self):
+        """Periodic task (triggered by gui_update_timer)."""
+        if self.state != EngineState.RUNNING:
+            return
+
+        data = self.data_mgr.get_plot_data(self.sample_period_s)
+        if data:
+            self.data_ready.emit(data)
+
+    @QtCore.pyqtSlot(float, int)
+    def update_time_config(self, period_ms, max_samples):
+        """Updates sampling settings and resizes buffers."""
+        self.sample_period_s = period_ms / 1000.0
+        self.data_mgr.update_max_samples(max_samples)
+        self.virtual.update_params(self.sample_period_s)
+
+    @QtCore.pyqtSlot(dict)
+    def configure_signals(self, signals_cfg: dict):
+        """Configures the Data Manager with the signal definitions."""
+        self.data_mgr.configure(signals_cfg)
+        self.state = EngineState.CONFIGURED
+
+    # --- FIX: Dodano dekorator @QtCore.pyqtSlot(dict) ---
+    # Jest to wymagane, aby metoda była widoczna dla QMetaObject.invokeMethod
+    @QtCore.pyqtSlot(dict)
+    def configure_frame(self, stream_cfg: dict):
+        """Configures the Protocol Handler with the binary frame structure."""
+        try:
+            self.protocol.configure(stream_cfg)
+            name = stream_cfg.get("name", "Unknown")
+            self.virtual.configure_stream(name)
+        except ValueError as e:
+            self.status_msg.emit(f"Frame Config Error: {e}")
+
+    @QtCore.pyqtSlot(int, int, float, float, float, float, float, float, float, float)
+    def send_left_config(self, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps):
+        self._send_motor_config(0, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps)
+
+    @QtCore.pyqtSlot(int, int, float, float, float, float, float, float, float, float)
+    def send_right_config(self, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps):
+        self._send_motor_config(1, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps)
+
+    def _send_motor_config(self, motor_id, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps):
+        """Constructs and sends a PID configuration packet to the MCU."""
+        if not self.serial_port or not self.serial_port.is_open:
+            return
+
+        packet = self.protocol.create_pid_packet(
+            motor_id, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps
+        )
+        try:
+            self.serial_port.write(packet)
+        except (serial.SerialTimeoutException, serial.SerialException) as e:
+            print(f"Write Error: {e}")
+
+    @QtCore.pyqtSlot(
+        int,
+        int,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        int,
+        int,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+    )
+    def send_all_config(
+        self,
+        l_use_ramp,
+        l_use_pi,
+        l_kp,
+        l_ki,
+        l_k1,
+        l_k2,
+        l_k3,
+        l_k_aw,
+        l_alpha,
+        l_rps,
+        r_use_ramp,
+        r_use_pi,
+        r_kp,
+        r_ki,
+        r_k1,
+        r_k2,
+        r_k3,
+        r_k_aw,
+        r_alpha,
+        r_rps,
+    ):
+        if not self.serial_port or not self.serial_port.is_open:
+            return
+
+        packet = self.protocol.create_pid_packet_all_motors(
+            l_use_ramp,
+            l_use_pi,
+            l_kp,
+            l_ki,
+            l_k1,
+            l_k2,
+            l_k3,
+            l_k_aw,
+            l_alpha,
+            l_rps,
+            r_use_ramp,
+            r_use_pi,
+            r_kp,
+            r_ki,
+            r_k1,
+            r_k2,
+            r_k3,
+            r_k_aw,
+            r_alpha,
+            r_rps,
+        )
+        try:
+            self.serial_port.write(packet)
+        except (serial.SerialTimeoutException, serial.SerialException) as e:
+            print(f"Write Error: {e}")
+
+
+################################################################################
+# FILE: core/acquisition/storage.py
+################################################################################
+
+"""
+Data Manager Module.
+FIXED: Removed normalization logic. Returns RAW values in 'signals' key.
+"""
+
+from collections import deque
+from typing import Deque, Dict, Optional, Union
+
+import numpy as np
+
+from core.protocol.constants import LOOP_CNTR_NAME
+
+BufferValue = Union[float, int]
+
+
+class SignalDataManager:
+    """
+    Manages telemetry data buffers.
+    CLEANED: No scaling, no normalization. Pure raw data storage.
+    """
+
+    def __init__(self, max_samples: int):
+        self.max_samples = max_samples
+        self.buffers: Dict[str, Deque[BufferValue]] = {}
+        self.field_map: Dict[str, str] = {}
+
+    def configure(self, signals_cfg: dict):
+        """Initializes buffers based on configuration."""
+        self.buffers.clear()
+        self.field_map.clear()
+
+        self.buffers["__loop__"] = deque(maxlen=self.max_samples)
+
+        for sig_id, sig in signals_cfg.items():
+            self.field_map[sig_id] = sig["field"]
+            self.buffers[sig_id] = deque(maxlen=self.max_samples)
+
+    def update_max_samples(self, max_samples: int):
+        self.max_samples = max_samples
+        for sig_id, old_buf in self.buffers.items():
+            self.buffers[sig_id] = deque(old_buf, maxlen=max_samples)
+
+    def clear_all(self):
+        for buf in self.buffers.values():
+            buf.clear()
+
+    def store_frame(self, decoded_frame: dict):
+        loop_cntr = decoded_frame.get(LOOP_CNTR_NAME, 0)
+
+        self.buffers["__loop__"].append(loop_cntr)
+
+        for sig_id, field in self.field_map.items():
+            if field in decoded_frame:
+                self.buffers[sig_id].append(decoded_frame[field])
+            else:
+                # keep timeline consisten
+                self.buffers[sig_id].append(0.0)
+
+    def get_plot_data(self, sample_period_s: float) -> Optional[dict]:
+        loop_buf = self.buffers.get("__loop__")
+        if loop_buf is None or len(loop_buf) < 2:
+            return None
+
+        loop_cntr_arr = np.asarray(loop_buf, dtype=float)
+        time_axis = loop_cntr_arr * sample_period_s
+
+        snapshot_raw = {}
+
+        for sig_id, buf in self.buffers.items():
+            if sig_id == "__loop__":
+                continue
+
+            arr = np.asarray(buf, dtype=float)
+            if len(arr) != len(time_axis):
+                continue
+
+            snapshot_raw[sig_id] = arr
+
+        return {
+            "time": time_axis,
+            "signals": snapshot_raw,
+            "raw": snapshot_raw,
+        }
+
+
+################################################################################
+# FILE: core/acquisition/virtual.py
+################################################################################
+
+"""
+Virtual Device Module.
+
+This module provides a simulator that mimics the behavior of the physical MCU.
+It generates synthetic telemetry data (sine waves, noise, PID terms) to allow
+testing the GUI and data pipeline without a physical connection.
+"""
+
+import math
+import random
+from typing import Any, Dict, Optional
+
+from PyQt6 import QtCore
+
+from core.protocol.constants import LOOP_CNTR_NAME
+
+
+class VirtualDevice(QtCore.QObject):
+    """
+    Simulates a hardware device by generating fake telemetry data on a timer.
+
+    This class is designed to be a drop-in replacement for the Serial Port logic.
+    It emits dictionaries that structurally match the output of the FrameDecoder.
+
+    Attributes:
+        frame_generated (pyqtSignal): Signal emitted every simulation step.
+                                      Payload: dict (decoded frame structure).
+    """
+
+    # Signal emitting the simulated data frame (dictionary)
+    frame_generated = QtCore.pyqtSignal(dict)
+
+    def __init__(self, parent: Optional[QtCore.QObject] = None):
+        """
+        Initializes the Virtual Device.
+
+        Args:
+            parent (QObject, optional): The parent object. Crucial for Qt's
+                thread affinity system. Passing 'self' from the Worker allows
+                this object to move to the worker thread automatically.
+        """
+        super().__init__(parent)
+
+        # Initialize the internal timer.
+        self.timer = QtCore.QTimer(self)
+        self.timer.timeout.connect(self._step)
+
+        self._loop_cntr = 0
+        self._period_s = 0.05
+        self._stream_type = "pid"  # Default stream type
+        self._pid_sim = {
+            "left": {
+                "measurement": 0.0,
+                "integral": 0.0,
+                "velocity": 0.0,
+                "ramp_setpoint": 0.0,
+            },
+            "right": {
+                "measurement": 0.0,
+                "integral": 0.0,
+                "velocity": 0.0,
+                "ramp_setpoint": 0.0,
+            },
+        }
+
+    def start(self, period_s: float):
+        """
+        Starts the data generation loop.
+
+        Args:
+            period_s (float): Sampling period in seconds.
+        """
+        self._period_s = period_s
+        self._loop_cntr = 0  # Reset time on start
+
+        # Interval expects milliseconds
+        self.timer.start(int(period_s * 1000))
+
+    def stop(self):
+        """Stops the data generation loop."""
+        self.timer.stop()
+
+    def update_params(self, period_s: float):
+        """
+        Updates simulation parameters on the fly without resetting the counter.
+
+        Args:
+            period_s (float): New sampling period in seconds.
+        """
+        self._period_s = period_s
+
+        # If running, update the timer interval immediately
+        if self.timer.isActive():
+            self.timer.setInterval(int(period_s * 1000))
+
+    def configure_stream(self, stream_type: str):
+        """
+        Sets the type of data to simulate based on config name.
+        Example: "PID Telemetry" or "IMU 6-Axis"
+        """
+        name = stream_type.lower()
+        if "imu" in name:
+            self._stream_type = "imu"
+        elif "control" in name:
+            self._stream_type = "control"
+        else:
+            self._stream_type = "pid"
+
+    def _step(self):
+        """
+        Internal slot called by the timer.
+        Generates one frame of synthetic data based on the selected stream type.
+        """
+
+        def ramp(current, target, rate, dt):
+            delta = target - current
+            max_step = rate * dt
+            if abs(delta) <= max_step:
+                return target
+            return current + math.copysign(max_step, delta)
+
+        t = self._loop_cntr * self._period_s
+
+        # --- FIX: Explicit Type Hinting ---
+        # Definiujemy frame jako słownik string->cokolwiek, żeby Pylance
+        # nie krzyczał, gdy dodajemy floaty do intów.
+        frame: Dict[str, Any] = {
+            LOOP_CNTR_NAME: self._loop_cntr,
+        }
+
+        if self._stream_type == "pid":
+            dt = 0.005  # 5ms
+            ticks_per_rev = 3800
+            ramp_rate = 1.5  # RPS/s – jak w MCU
+
+            base_target = math.sin(t * 0.5) * 1.0
+
+            for side in ("left", "right"):
+                sim = self._pid_sim[side]
+
+                # --- external command ---
+                target_setpoint = base_target + (0.05 if side == "right" else 0.0)
+
+                # --- RAMP (this is what PID sees) ---
+                sim["ramp_setpoint"] = ramp(
+                    sim["ramp_setpoint"],
+                    target_setpoint,
+                    ramp_rate,
+                    dt,
+                )
+                setpoint = sim["ramp_setpoint"]
+
+                # --- plant ---
+                tau = 0.15
+                sim["velocity"] += (setpoint - sim["velocity"]) * (dt / tau)
+
+                delta_ticks = int(sim["velocity"] * ticks_per_rev * dt)
+
+                measurement_raw = sim["velocity"] + random.uniform(-0.02, 0.02)
+                measurement = sim["measurement"] * 0.7 + measurement_raw * 0.3
+                sim["measurement"] = measurement
+
+                # --- PI ---
+                error = setpoint - measurement
+
+                kp, ki, kff = 20.0, 10.0, 30.0
+
+                sim["integral"] += error * dt
+                sim["integral"] = max(min(sim["integral"], 50.0), -50.0)
+
+                p_term = kp * error
+                i_term = ki * sim["integral"]
+                ff_term = kff * setpoint
+
+                raw_output = p_term + i_term + ff_term
+                output = max(min(raw_output, 100.0), -100.0)
+
+                if raw_output != output:
+                    sim["integral"] -= error * dt
+
+                frame.update(
+                    {
+                        f"{side}_target_setpoint": target_setpoint,
+                        f"{side}_setpoint": setpoint,
+                        f"{side}_measurement": measurement,
+                        f"{side}_measurementRaw": measurement_raw,
+                        f"{side}_error": error,
+                        f"{side}_integral": sim["integral"],
+                        f"{side}_pTerm": p_term,
+                        f"{side}_iTerm": i_term,
+                        f"{side}_outputRaw": raw_output,
+                        f"{side}_output": output,
+                        f"{side}_delta_ticks": delta_ticks,
+                    }
+                )
+
+        elif self._stream_type == "imu":
+            # --- IMU SIMULATION ---
+            # Simulate generic movements
+            # Accel Z ~ 1g (gravity), X/Y noise around 0
+
+            frame.update(
+                {
+                    "acc_x": math.sin(t * 2.0) * 0.5 + random.uniform(-0.1, 0.1),
+                    "acc_y": math.cos(t * 2.0) * 0.5 + random.uniform(-0.1, 0.1),
+                    "acc_z": 1.0 + random.uniform(-0.05, 0.05),
+                    "gyro_x": random.uniform(-5, 5),
+                    "gyro_y": random.uniform(-5, 5),
+                    "gyro_z": math.sin(t) * 50.0,
+                }
+            )
+        elif self._stream_type == "control":
+            # --- CONTROL LOOP SIMULATION ---
+            sp_l = math.sin(t * 1.0)
+            sp_r = math.cos(t * 1.0)
+
+            frame.update(
+                {
+                    "setpointL": sp_l,
+                    "setpointR": sp_r,
+                    "rampSetpointL": sp_l * 0.9,
+                    "rampSetpointR": sp_r * 0.9,
+                    "measuredRpsL": sp_l * 0.9 + random.uniform(-0.05, 0.05),
+                    "measuredRpsR": sp_r * 0.9 + random.uniform(-0.05, 0.05),
+                    "deltaLticks": random.uniform(-1, 1),
+                    "deltaRticks": random.uniform(-1, 1),
+                }
+            )
+
+        # Emit data to the Worker
+        self.frame_generated.emit(frame)
+        self._loop_cntr += 1
+
+
+################################################################################
+# FILE: core/config.py
+################################################################################
+
+"""
+Module responsible for loading and managing telemetry stream configurations.
+"""
+
+import json
+from pathlib import Path
+
+
+class StreamConfigLoader:
+    """
+    Manages the configuration for data streams.
+    """
+
+    def __init__(self, path: str):
+        self.path = Path(path)
+
+        if not self.path.exists():
+            raise FileNotFoundError(f"Required configuration file not found: {self.path.resolve()}")
+
+        self.data = {}
+        self.load()
+
+        # Basic sanity validation
+        if "streams" not in self.data or not isinstance(self.data["streams"], dict):
+            raise ValueError("Invalid streams.json: missing or invalid 'streams' section")
+
+        # --- FIX: Ensure panel_type exists ---
+        for key, val in self.data["streams"].items():
+            if "panel_type" not in val:
+                val["panel_type"] = "none"
+
+    def load(self):
+        """Loads and parses the JSON configuration file."""
+        try:
+            with self.path.open("r", encoding="utf-8") as f:
+                self.data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in {self.path}: {e}") from e
+
+    def list_streams(self) -> dict:
+        """Returns all available stream definitions."""
+        return self.data["streams"]
+
+    def get_stream(self, stream_id: str) -> dict:
+        """Returns configuration for a specific stream."""
+        try:
+            return self.data["streams"][stream_id]
+        except KeyError:
+            raise KeyError(f"Stream '{stream_id}' not found in streams.json")
+
+
+################################################################################
+# FILE: core/protocol/__init__.py
+################################################################################
+
+
+
+################################################################################
+# FILE: core/protocol/constants.py
+################################################################################
+
+"""
+Protocol Constants.
+
+Defines magic numbers, Packet IDs, and data type mappings used
+for binary frame parsing.
+"""
+
+# Frame Synchronization Markers
+MAGIC_0 = 0xAA
+MAGIC_1 = 0x55
+
+# Packet IDs
+RTP_REQ_PID_SINGLE = 0x10  # Configuration Request - single motor
+RTP_REQ_PID_ALL = 0x11  # Configuration Request - all motors
+
+
+# Mapping: JSON type string -> (struct format char, size in bytes)
+STRUCT_TYPE_MAP = {
+    "u8": ("B", 1, "uint8"),
+    "i8": ("b", 1, "int8"),
+    "u16": ("H", 2, "uint16"),
+    "i16": ("h", 2, "int16"),
+    "u32": ("I", 4, "uint32"),
+    "i32": ("i", 4, "int32"),
+    "f32": ("f", 4, "float32"),
+}
+
+LOOP_CNTR_NAME = "loop_cntr"
+
+
+################################################################################
+# FILE: core/protocol/crc.py
+################################################################################
+
+"""
+CRC Utility Module.
+"""
+
+
+def calculate_crc8(data: bytes) -> int:
+    """
+    Computes the 8-bit Cyclic Redundancy Check (CRC) for the given data.
+    Polynomial: 0x07 (x^8 + x^2 + x + 1).
+    """
+    crc = 0x00
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            if crc & 0x80:
+                crc = ((crc << 1) ^ 0x07) & 0xFF
+            else:
+                crc = (crc << 1) & 0xFF
+    return crc
+
+
+################################################################################
+# FILE: core/protocol/decoder.py
+################################################################################
+
+"""
+Frame Decoder Module.
+
+This module provides the `FrameDecoder` class, which is responsible for converting
+raw binary payloads (bytes) into structured Python dictionaries. It acts as a wrapper
+around Python's built-in `struct` module, allowing the binary structure to be defined
+dynamically via configuration files rather than hardcoded classes.
+"""
+
+import struct
+
+from core.protocol.constants import STRUCT_TYPE_MAP
+
+
+class FrameDecoder:
+    """
+    Dynamically decodes binary payloads based on a field definition list.
+
+    Instead of hardcoding binary structures (like C structs), this class builds
+    the `struct` format string at runtime based on the list of fields provided
+    in the configuration (streams.json).
+
+    Attributes:
+        fields (list): List of field definitions (dictionaries containing name and type).
+        endian (str): Struct endianness character ('<' for little, '>' for big).
+        format (str): The compiled struct format string (e.g., "<IfBf").
+        names (list): Pre-cached list of field names to map unpacked values quickly.
+    """
+
+    def __init__(self, endian: str, fields: list):
+        """
+        Initializes the FrameDecoder.
+
+        Args:
+            endian (str): Data endianness ("little" or "big").
+            fields (list): A list of field dicts, e.g.:
+                           [{'name': 'cnt', 'type': 'u32'}, {'name': 'val', 'type': 'f32'}]
+        """
+        self.fields = fields
+
+        # Translate readable endianness to struct format characters
+        # '<' = Little-endian (standard for ARM Cortex-M)
+        # '>' = Big-endian
+        self.endian = "<" if endian == "little" else ">"
+
+        # Pre-compile the format string for performance
+        self.format = self._build_struct_fmt()
+
+        # Cache names to avoid re-iterating the list during high-frequency decoding
+        self.names = [f["name"] for f in fields]
+
+    def _build_struct_fmt(self) -> str:
+        """
+        Constructs the Python struct format string from field definitions.
+
+        Iterates through the fields config, looks up the corresponding struct char
+        in `STRUCT_TYPE_MAP` (e.g., 'u32' -> 'I'), and appends it to the string.
+
+        Returns:
+            str: The complete format string (e.g., "<IIffB").
+        """
+        fmt = self.endian
+        for f in self.fields:
+            # Look up the struct code (e.g., 'I') for the given type name (e.g., 'u32')
+            if f["type"] not in STRUCT_TYPE_MAP:
+                raise ValueError(f"Unknown type '{f['type']}' in field definition.")
+
+            type_info = STRUCT_TYPE_MAP[f["type"]]
+            code = type_info[0]
+            fmt += code
+        return fmt
+
+    def decode(self, payload: bytes) -> dict:
+        """
+        Unpacks binary data into a dictionary.
+
+        Args:
+            payload (bytes): The raw byte sequence to decode. Must match self.size.
+
+        Returns:
+            dict: Key-value pairs where keys are field names and values are unpacked numbers.
+
+        Raises:
+            struct.error: If the payload length does not match the format size.
+        """
+        # struct.unpack returns a tuple of values
+        values = struct.unpack(self.format, payload)
+
+        # Zip combines the names list with the values tuple to create the dict
+        # Example: zip(['cnt', 'val'], (100, 3.14)) -> {'cnt': 100, 'val': 3.14}
+        return dict(zip(self.names, values))
+
+    @property
+    def size(self) -> int:
+        """
+        Returns the expected size of the binary frame in bytes.
+
+        This is useful for the ProtocolHandler to know how many bytes to wait for
+        before attempting to decode a payload.
+        """
+        return struct.calcsize(self.format)
+
+
+################################################################################
+# FILE: core/protocol/handler.py
+################################################################################
+
+"""
+Protocol Handler Module.
+
+This module provides the `ProtocolHandler` class, which is responsible for the
+low-level details of the binary communication protocol. It handles:
+1. Buffering incoming raw bytes.
+2. Synchronizing to the data stream (finding Magic Bytes).
+3. Validating integrity via CRC8 (Header and Payload).
+4. decoding binary payloads into Python dictionaries.
+5. Encoding configuration commands back into binary frames.
+"""
+
+import struct
+from typing import Generator, Optional
+
+from core.protocol.constants import (
+    MAGIC_0,
+    MAGIC_1,
+    RTP_REQ_PID_ALL,
+    RTP_REQ_PID_SINGLE,
+)
+from core.protocol.crc import calculate_crc8
+from core.protocol.decoder import FrameDecoder
+
+DEBUG_DECODE = False
+TRACE_DECODE = False
+DEBUG_DECODE_PAYLOAD = False
+
+
+class ProtocolHandler:
+    """
+    Manages the binary data stream logic.
+
+    It encapsulates the Receive Buffer (`rx_buffer`) and the `FrameDecoder`.
+    It acts as a stream parser: you feed it raw chunked bytes, and it yields
+    complete, validated frames.
+    """
+
+    def __init__(self):
+        """Initializes the handler with an empty buffer."""
+        self.rx_buffer = bytearray()
+        self.decoder: Optional[FrameDecoder] = None
+        self.active_stream_id: Optional[int] = None
+
+    def configure(self, stream_cfg: dict):
+        """
+        Configures the FrameDecoder based on the JSON stream definition.
+
+        Args:
+            stream_cfg (dict): Configuration dictionary containing the 'frame' section.
+        """
+        if "frame" not in stream_cfg:
+            raise ValueError("Stream config missing 'frame' definition")
+
+        frame = stream_cfg["frame"]
+        self.decoder = FrameDecoder(
+            endian=frame.get("endianness", "little"),
+            fields=frame["fields"],
+        )
+        self.active_stream_id = frame.get("stream_id")
+
+        if DEBUG_DECODE:
+            print(f"[PROTO] Configured Stream ID: {self.active_stream_id}")
+
+    def add_data(self, data: bytes):
+        """
+        Ingests raw bytes into the internal processing buffer.
+
+        Args:
+            data (bytes): Chunk of data read from the serial port.
+        """
+        if TRACE_DECODE:
+            print(f"[RX][BUF] +{len(data)} bytes")
+        self.rx_buffer.extend(data)
+
+    def process_available_frames(self) -> Generator[dict, None, None]:
+        """
+        Parses the internal buffer and yields all complete, valid frames found.
+
+        This method implements a 'state machine' loop that:
+        1. Synchronizes to Magic Bytes (0xAA 0x55).
+        2. Validates the Header CRC.
+        3. Waits until enough bytes are available for the Payload.
+        4. Validates Payload CRC and decodes.
+
+        Yields:
+            dict: Decoded telemetry frame.
+        """
+        # Safety: Prevent infinite memory growth if sync is never found
+        if len(self.rx_buffer) > 4096:
+            if TRACE_DECODE:
+                print("[RX][WARN] Buffer overflow (>4KB), clearing to reset sync.")
+            self.rx_buffer.clear()
+            return
+
+        while True:
+            # 1. Check for minimal frame size
+            # (2 Magic + 1 Type + 1 Len + 1 HeaderCRC + 0 Payload + 1 PayloadCRC = 6 bytes)
+            if len(self.rx_buffer) < 6:
+                break
+
+            # 2. Synchronization (Find Magic Bytes)
+            if self.rx_buffer[0] != MAGIC_0 or self.rx_buffer[1] != MAGIC_1:
+                # If first bytes aren't magic, drop one byte and retry (sliding window)
+                del self.rx_buffer[0]
+                continue
+
+            # 3. Parse Header
+            # Header structure: [MAGIC0][MAGIC1][TYPE][LEN][H_CRC]
+            p_len = self.rx_buffer[3]
+            h_crc = self.rx_buffer[4]
+
+            header = bytes(self.rx_buffer[:4])
+
+            # 4. Validate Header CRC
+            if calculate_crc8(header) != h_crc:
+                # Corrupted header: drop the first byte and try to re-sync
+                del self.rx_buffer[0]
+                continue
+
+            # 5. Check Payload Availability
+            # Full frame size = 5 bytes (Header+CRC) + p_len (Payload) + 1 byte (PayloadCRC)
+            frame_len = 5 + p_len + 1
+
+            if len(self.rx_buffer) < frame_len:
+                # We have a valid header, but not enough data for the body yet.
+                # Stop processing and wait for the next `add_data` call.
+                break
+
+            # 6. Extract Payload
+            p_type = self.rx_buffer[2]
+            payload = bytes(self.rx_buffer[5 : 5 + p_len])
+            p_crc = self.rx_buffer[5 + p_len]
+
+            # 7. Consume the bytes from the buffer
+            # Important: Remove bytes BEFORE decoding. If CRC fails, we discard the frame
+            # but we must advance the buffer to avoid getting stuck processing the same bytes.
+            del self.rx_buffer[:frame_len]
+
+            # 8. Validate Payload CRC and Decode
+            if calculate_crc8(payload) == p_crc:
+                decoded = self._decode_payload(p_type, payload)
+                if decoded:
+                    yield decoded
+            elif TRACE_DECODE:
+                print("[RX][CRC] Payload CRC check failed")
+
+    def _decode_payload(self, p_type: int, payload: bytes) -> Optional[dict]:
+        """
+        Decodes payload ONLY if p_type matches the active stream configuration.
+        """
+        if not self.decoder or self.active_stream_id is None:
+            return None
+
+        # Ensure we are processing the expected stream type
+        if p_type != self.active_stream_id:
+            return None
+
+        # Double check size (though header validation usually covers this)
+        if len(payload) != self.decoder.size:
+            if DEBUG_DECODE:
+                print(
+                    f"[RX][ERR] Size mismatch for ID {p_type}. Got {len(payload)}, expected {self.decoder.size}"
+                )
+            return None
+        else:
+            if DEBUG_DECODE:
+                print(
+                    f"[RX][OK] Size match for ID {p_type}. Got {len(payload)}, expected {self.decoder.size}"
+                )
+        try:
+            decoded = self.decoder.decode(payload)
+            if DEBUG_DECODE_PAYLOAD:
+                print(f"[RX][DATA] {decoded}")
+            return decoded
+        except struct.error:
+            return None
+
+    def create_pid_packet(
+        self, motor_id, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps
+    ) -> bytes:
+        """
+        Constructs a binary packet for PID configuration to be sent to the MCU.
+
+        Structure:
+        [Header: MAGIC0, MAGIC1, PID_REQ_ID, LEN] + [H_CRC] + [Payload] + [P_CRC]
+
+        """
+        payload = struct.pack(
+            "<BffffffffBB", motor_id, kp, ki, k1, k2, k3, k_aw, alpha, rps, use_ramp, use_pi
+        )
+
+        h_base = struct.pack("BBBB", MAGIC_0, MAGIC_1, RTP_REQ_PID_SINGLE, len(payload))
+        h_crc = calculate_crc8(h_base)
+        p_crc = calculate_crc8(payload)
+
+        return h_base + struct.pack("B", h_crc) + payload + struct.pack("B", p_crc)
+
+    def create_pid_packet_all_motors(
+        self,
+        l_use_ramp,
+        l_use_pi,
+        l_kp,
+        l_ki,
+        l_k1,
+        l_k2,
+        l_k3,
+        l_k_aw,
+        l_alpha,
+        l_rps,
+        r_use_ramp,
+        r_use_pi,
+        r_kp,
+        r_ki,
+        r_k1,
+        r_k2,
+        r_k3,
+        r_k_aw,
+        r_alpha,
+        r_rps,
+    ) -> bytes:
+        """
+        Constructs a binary packet for PID configuration to be sent to the MCU for both motors
+        """
+        payload = struct.pack(
+            "<ffffffffBBffffffffBB",
+            l_kp,
+            l_ki,
+            l_k1,
+            l_k2,
+            l_k3,
+            l_k_aw,
+            l_alpha,
+            l_rps,
+            l_use_ramp,
+            l_use_pi,
+            r_kp,
+            r_ki,
+            r_k1,
+            r_k2,
+            r_k3,
+            r_k_aw,
+            r_alpha,
+            r_rps,
+            r_use_ramp,
+            r_use_pi,
+        )
+
+        h_base = struct.pack("BBBB", MAGIC_0, MAGIC_1, RTP_REQ_PID_ALL, len(payload))
+        h_crc = calculate_crc8(h_base)
+        p_crc = calculate_crc8(payload)
+
+        return h_base + struct.pack("B", h_crc) + payload + struct.pack("B", p_crc)
+
+
+################################################################################
+# FILE: core/types.py
+################################################################################
+
+"""
+Shared Types Module.
+
+Contains Enums and Type Aliases used across the entire application to prevent
+circular imports.
+"""
+
+from enum import Enum, auto
+
+
+class PlotMode(Enum):
+    """Operational modes of the plotter visualization."""
+
+    LIVE = 1
+    ANALYSIS = 2
+
+
+class EngineState(Enum):
+    """Lifecycle states of the Telemetry Engine."""
+
+    IDLE = auto()
+    CONFIGURED = auto()
+    RUNNING = auto()
+
+
+################################################################################
+# FILE: main.py
+################################################################################
+
+"""
+Application Entry Point.
+
+This script serves as the bootstrap for the DiffBot Telemetry Viewer.
+It initializes the Qt Application context, applies the global visual theme,
+sets up signal handling for graceful termination (e.g., via Ctrl+C), and
+launches the main window.
+"""
+
+import signal
+import sys
+
+from PyQt6 import QtCore, QtWidgets
+
+from styles import apply_dark_theme
+from ui.main_window import MainWindow
+
+
+def main():
+    """
+    Main execution function.
+
+    Steps:
+    1. Initializes the QApplication.
+    2. Applies the custom dark theme defined in styles.py.
+    3. Instantiates and shows the MainWindow.
+    4. Configures system signal handling (SIGINT) to allow terminal termination.
+    5. Starts the Qt Event Loop.
+    """
+    app = QtWidgets.QApplication(sys.argv)
+
+    # Apply the global dark theme
+    apply_dark_theme(app)
+
+    # Initialize and display the main UI
+    win = MainWindow()
+    win.show()
+
+    # Handle Ctrl+C (SIGINT) to gracefully quit the application from the terminal
+    signal.signal(signal.SIGINT, lambda *args: app.quit())
+
+    # Create a dummy timer that fires every 500ms.
+    # This wakes up the Python interpreter periodically, allowing it to process
+    # system signals (like Ctrl+C) which are otherwise blocked by the C++ Qt event loop.
+    timer = QtCore.QTimer()
+    timer.start(500)
+    timer.timeout.connect(lambda: None)
+
+    # Enter the main event loop
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
+
+
+################################################################################
+# FILE: styles.py
+################################################################################
+
+"""
+Application Styling Module.
+
+This module provides a centralized function to apply a consistent dark theme
+to the entire PyQt6 application. It leverages the 'Fusion' style engine as a base
+and overrides the color palette and stylesheets to create a modern, high-contrast
+dark interface suitable for telemetry visualization.
+"""
+
+from PyQt6 import QtCore, QtWidgets
+
+
+def apply_dark_theme(app: QtWidgets.QApplication):
+    """
+    Applies a custom dark theme to the given QApplication instance.
+
+    This function performs two main styling operations:
+    1. Sets the application style to "Fusion" and configures the QPalette
+       to use dark backgrounds (black/gray) and light text (white).
+    2. Applies a global QSS (Qt Style Sheet) to fine-tune specific widgets
+       like checkboxes, spinboxes, group boxes, and buttons, ensuring a
+       consistent look and feel across the application.
+
+    Args:
+        app (QtWidgets.QApplication): The main application instance to style.
+    """
+    # Set the base style engine
+    app.setStyle("Fusion")
+
+    # --- Palette Configuration ---
+    palette = app.palette()
+    palette.setColor(palette.ColorRole.Window, QtCore.Qt.GlobalColor.black)
+    palette.setColor(palette.ColorRole.WindowText, QtCore.Qt.GlobalColor.white)
+    palette.setColor(palette.ColorRole.Base, QtCore.Qt.GlobalColor.black)
+    palette.setColor(palette.ColorRole.AlternateBase, QtCore.Qt.GlobalColor.darkGray)
+    palette.setColor(palette.ColorRole.Text, QtCore.Qt.GlobalColor.white)
+    palette.setColor(palette.ColorRole.Button, QtCore.Qt.GlobalColor.darkGray)
+    palette.setColor(palette.ColorRole.ButtonText, QtCore.Qt.GlobalColor.white)
+    palette.setColor(palette.ColorRole.Highlight, QtCore.Qt.GlobalColor.blue)
+    app.setPalette(palette)
+
+    # --- Stylesheet Overrides ---
+    app.setStyleSheet(
+        """  
+        QCheckBox::indicator {
+            width: 16px;
+            height: 16px;
+            border: 1px solid #777;
+            border-radius: 3px;
+            background: transparent;
+        }
+
+        QCheckBox::indicator:checked {
+            background-color: gray;
+        }
+  
+        QDoubleSpinBox, QSpinBox, QLineEdit { padding: 2px; background-color: #1e1e1e; border: 1px solid #333; color: #fff; }
+        
+        QGroupBox { border: 1px solid #333; margin-top: 6px; padding-top: 10px; font-weight: bold; color: #aaa; }
+        QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 3px; }
+        
+        QPushButton { background-color: #333; border: 1px solid #555; border-radius: 3px; padding: 5px; color: white; }
+        QPushButton:hover { background-color: #444; }
+        QPushButton:pressed { background-color: #222; }
+        QPushButton:checked { background-color: #555; border: 1px solid #888; }
+        
+        QComboBox { background-color: #1e1e1e; border: 1px solid #333; color: white; padding: 4px; }
+        
+        QStatusBar { color: #888; }
+
+        /* --- Tabs Styling (FIX for grey background) --- */
+        QTabWidget::pane { 
+            border: 1px solid #333; 
+            background-color: black; /* Force black background for content area */
+        }
+        QTabBar::tab {
+            background: #222;
+            color: #888;
+            padding: 8px 20px;
+            border-top-left-radius: 4px;
+            border-top-right-radius: 4px;
+            border: 1px solid #333;
+            margin-right: 2px;
+        }
+        QTabBar::tab:selected {
+            background: #444;
+            color: white;
+            border-bottom: 2px solid #4FC3F7; /* Blue highlight for active tab */
+        }
+        QTabBar::tab:hover {
+            background: #333;
+        }
+        """
+    )
+
+
+################################################################################
+# FILE: ui/__init__.py
+################################################################################
+
+
+
+################################################################################
+# FILE: ui/charts/__init__.py
+################################################################################
+
+
+
+################################################################################
+# FILE: ui/charts/telemetry_plot.py
+################################################################################
+
+"""
+Telemetry Plotting Module (Absolute Raw Mode).
+No normalization. No scaling math. No ViewBox stacking.
+What comes in packet['signals'] is displayed exactly on the Y-axis.
+"""
+
+import copy
+from typing import Any, Dict, Optional
+
+import numpy as np
+import pyqtgraph as pg
+from PyQt6 import QtCore, QtWidgets
+
+from core.types import PlotMode
+
+
+class TelemetryPlot(QtWidgets.QWidget):
+    cursor_moved = QtCore.pyqtSignal(str)
+
+    def __init__(self):
+        super().__init__()
+
+        # --- State ---
+        self.mode = PlotMode.LIVE
+
+        # signal_views: trzymamy tu tylko referencje do krzywych
+        # Format: { "signal_id": { "curve": pg.PlotDataItem, "config": dict } }
+        self.signal_views: Dict[str, Dict[str, Any]] = {}
+
+        self.last_packet: Optional[dict] = None
+        self.analysis_packet: Optional[dict] = None
+
+        self.anchor_time: Optional[float] = None
+        self.anchor_values: Dict[str, float] = {}
+
+        # --- UI Layout ---
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.graphics = pg.GraphicsLayoutWidget()
+        layout.addWidget(self.graphics)
+
+        # Główny PlotItem
+        self.plot: pg.PlotItem = self.graphics.addPlot()
+        self.plot.showGrid(x=True, y=True, alpha=0.3)
+        self.plot.setLabel("bottom", "Time [s]")
+
+        # WŁĄCZAMY lewą oś Y i włączamy auto-skalowanie
+        self.plot.getAxis("left").setVisible(True)
+        self.plot.enableAutoRange(axis="y")
+        # Opcjonalnie: zablokuj minimalny zakres, żeby nie szalało przy zerach
+        # self.plot.setLimits(yMin=-1000, yMax=1000)
+
+        # --- Interactive Tools ---
+        self.vLine = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen("#888", width=1))
+        self.plot.addItem(self.vLine, ignoreBounds=True)
+
+        self.anchorLine = pg.InfiniteLine(
+            angle=90,
+            movable=False,
+            pen=pg.mkPen("#00E676", style=QtCore.Qt.PenStyle.DashLine, width=2),
+        )
+        self.anchorLine.setVisible(False)
+        self.plot.addItem(self.anchorLine, ignoreBounds=True)
+
+        self.label = pg.TextItem(anchor=(0, 0), color="#FFF")
+        self.plot.addItem(self.label, ignoreBounds=True)
+
+        # --- Events ---
+        scene = self.plot.scene()
+        scene.sigMouseMoved.connect(self.mouse_moved_handler)
+        scene.sigMouseClicked.connect(self.on_mouse_clicked)
+        self.plot.sigRangeChanged.connect(self.update_hud_position)
+
+    @QtCore.pyqtSlot(dict)
+    def configure_signals(self, signals_cfg: dict):
+        """
+        Recreates curves on the single shared plot.
+        IGNORES min/max/range settings completely.
+        """
+        # 1. CLEANUP
+        self.plot.clear()
+        self.signal_views.clear()
+
+        # Restore tools
+        self.plot.addItem(self.vLine, ignoreBounds=True)
+        self.plot.addItem(self.anchorLine, ignoreBounds=True)
+        self.plot.addItem(self.label, ignoreBounds=True)
+
+        # 2. REBUILD
+        for sid, sig in signals_cfg.items():
+            # Styl linii
+            style = sig["line"].get("style", "solid")
+            pen_style = QtCore.Qt.PenStyle.SolidLine
+            if style == "dashed":
+                pen_style = QtCore.Qt.PenStyle.DashLine
+            elif style == "dotted":
+                pen_style = QtCore.Qt.PenStyle.DotLine
+
+            # Tworzymy krzywą bezpośrednio w głównym oknie
+            c = pg.PlotDataItem(
+                pen=pg.mkPen(color=sig["color"], width=sig["line"]["width"], style=pen_style),
+                name=sig.get("label", sid),
+                skipFiniteCheck=True,
+            )
+
+            # Widoczność
+            c.setVisible(sig.get("visible", True))
+            self.plot.addItem(c)
+
+            self.signal_views[sid] = {"curve": c, "config": sig}
+
+    @QtCore.pyqtSlot(dict)
+    def on_data_ready(self, packet: dict):
+        """
+        Takes RAW floats from packet and puts them on the chart.
+        NO MATH HERE.
+        """
+        self.last_packet = packet
+        if self.mode == PlotMode.ANALYSIS:
+            return
+
+        time_arr = packet["time"]
+        # Pobieramy SUROWE sygnały (floats)
+        signals_data = packet["signals"]
+
+        if len(time_arr) == 0:
+            return
+
+        for sid, raw_y in signals_data.items():
+            if sid in self.signal_views:
+                # RAW_Y idzie prosto do setData. Bez odejmowania, bez dzielenia.
+                self.signal_views[sid]["curve"].setData(time_arr, raw_y)
+
+        # Przesuwanie osi X (czas)
+        self.plot.setXRange(time_arr[0], time_arr[-1], padding=0)
+
+        self.update_hud_position()
+
+    @QtCore.pyqtSlot(bool)
+    def set_paused(self, paused: bool):
+        if paused:
+            self.mode = PlotMode.ANALYSIS
+            self.analysis_packet = copy.deepcopy(self.last_packet)
+        else:
+            self.mode = PlotMode.LIVE
+            self.analysis_packet = None
+            self.anchor_time = None
+            self.anchorLine.setVisible(False)
+            self.label.setHtml("")
+
+    def mouse_moved_handler(self, pos: QtCore.QPointF):
+        vb = self.plot.getViewBox()
+        if vb.sceneBoundingRect().contains(pos):
+            mousePoint = vb.mapSceneToView(pos)
+            self._process_mouse_movement(mousePoint.x())
+
+    def _process_mouse_movement(self, x_curr: float):
+        ds = self.analysis_packet if self.mode == PlotMode.ANALYSIS else self.last_packet
+        if not ds or len(ds["time"]) < 2:
+            return
+
+        t_arr = ds["time"]
+        x_clamped = float(np.clip(x_curr, t_arr[0], t_arr[-1]))
+
+        self.vLine.setPos(x_clamped)
+        self.update_tooltip(x_clamped, ds)
+
+    def on_mouse_clicked(self, evt):
+        if self.mode != PlotMode.ANALYSIS:
+            return
+        if evt.button() != QtCore.Qt.MouseButton.LeftButton:
+            return
+
+        vb = self.plot.getViewBox()
+        if vb.sceneBoundingRect().contains(evt.scenePos()):
+            mousePoint = vb.mapSceneToView(evt.scenePos())
+            t_stamp = mousePoint.x()
+
+            self.anchor_time = t_stamp
+            self.anchorLine.setPos(t_stamp)
+            self.anchorLine.setVisible(True)
+            self._capture_anchor_values(t_stamp)
+            self._process_mouse_movement(t_stamp)
+
+    def _capture_anchor_values(self, t_anchor: float):
+        if not self.analysis_packet:
+            return
+        t_arr = self.analysis_packet["time"]
+        raw_map = self.analysis_packet["signals"]
+
+        self.anchor_values = {
+            sid: float(np.interp(t_anchor, t_arr, vals)) for sid, vals in raw_map.items()
+        }
+
+    def update_hud_position(self):
+        vb = self.plot.getViewBox()
+        ranges = vb.viewRange()
+        xr, yr = ranges[0], ranges[1]
+        x_pos = xr[0] + 0.01 * (xr[1] - xr[0])
+        y_pos = yr[1] - 0.02 * (yr[1] - yr[0])
+        self.label.setPos(x_pos, y_pos)
+
+    def update_tooltip(self, cur_t: float, ds: dict):
+        t_arr = ds["time"]
+        raw_map = ds["signals"]
+
+        html = f'<div style="background-color: rgba(0, 0, 0, 0.7); padding: 6px; font-family: monospace; border: 1px solid #444;">'
+        html += f'<b style="color: white;">T: {cur_t:.3f} s</b>'
+        if self.anchor_time:
+            dt = cur_t - self.anchor_time
+            html += f' <span style="color: #00E676;">(Δ {dt:+.3f} s)</span>'
+        html += "<br><hr style='margin: 4px 0; border: 0; border-top: 1px solid #555;'>"
+
+        sorted_sids = sorted(raw_map.keys())
+        for sid in sorted_sids:
+            if sid not in self.signal_views:
+                continue
+            view_data = self.signal_views[sid]
+            if not view_data["curve"].isVisible():
+                continue
+
+            vals = raw_map[sid]
+            data_len = min(len(t_arr), len(vals))
+            if data_len < 2:
+                continue
+
+            v = float(np.interp(cur_t, t_arr[:data_len], vals[:data_len]))
+            color = view_data["config"]["color"]
+            label = view_data["config"].get("label", sid)
+
+            row = f'<span style="color: {color};">{label}: <b>{v:+.3f}</b>'
+            if self.anchor_time and sid in self.anchor_values:
+                d_val = v - self.anchor_values[sid]
+                row += f' <span style="color: #aaa; font-size: smaller;">(Δ {d_val:+.3f})</span>'
+            html += row + "</span><br>"
+
+        self.label.setHtml(html + "</div>")
+        self.update_hud_position()
+
+    @QtCore.pyqtSlot(str, bool)
+    def set_signal_visible(self, sig_id: str, visible: bool):
+        if sig_id in self.signal_views:
+            self.signal_views[sig_id]["curve"].setVisible(visible)
+
+
+################################################################################
+# FILE: ui/common/__init__.py
+################################################################################
+
+
+
+################################################################################
+# FILE: ui/common/color_button.py
+################################################################################
+
+"""
+Reusable UI Component: Color Picker Button.
+"""
+
+from PyQt6 import QtCore, QtGui, QtWidgets
+
+
+class ColorButton(QtWidgets.QPushButton):
+    """
+    Custom widget: A button that opens a color picker and displays the selected color code.
+    Updates its background color and text contrast automatically.
+    """
+
+    colorChanged = QtCore.pyqtSignal(str)
+
+    def __init__(self, hex_color: str = "#FFFFFF", parent=None):
+        super().__init__(parent)
+        self.hex_color = hex_color
+        self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(24)
+
+        self.clicked.connect(self.pick_color)
+        self.refresh_style()
+
+    def refresh_style(self):
+        """Updates the button background and text color based on brightness."""
+        text_col = "black"
+        try:
+            c = QtGui.QColor(self.hex_color)
+            if c.lightness() < 128:
+                text_col = "white"
+        except Exception:
+            pass
+
+        self.setStyleSheet(
+            f"""
+            QPushButton {{
+                background-color: {self.hex_color}; 
+                color: {text_col}; 
+                border: 1px solid #555; 
+                border-radius: 2px;
+                font-family: monospace;
+                font-weight: bold;
+                padding: 0px;
+            }}
+            QPushButton:hover {{
+                border: 1px solid #FFF;
+            }}
+        """
+        )
+        self.setText(self.hex_color)
+
+    def set_color(self, hex_color: str):
+        self.hex_color = hex_color
+        self.refresh_style()
+
+    def pick_color(self):
+        color = QtWidgets.QColorDialog.getColor(
+            QtGui.QColor(self.hex_color), self, "Pick Signal Color"
+        )
+        if color.isValid():
+            self.set_color(color.name())
+            self.colorChanged.emit(color.name())
+
+
+################################################################################
+# FILE: ui/common/widgets.py
+################################################################################
+
+"""
+Custom UI Widgets module.
+
+This module defines reusable custom widgets used primarily in the Control Panel.
+It includes:
+- CollapsibleGroup: An accordion-style container for grouping controls.
+- YAxisControlWidget: A composite widget for configuring signal visualization (scale, visibility).
+"""
+
+from PyQt6 import QtCore, QtWidgets
+
+
+class CollapsibleGroup(QtWidgets.QWidget):
+    """
+    A custom widget implementing an accordion-style collapsible container.
+
+    It consists of a header button (QToolButton) and a content area. Clicking the
+    header toggles the visibility of the content area. Only one group is typically
+    intended to be expanded at a time (managed by the parent container).
+
+    Signals:
+        expanded (object): Emitted when this group is expanded by the user.
+                           Payload: The CollapsibleGroup instance itself.
+    """
+
+    expanded = QtCore.pyqtSignal(object)
+
+    def __init__(self, title: str):
+        """
+        Initializes the collapsible group.
+
+        Args:
+            title (str): The text to display on the toggle button.
+        """
+        super().__init__()
+
+        # Toggle Button Configuration
+        self.toggle = QtWidgets.QToolButton()
+        self.toggle.setText(title)
+        self.toggle.setCheckable(True)
+        self.toggle.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.toggle.setArrowType(QtCore.Qt.ArrowType.RightArrow)
+        self.toggle.setStyleSheet("QToolButton { border: none; font-weight: bold; color: #ccc; }")
+
+        # Content Area Configuration
+        self.content = QtWidgets.QWidget()
+        self.content.setVisible(False)
+        self.content_layout = QtWidgets.QVBoxLayout(self.content)
+        self.content_layout.setContentsMargins(10, 0, 0, 0)
+
+        # Events
+        self.toggle.toggled.connect(self._on_toggled)
+
+        # Main Layout
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.toggle)
+        layout.addWidget(self.content)
+
+    def _on_toggled(self, checked: bool):
+        """
+        Slot handling the toggle state change.
+
+        Updates the arrow icon and visibility of the content area. Emits the
+        'expanded' signal if the group was just opened.
+        """
+        self.content.setVisible(checked)
+        self.toggle.setArrowType(
+            QtCore.Qt.ArrowType.DownArrow if checked else QtCore.Qt.ArrowType.RightArrow
+        )
+        if checked:
+            self.expanded.emit(self)
+
+
+class YAxisControlWidget(QtWidgets.QWidget):
+    """
+    Simple widget for a single signal: [X] Color_Icon Label_Name
+    """
+
+    def __init__(self, label: str, color: str, checked: bool):
+        super().__init__()
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(5, 2, 5, 2)
+        layout.setSpacing(10)
+
+        # Checkbox widoczności
+        self.enable_checkbox = QtWidgets.QCheckBox()
+        self.enable_checkbox.setChecked(checked)
+
+        # Ikona koloru (mały kwadrat)
+        self.color_icon = QtWidgets.QFrame()
+        self.color_icon.setFixedSize(12, 12)
+        self.color_icon.setStyleSheet(f"background-color: {color}; border-radius: 2px;")
+
+        # Nazwa sygnału
+        self.name_label = QtWidgets.QLabel(label)
+        self.name_label.setStyleSheet("font-weight: bold; color: #ddd;")
+
+        layout.addWidget(self.enable_checkbox)
+        layout.addWidget(self.color_icon)
+        layout.addWidget(self.name_label)
+        layout.addStretch()  # Wszystko do lewej
+
+
+class CollapsableSection(QtWidgets.QWidget):
+    def __init__(self, title: str, content: QtWidgets.QWidget):
+        super().__init__()
+
+        self.content = content
+
+        self.layout = QtWidgets.QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(0)
+
+        self.header = QtWidgets.QToolButton(text=title)
+        self.header.setCheckable(True)
+        self.header.setChecked(False)
+        self.header.setArrowType(QtCore.Qt.ArrowType.RightArrow)
+        self.header.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.header.clicked.connect(self.toggle)
+
+        self.layout.addWidget(self.header)
+
+    def toggle(self):
+        expanded = self.header.isChecked()
+
+        if expanded:
+            self.layout.addWidget(self.content)
+            self.header.setArrowType(QtCore.Qt.ArrowType.DownArrow)
+        else:
+            self.layout.removeWidget(self.content)
+            self.content.setParent(None)
+            self.header.setArrowType(QtCore.Qt.ArrowType.RightArrow)
+
+        self.updateGeometry()
+
+
+################################################################################
+# FILE: ui/config/__init__.py
+################################################################################
+
+
+
+################################################################################
+# FILE: ui/config/stream_editor.py
+################################################################################
+
+"""
+Stream Editor Module.
+Simplified Version: Flat signal list (no groups), removed Lock/Scale features.
+"""
+
+import re
+from collections import OrderedDict
+from typing import Any, Dict, List
+
+from PyQt6 import QtCore, QtGui, QtWidgets
+
+# Core Imports
+from core.protocol.constants import STRUCT_TYPE_MAP
+
+# Common UI Imports
+from ui.common.color_button import ColorButton
+
+PANEL_TYPES = ["none", "pid", "imu", "control"]
+
+
+class StreamEditor(QtWidgets.QWidget):
+    """
+    The form for editing a single stream definition.
+    Manages Frame Table and a Flat Signal List.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.current_stream_key = None
+        self.init_ui()
+        self.apply_styles()
+
+    def apply_styles(self):
+        self.setStyleSheet(
+            """
+            QTreeWidget, QTableWidget {
+                background-color: #121212;
+                border: 1px solid #333;
+                color: #e0e0e0;
+                gridline-color: #2a2a2a;
+                font-size: 13px;
+            }
+            QHeaderView::section {
+                background-color: #1a1a1a;
+                color: #bbb;
+                padding: 6px;
+                border: none;
+                border-bottom: 2px solid #333;
+                border-right: 1px solid #333;
+                font-weight: bold;
+            }
+            QTreeWidget::item, QTableWidget::item {
+                padding: 4px; border-bottom: 1px solid #1a1a1a; height: 32px;
+            }
+            QTreeWidget::item:hover, QTableWidget::item:hover { background-color: #1f1f1f; }
+            QTreeWidget::item:selected, QTableWidget::item:selected { background-color: #2c3e50; color: white; }
+            QComboBox, QLineEdit {
+                background-color: #121212; border: 1px solid #333; color: #4FC3F7; padding: 2px 5px;
+            }
+        """
+        )
+
+    def init_ui(self):
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        # --- Metadata Section ---
+        grp_info = QtWidgets.QGroupBox("Stream Metadata")
+        form = QtWidgets.QFormLayout(grp_info)
+        self.key_edit = QtWidgets.QLineEdit()
+        self.name_edit = QtWidgets.QLineEdit()
+        self.id_spin = QtWidgets.QSpinBox()
+        self.id_spin.setRange(0, 255)
+        self.panel_combo = QtWidgets.QComboBox()
+        self.panel_combo.addItems(PANEL_TYPES)
+
+        form.addRow("JSON Key:", self.key_edit)
+        form.addRow("Display Name:", self.name_edit)
+        form.addRow("Stream ID:", self.id_spin)
+        form.addRow("Panel Type:", self.panel_combo)
+        layout.addWidget(grp_info)
+
+        # --- Tabs ---
+        self.tabs = QtWidgets.QTabWidget()
+        layout.addWidget(self.tabs)
+
+        self.frame_widget = QtWidgets.QWidget()
+        self._init_frame_tab()
+        self.tabs.addTab(self.frame_widget, "1. Binary Frame Def")
+
+        self.sig_widget = QtWidgets.QWidget()
+        self._init_signal_tab()
+        self.tabs.addTab(self.sig_widget, "2. Signals (Flat List)")
+
+    def _init_frame_tab(self):
+        l = QtWidgets.QVBoxLayout(self.frame_widget)
+        self.frame_table = QtWidgets.QTableWidget()
+        self.frame_table.setColumnCount(2)
+        self.frame_table.setHorizontalHeaderLabels(["Field Name (C++)", "Data Type"])
+        h = self.frame_table.horizontalHeader()
+        h.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Fixed)
+        h.resizeSection(1, 150)
+        self.frame_table.verticalHeader().setVisible(False)
+
+        btns = QtWidgets.QHBoxLayout()
+        b_add = QtWidgets.QPushButton("+ Add")
+        b_add.clicked.connect(self.add_frame_row)
+        b_del = QtWidgets.QPushButton("- Del")
+        b_del.clicked.connect(lambda: self.remove_table_row(self.frame_table))
+        btns.addWidget(b_add)
+        btns.addWidget(b_del)
+        btns.addStretch()
+        l.addWidget(self.frame_table)
+        l.addLayout(btns)
+
+    def _init_signal_tab(self):
+        l = QtWidgets.QVBoxLayout(self.sig_widget)
+
+        self.sig_tree = QtWidgets.QTreeWidget()
+        self.sig_tree.setRootIsDecorated(False)  # Ukrywamy strzałki (bo brak grup)
+
+        # Cols: Label | Field | Color | Vis | Style
+        self.sig_cols = ["Label Name", "Field Map", "Color", "Vis", "Style"]
+        self.sig_tree.setColumnCount(len(self.sig_cols))
+        self.sig_tree.setHeaderLabels(self.sig_cols)
+
+        h = self.sig_tree.header()
+        h.resizeSection(0, 200)
+        h.resizeSection(1, 150)
+        h.resizeSection(2, 80)
+        h.resizeSection(3, 40)
+
+        btns = QtWidgets.QHBoxLayout()
+        # Usunięto przycisk "Add Group"
+        b_sig = QtWidgets.QPushButton("📈 Add Signal")
+        b_sig.clicked.connect(self.add_signal_item)
+        b_rem = QtWidgets.QPushButton("❌ Remove")
+        b_rem.clicked.connect(self.remove_tree_item)
+        btns.addWidget(b_sig)
+        btns.addWidget(b_rem)
+        btns.addStretch()
+        l.addWidget(self.sig_tree)
+        l.addLayout(btns)
+
+    def load_data(self, key: str, data: Dict[str, Any]):
+        self.current_stream_key = key
+        self.key_edit.setText(key)
+        self.name_edit.setText(data.get("name", ""))
+
+        idx = self.panel_combo.findText(data.get("panel_type", "none"))
+        if idx >= 0:
+            self.panel_combo.setCurrentIndex(idx)
+
+        self.id_spin.setValue(data.get("frame", {}).get("stream_id", 0))
+
+        # Frame
+        self.frame_table.setRowCount(0)
+        for f in data.get("frame", {}).get("fields", []):
+            self.add_frame_row(f.get("name"), f.get("type"))
+
+        # Signals (Flattened)
+        self.sig_tree.clear()
+
+        # Pobieramy sygnały. Ignorujemy klucz "groups" całkowicie.
+        signals_data = data.get("signals", {})
+
+        # Jeśli sygnały mają pole 'order', możemy posortować, w przeciwnym razie wg klucza lub kolejności JSON
+        # W Python 3.7+ słowniki zachowują kolejność wstawiania, więc powinno być ok.
+        for skey, sdata in signals_data.items():
+            row = {
+                "label": sdata.get("label", skey),
+                "field": sdata.get("field", ""),
+                "color": sdata.get("color", "#FFFFFF"),
+                "visible": sdata.get("visible", True),
+                "style": sdata.get("line", {}).get("style", "solid"),
+            }
+            self.add_signal_row(row)
+
+    def get_data(self):
+        data = OrderedDict()
+        data["name"] = self.name_edit.text()
+        data["panel_type"] = self.panel_combo.currentText()
+
+        # Frame
+        fields = []
+        for r in range(self.frame_table.rowCount()):
+            name = self.frame_table.item(r, 0).text()
+            if name:
+                fields.append(
+                    {"name": name, "type": self.frame_table.cellWidget(r, 1).currentData()}
+                )
+        data["frame"] = {
+            "stream_id": self.id_spin.value(),
+            "endianness": "little",
+            "packed": True,
+            "fields": fields,
+        }
+
+        # Signals (Flat Structure)
+        signals = {}
+        root = self.sig_tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            item = root.child(i)
+
+            label = item.text(0)
+            fld = self.sig_tree.itemWidget(item, 1).currentText()
+            col = self.sig_tree.itemWidget(item, 2).text()
+            vis = self.sig_tree.itemWidget(item, 3).findChild(QtWidgets.QCheckBox).isChecked()
+            style = self.sig_tree.itemWidget(item, 4).currentText()
+
+            # Klucz sygnału: jeśli pole mapowania jest puste, generujemy z etykiety
+            skey = fld if fld else re.sub(r"[^a-zA-Z0-9]", "", label)
+
+            signals[skey] = {
+                "label": label,
+                "field": fld,
+                "color": col,
+                "visible": vis,
+                "line": {"style": style, "width": 2},
+                # Brak grup, brak min/max, brak lock
+            }
+
+        # Nie zapisujemy już sekcji "groups"
+        data["signals"] = signals
+        return self.key_edit.text(), data
+
+    # --- Helpers ---
+    def add_frame_row(self, name="", ftype="f32"):
+        r = self.frame_table.rowCount()
+        self.frame_table.insertRow(r)
+        self.frame_table.setItem(r, 0, QtWidgets.QTableWidgetItem(name))
+        combo = QtWidgets.QComboBox()
+        for k, v in STRUCT_TYPE_MAP.items():
+            combo.addItem(v[2], k)
+        combo.setCurrentIndex(combo.findData(ftype) if combo.findData(ftype) >= 0 else 0)
+        self.frame_table.setCellWidget(r, 1, combo)
+
+    def remove_table_row(self, t):
+        if t.currentRow() >= 0:
+            t.removeRow(t.currentRow())
+
+    def get_fields(self):
+        return [
+            self.frame_table.item(r, 0).text().strip()
+            for r in range(self.frame_table.rowCount())
+            if self.frame_table.item(r, 0).text().strip()
+        ]
+
+    def add_signal_item(self):
+        # Adds directly to root (flat list)
+        self.add_signal_row()
+
+    def add_signal_row(self, d=None):
+        if not d:
+            d = {
+                "label": "New Signal",
+                "field": "",
+                "color": "#4FC3F7",
+                "visible": True,
+                "style": "solid",
+            }
+
+        item = QtWidgets.QTreeWidgetItem(self.sig_tree)
+        item.setText(0, d["label"])
+        item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsEditable)
+
+        # Style row
+        for c in range(5):
+            item.setSizeHint(c, QtCore.QSize(0, 30))
+            item.setForeground(c, QtGui.QBrush(QtGui.QColor("#e0e0e0")))
+
+        # Col 1: Field Map
+        cb_fld = QtWidgets.QComboBox()
+        cb_fld.addItems(self.get_fields())
+        if d["field"] and d["field"] not in self.get_fields():
+            cb_fld.addItem(d["field"])
+        cb_fld.setCurrentText(d["field"])
+
+        # Col 3: Visible Checkbox
+        chk = QtWidgets.QCheckBox()
+        chk.setChecked(d["visible"])
+        w_chk = QtWidgets.QWidget()
+        l = QtWidgets.QHBoxLayout(w_chk)
+        l.setContentsMargins(0, 0, 0, 0)
+        l.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        l.addWidget(chk)
+
+        # Col 4: Style
+        cb_sty = QtWidgets.QComboBox()
+        cb_sty.addItems(["solid", "dashed", "dotted"])
+        cb_sty.setCurrentText(d["style"])
+
+        self.sig_tree.setItemWidget(item, 1, cb_fld)
+        self.sig_tree.setItemWidget(item, 2, ColorButton(d["color"]))
+        self.sig_tree.setItemWidget(item, 3, w_chk)
+        self.sig_tree.setItemWidget(item, 4, cb_sty)
+
+    def remove_tree_item(self):
+        # Removes selected signal
+        for item in self.sig_tree.selectedItems():
+            index = self.sig_tree.indexOfTopLevelItem(item)
+            self.sig_tree.takeTopLevelItem(index)
+
+
+################################################################################
+# FILE: ui/config/tab.py
+################################################################################
+
+"""
+Configuration Tab Module.
+Manages the list of streams, file I/O operations, and integrates the Stream Editor.
+"""
+
+import json
+import shutil
+
+from PyQt6 import QtCore, QtWidgets
+
+from ui.config.stream_editor import StreamEditor
+
+
+class ConfiguratorTab(QtWidgets.QWidget):
+    """
+    Main Configuration Tab.
+    Left: List of defined streams.
+    Right: StreamEditor for the selected stream.
+    """
+
+    config_saved = QtCore.pyqtSignal()
+
+    def __init__(self, filepath="streams.json", parent=None):
+        super().__init__(parent)
+        self.filepath = filepath
+        self.data = {}
+        self.init_ui()
+        self.load_from_file()
+
+    def init_ui(self):
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        # --- Left Panel: Stream List ---
+        left_panel = QtWidgets.QWidget()
+        l_left = QtWidgets.QVBoxLayout(left_panel)
+        l_left.setContentsMargins(0, 0, 0, 0)
+
+        self.stream_list = QtWidgets.QListWidget()
+        self.stream_list.setStyleSheet(
+            """
+            QListWidget { background-color: #121212; border: 1px solid #333; font-size: 13px; }
+            QListWidget::item { padding: 8px; border-bottom: 1px solid #1a1a1a; }
+            QListWidget::item:selected { background-color: #2c3e50; color: white; border-left: 3px solid #4FC3F7; }
+        """
+        )
+        self.stream_list.currentRowChanged.connect(self.on_stream_selected)
+
+        # Action Buttons
+        hbox = QtWidgets.QHBoxLayout()
+        b_new = QtWidgets.QPushButton("New")
+        b_new.clicked.connect(self.create_stream)
+        b_del = QtWidgets.QPushButton("Delete")
+        b_del.clicked.connect(self.delete_stream)
+        hbox.addWidget(b_new)
+        hbox.addWidget(b_del)
+
+        b_save = QtWidgets.QPushButton("💾 SAVE TO DISK")
+        b_save.setStyleSheet(
+            "QPushButton { background-color: #2E7D32; color: white; font-weight: bold; padding: 10px; } QPushButton:hover { background-color: #388E3C; }"
+        )
+        b_save.clicked.connect(self.save_to_file)
+
+        l_left.addWidget(QtWidgets.QLabel("Available Streams:"))
+        l_left.addWidget(self.stream_list)
+        l_left.addLayout(hbox)
+        l_left.addWidget(b_save)
+
+        # --- Right Panel: Editor ---
+        self.editor = StreamEditor()
+
+        # Splitter
+        splitter = QtWidgets.QSplitter()
+        splitter.addWidget(left_panel)
+        splitter.addWidget(self.editor)
+        splitter.setSizes([250, 800])
+        splitter.setHandleWidth(1)
+        splitter.setStyleSheet("QSplitter::handle { background-color: #333; }")
+
+        layout.addWidget(splitter)
+
+    def load_from_file(self):
+        try:
+            with open(self.filepath, "r") as f:
+                self.data = json.load(f).get("streams", {})
+        except Exception as e:
+            print(f"Config load error: {e}")
+            self.data = {}
+        self.refresh_list()
+
+    def refresh_list(self):
+        self.stream_list.clear()
+        for k in self.data.keys():
+            self.stream_list.addItem(k)
+        if self.stream_list.count() > 0:
+            self.stream_list.setCurrentRow(0)
+
+    def on_stream_selected(self, row):
+        if row < 0:
+            return
+        key = self.stream_list.item(row).text()
+        if key in self.data:
+            self.editor.load_data(key, self.data[key])
+
+    def create_stream(self):
+        i = 1
+        while f"new_stream_{i}" in self.data:
+            i += 1
+        key = f"new_stream_{i}"
+
+        # Uproszczona struktura nowego strumienia (brak grup)
+        self.data[key] = {
+            "name": "New Stream",
+            "panel_type": "none",
+            "frame": {"stream_id": 0, "fields": []},
+            "signals": {},
+        }
+        self.stream_list.addItem(key)
+        self.stream_list.setCurrentRow(self.stream_list.count() - 1)
+
+    def delete_stream(self):
+        r = self.stream_list.currentRow()
+        if r < 0:
+            return
+        del self.data[self.stream_list.item(r).text()]
+        self.stream_list.takeItem(r)
+
+    def save_current(self):
+        if self.stream_list.currentRow() < 0:
+            return
+        old_k = self.stream_list.currentItem().text()
+        new_k, content = self.editor.get_data()
+        if old_k != new_k:
+            if old_k in self.data:
+                del self.data[old_k]
+            self.stream_list.currentItem().setText(new_k)
+        self.data[new_k] = content
+
+    def save_to_file(self):
+        self.save_current()
+        try:
+            shutil.copy(self.filepath, self.filepath + ".bak")
+        except:
+            pass
+        try:
+            with open(self.filepath, "w") as f:
+                json.dump({"streams": self.data}, f, indent=4)
+            QtWidgets.QMessageBox.information(self, "Saved", "Configuration saved!")
+            self.config_saved.emit()
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Save failed: {e}")
+
+
+################################################################################
+# FILE: ui/main_window.py
+################################################################################
+
+"""
+Main Application Window Module.
+
+This module defines the primary GUI window that integrates the control panel,
+plotting area, and the background telemetry engine. It acts as the **Controller**
+in the application architecture, managing high-level signal wiring, thread
+lifecycle, and global events.
+"""
+
+from PyQt6 import QtCore, QtGui, QtWidgets
+
+from core.acquisition.engine import TelemetryEngine
+from core.types import EngineState
+from ui.charts.telemetry_plot import TelemetryPlot
+from ui.config.tab import ConfiguratorTab
+from ui.panels.container import MainControlPanel
+
+
+class MainWindow(QtWidgets.QMainWindow):
+    """
+    The main window of the DiffBot Telemetry Viewer.
+
+    This class serves as the central hub of the application. Its responsibilities include:
+    1. **Composition**: Instantiating the UI components (ControlPanel, PlotArea).
+    2. **Threading**: Setting up the background engine thread (`TelemetryEngine`).
+    3. **Wiring**: Connecting signals/slots between the UI (Main Thread) and
+       the Engine (Worker Thread).
+    4. **Lifecycle**: Managing startup configuration and safe shutdown sequences.
+    """
+
+    def __init__(self):
+        """
+        Initializes the main window, UI layout, and background engine.
+        """
+        super().__init__()
+
+        # --- State Tracking ---
+        self.active_port = None
+        self.active_baud = 115200
+
+        # --- Window Setup ---
+        self.setWindowTitle("DiffBot Telemetry Viewer (Pro)")
+        self.resize(1280, 800)
+
+        # --- MAIN LAYOUT (TABS) ---
+        # Zamiast ustawiać splitter jako główne okno, tworzymy zakładki
+        self.tabs = QtWidgets.QTabWidget()
+        self.setCentralWidget(self.tabs)
+
+        # ================= TAB 1: DASHBOARD =================
+        self.dashboard_widget = QtWidgets.QWidget()
+        dashboard_layout = QtWidgets.QVBoxLayout(self.dashboard_widget)
+        dashboard_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Splitter (Panel + Wykres)
+        self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+
+        # Instantiate the main view components
+        self.panel = MainControlPanel()
+        self.plot = TelemetryPlot()
+
+        self.splitter.addWidget(self.panel)
+        self.splitter.addWidget(self.plot)
+        self.splitter.setSizes([350, 930])
+
+        # Dodajemy splitter do layoutu zakładki
+        dashboard_layout.addWidget(self.splitter)
+
+        # Dodajemy zakładkę do głównego widgetu
+        self.tabs.addTab(self.dashboard_widget, "📊 Dashboard")
+
+        # ================= TAB 2: CONFIGURATION =================
+        # Tworzymy instancję konfiguratora
+        self.configurator = ConfiguratorTab("streams.json")
+
+        # Podłączamy sygnał zapisu do metody przeładowania (którą dodałeś wcześniej)
+        self.configurator.config_saved.connect(self._reload_configuration)
+
+        self.tabs.addTab(self.configurator, "⚙️ Configuration")
+
+        # --- Status Bar Initialization ---
+        self.status_bar = QtWidgets.QStatusBar()
+        self.setStatusBar(self.status_bar)
+
+        self.lbl_status = QtWidgets.QLabel("Ready")
+        self.lbl_cursor = QtWidgets.QLabel("")
+
+        self.status_bar.addWidget(self.lbl_status)
+        self.status_bar.addPermanentWidget(self.lbl_cursor)
+
+        # --- Engine & Thread Initialization ---
+        # Retrieve initial settings via the Panel's public API
+        initial_period = self.panel.get_initial_sample_period()
+        initial_samples = self.panel.get_initial_sample_count()
+
+        self.engine = TelemetryEngine(initial_period, initial_samples)
+
+        self.engine_thread = QtCore.QThread()
+        self.engine.moveToThread(self.engine_thread)
+        self.engine_thread.start()
+
+        # --- Signal Wiring ---
+
+        # 1. Configuration: Panel -> Engine
+        self.panel.stream_changed.connect(self._on_stream_changed)
+        self.panel.time_config_changed.connect(self.engine.update_time_config)
+        self.panel.pid_left_sent.connect(self.engine.send_left_config)
+        self.panel.pid_right_sent.connect(self.engine.send_right_config)
+        self.panel.pid_all_sent.connect(self.engine.send_all_config)
+
+        # Jeśli usunąłeś panel IMU, usuń też tę linię (lub zostaw, jeśli już go masz)
+        # self.panel.imu_command_sent.connect(self.engine.send_imu_command)
+
+        # 2. Control Logic: Panel -> Main Window
+        self.panel.connection_requested.connect(self._handle_connection)
+        self.panel.pause_requested.connect(self._handle_pause)
+
+        # 3. Visuals: Panel -> Plot
+        self.panel.signal_visibility_changed.connect(self.plot.set_signal_visible)
+
+        # 4. Data Flow: Engine -> Plot/UI
+        self.engine.data_ready.connect(self.plot.on_data_ready)
+        self.engine.status_msg.connect(self.lbl_status.setText)
+
+        # 6. Interactivity: Plot -> UI
+        self.plot.cursor_moved.connect(self.lbl_cursor.setText)
+
+        # --- Final Setup ---
+        self._initial_stream_setup()
+
+    def _reload_configuration(self):
+        """
+        Called when streams.json is modified via the Configurator tab.
+        We need to reload the StreamConfigLoader in the panel and refresh lists.
+        """
+        # 1. Przeładuj loader w panelu bocznym
+        # (Musisz dodać metodę reload() do MainControlPanel lub utworzyć loader na nowo)
+
+        # Najprościej: Wymuś odświeżenie listy w panelu
+        self.panel.stream_loader.load()  # Przeładuj JSON z dysku
+
+        # Wyczyść i wypełnij combobox od nowa
+        self.panel.payload_combo.blockSignals(True)
+        self.panel.payload_combo.clear()
+        for sid, s in self.panel.stream_loader.list_streams().items():
+            self.panel.payload_combo.addItem(s["name"], sid)
+        self.panel.payload_combo.blockSignals(False)
+
+        # Ustaw pierwszy element
+        if self.panel.payload_combo.count() > 0:
+            self.panel.payload_combo.setCurrentIndex(0)
+            self.panel.reload_streams()
+
+        self.lbl_status.setText("Configuration reloaded from disk.")
+
+    def _initial_stream_setup(self) -> None:
+        """
+        Loads configuration for the currently selected stream in the panel.
+        """
+        # Fetch config from the Panel Facade
+        cfg = self.panel.get_current_stream_config()
+        if not cfg:
+            return
+
+        # Apply configuration to components
+        self.plot.configure_signals(cfg["signals"])
+        self.engine.configure_signals(cfg["signals"])
+        self.engine.configure_frame(cfg)
+
+    def _on_stream_changed(self, stream_cfg: dict) -> None:
+        """
+        Handles the event when the user selects a different stream type in the panel.
+        It safely restarts the engine if it was running.
+        """
+        was_running = self.engine.state == EngineState.RUNNING
+
+        # 1. Update Plot (Main Thread UI - Immediate)
+        self.plot.configure_signals(stream_cfg["signals"])
+
+        # 2. Queue Stop Command (Worker Thread)
+        if was_running:
+            QtCore.QMetaObject.invokeMethod(
+                self.engine,
+                "stop_working",
+                QtCore.Qt.ConnectionType.QueuedConnection,
+            )
+
+        # 3. Queue Configuration Commands (Worker Thread)
+        # We use invokeMethod to ensure these happen AFTER 'stop_working' in the queue.
+        # Direct calls would race with the stop command.
+        QtCore.QMetaObject.invokeMethod(
+            self.engine,
+            "configure_signals",
+            QtCore.Qt.ConnectionType.QueuedConnection,
+            QtCore.Q_ARG(dict, stream_cfg["signals"]),
+        )
+        QtCore.QMetaObject.invokeMethod(
+            self.engine,
+            "configure_frame",
+            QtCore.Qt.ConnectionType.QueuedConnection,
+            QtCore.Q_ARG(dict, stream_cfg),
+        )
+
+        # 4. Queue Restart Command (Worker Thread)
+        # Only if it was running previously
+        if was_running and self.active_port:
+            self.lbl_status.setText(f"Switching stream... ({self.active_port})")
+
+            QtCore.QMetaObject.invokeMethod(
+                self.engine,
+                "start_working",
+                QtCore.Qt.ConnectionType.QueuedConnection,
+                QtCore.Q_ARG(str, self.active_port),
+                QtCore.Q_ARG(int, self.active_baud),
+            )
+        else:
+            self.lbl_status.setText("Stream configuration loaded.")
+
+    def _handle_connection(self, port: str, baud: int) -> None:
+        """
+        Handles connection requests triggered by the Control Panel.
+        """
+        if port != "STOP":
+            # Store connection details for auto-reconnect logic
+            self.active_port = port
+            self.active_baud = baud
+
+            # Start the Engine
+            QtCore.QMetaObject.invokeMethod(
+                self.engine,
+                "start_working",
+                QtCore.Qt.ConnectionType.QueuedConnection,
+                QtCore.Q_ARG(str, port),
+                QtCore.Q_ARG(int, baud),
+            )
+            self.lbl_status.setText(f"Connected to {port}")
+            self.lbl_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
+        else:
+            # Clear active port but keep baud preference maybe?
+            self.active_port = None
+
+            # Stop the Engine
+            QtCore.QMetaObject.invokeMethod(
+                self.engine, "stop_working", QtCore.Qt.ConnectionType.QueuedConnection
+            )
+            self.lbl_status.setText("Disconnected")
+            self.lbl_status.setStyleSheet("color: #F44336; font-weight: bold;")
+
+    def _handle_pause(self, paused: bool) -> None:
+        """
+        Toggles the pause state of the plotter.
+        """
+        self.plot.set_paused(paused)
+        self.lbl_status.setText("PAUSED" if paused else "Connected")
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        """
+        Handles the application close event to ensure clean thread termination.
+        """
+        # 1. Stop the worker logic
+        QtCore.QMetaObject.invokeMethod(
+            self.engine, "stop_working", QtCore.Qt.ConnectionType.QueuedConnection
+        )
+
+        # 2. Quit the thread loop
+        self.engine_thread.quit()
+
+        # 3. Wait for cleanup (with timeout to prevent freezing the app on close)
+        if not self.engine_thread.wait(2000):
+            print("Engine thread hung, forcing termination...")
+            self.engine_thread.terminate()
+            self.engine_thread.wait()
+
+        event.accept()
+
+
+################################################################################
+# FILE: ui/panels/__init__.py
+################################################################################
+
+
+
+################################################################################
+# FILE: ui/panels/connection.py
+################################################################################
+
+"""
+Connection Panel Module.
+
+This module provides the `ConnectionPanel` widget responsible for:
+1. Enumerating available Serial Ports (COM).
+2. Selecting communication speed (Baudrate).
+3. Managing the connection state (Connect/Disconnect).
+4. Controlling the data stream flow (Pause/Resume).
+"""
+
+from PyQt6 import QtCore, QtWidgets
+from serial.tools import list_ports
+
+
+class ConnectionPanel(QtWidgets.QGroupBox):
+    """
+    A specific control panel for managing Serial Port connections.
+
+    It emits signals to the main container when connection attempts are made
+    or when the user wants to pause the visualization.
+
+    Attributes:
+        connection_requested (pyqtSignal): Emitted when Connect/Disconnect is clicked.
+            Payload: (port_name: str, baudrate: int).
+            If disconnecting, payload is ("STOP", 0).
+        pause_requested (pyqtSignal): Emitted when Pause/Resume is clicked.
+            Payload: (is_paused: bool).
+    """
+
+    connection_requested = QtCore.pyqtSignal(str, int)
+    pause_requested = QtCore.pyqtSignal(bool)
+
+    def __init__(self):
+        """Initializes the connection controls and styling."""
+        super().__init__("Serial Connection")
+
+        layout = QtWidgets.QGridLayout(self)
+        layout.setSpacing(8)
+
+        # --- Port Selection Controls ---
+        self.port_combo = QtWidgets.QComboBox()
+
+        self.refresh_btn = QtWidgets.QPushButton("⟳")
+        self.refresh_btn.setFixedWidth(30)
+        self.refresh_btn.setToolTip("Refresh Port List")
+        self.refresh_btn.clicked.connect(self.refresh_ports)
+
+        # --- Baud Rate Selection ---
+        self.baud_combo = QtWidgets.QComboBox()
+        self.baud_combo.addItems(["115200", "230400", "460800", "921600"])
+
+        # Grid Placement
+        layout.addWidget(QtWidgets.QLabel("Port:"), 0, 0)
+        layout.addWidget(self.port_combo, 0, 1)
+        layout.addWidget(self.refresh_btn, 0, 2)
+        layout.addWidget(QtWidgets.QLabel("Baud:"), 1, 0)
+        layout.addWidget(self.baud_combo, 1, 1, 1, 2)
+
+        # --- Action Buttons Layout ---
+        btn_layout = QtWidgets.QHBoxLayout()
+
+        # 1. Connect Button
+        # We need extensive styling here to handle the visual state when the button
+        # is both Checked (Connected) AND Hovered.
+        self.connect_btn = QtWidgets.QPushButton("Connect")
+        self.connect_btn.setCheckable(True)
+        self.connect_btn.setStyleSheet(
+            """
+            /* --- DEFAULT STATE (Disconnected) - GREEN --- */
+            QPushButton { 
+                background-color: #2E7D32; 
+                font-weight: bold; 
+                color: white; 
+                border-radius: 3px;
+                padding: 5px;
+                border: 1px solid #1b5e20;
+            }
+            
+            /* Hover (Disconnected) - Lighter Green */
+            QPushButton:hover { 
+                background-color: #388E3C; 
+            }
+
+            /* --- CHECKED STATE (Connected) - RED --- */
+            QPushButton:checked { 
+                background-color: #C62828; 
+                border: 1px solid #b71c1c;
+            }
+            
+            /* Hover (Connected) - Lighter Red */
+            /* KEY FIX: Specific rule for checked+hover to prevent reverting to green */
+            QPushButton:checked:hover { 
+                background-color: #E53935; 
+            }
+            """
+        )
+        self.connect_btn.toggled.connect(self._on_connect_toggled)
+
+        # 2. Pause Button
+        self.pause_btn = QtWidgets.QPushButton("Pause")
+        self.pause_btn.setCheckable(True)
+        self.pause_btn.setEnabled(False)  # Disabled until connected
+        self.pause_btn.toggled.connect(self._on_pause_toggled)
+
+        btn_layout.addWidget(self.connect_btn)
+        btn_layout.addWidget(self.pause_btn)
+
+        # Add buttons to the main grid (Row 2, spanning 3 columns)
+        layout.addLayout(btn_layout, 2, 0, 1, 3)
+
+        # Populate ports immediately on startup
+        self.refresh_ports()
+
+    def refresh_ports(self) -> None:
+        """
+        Refreshes the list of available COM ports via PySerial.
+
+        Preserves the currently selected item if it still exists after refresh.
+        Always adds 'VIRTUAL' as a testing option.
+        """
+        current_selection = self.port_combo.currentText()
+        self.port_combo.clear()
+
+        # Add Simulation option
+        self.port_combo.addItem("VIRTUAL", "VIRTUAL")
+
+        # Add Physical Ports
+        # list_ports.comports() returns ListPortInfo objects
+        for p in list_ports.comports():
+            # Use device name (e.g., COM3 or /dev/ttyUSB0) as both text and data
+            self.port_combo.addItem(f"{p.device}", p.device)
+
+        # Try to restore previous selection to improve UX
+        idx = self.port_combo.findText(current_selection)
+        if idx >= 0:
+            self.port_combo.setCurrentIndex(idx)
+
+    def _on_connect_toggled(self, checked: bool) -> None:
+        """
+        Slot handling the Connect/Disconnect toggle.
+
+        Args:
+            checked (bool): True if button is pressed (Connecting), False otherwise.
+        """
+        if checked:
+            # Entering Connected State
+            self.connect_btn.setText("Disconnect")
+            self.pause_btn.setEnabled(True)
+
+            port = self.port_combo.currentText()
+            baud_text = self.baud_combo.currentText()
+
+            # Safe conversion (fallback to 115200)
+            baud = int(baud_text) if baud_text.isdigit() else 115200
+
+            self.connection_requested.emit(port, baud)
+        else:
+            # Entering Disconnected State
+            self.connect_btn.setText("Connect")
+
+            # Reset Pause button state
+            self.pause_btn.setChecked(False)
+            self.pause_btn.setEnabled(False)
+
+            # Emit STOP signal (0 baud indicates disconnect)
+            self.connection_requested.emit("STOP", 0)
+
+    def _on_pause_toggled(self, checked: bool) -> None:
+        """
+        Slot handling the Pause/Resume toggle.
+
+        Args:
+            checked (bool): True if paused (Analysis Mode), False if Live.
+        """
+        self.pause_btn.setText("Resume" if checked else "Pause")
+
+        if checked:
+            # Highlight button when paused to indicate non-live state
+            self.pause_btn.setStyleSheet(
+                "background-color: #F57F17; color: black; font-weight: bold;"
+            )
+        else:
+            # Reset to default style
+            self.pause_btn.setStyleSheet("")
+
+        self.pause_requested.emit(checked)
+
+
+################################################################################
+# FILE: ui/panels/container.py
+################################################################################
+
+"""
+Main Control Panel Container Module.
+
+This module aggregates specialized sub-panels into a single sidebar widget.
+It uses **QStackedWidget** to dynamically switch the central control panel
+(e.g., PID Tuning vs Empty) based on the active stream type.
+"""
+
+from typing import Dict
+
+from PyQt6 import QtCore, QtWidgets
+
+from core.config import StreamConfigLoader
+from ui.common.widgets import CollapsableSection
+from ui.panels.connection import ConnectionPanel
+from ui.panels.imu import ImuCalibrationPanel
+from ui.panels.pid import PidTuningPanel
+from ui.panels.signals import SignalListPanel
+from ui.panels.timing import TimeConfigPanel
+
+
+class MainControlPanel(QtWidgets.QWidget):
+    """
+    The main sidebar widget containing all configuration controls.
+    """
+
+    # --- Public Signals ---
+    connection_requested = QtCore.pyqtSignal(str, int)
+    pause_requested = QtCore.pyqtSignal(bool)
+    pid_left_sent = QtCore.pyqtSignal(
+        int, int, float, float, float, float, float, float, float, float
+    )
+    pid_right_sent = QtCore.pyqtSignal(
+        int, int, float, float, float, float, float, float, float, float
+    )
+    pid_all_sent = QtCore.pyqtSignal(
+        int,
+        int,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        int,
+        int,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+    )
+
+    time_config_changed = QtCore.pyqtSignal(float, int)
+    stream_changed = QtCore.pyqtSignal(dict)
+    signal_visibility_changed = QtCore.pyqtSignal(str, bool)
+    imu_command_sent = QtCore.pyqtSignal(int)
+
+    def __init__(self):
+        super().__init__()
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(10)
+
+        # 1. Fixed Top Panel (Connection)
+        self.conn_panel = ConnectionPanel()
+
+        # 2. Stream Selection (Shared)
+        self.grp_stream = QtWidgets.QGroupBox("Stream Type")
+        l_stream = QtWidgets.QVBoxLayout(self.grp_stream)
+        self.stream_loader = StreamConfigLoader("streams.json")
+        self.payload_combo = QtWidgets.QComboBox()
+
+        for sid, s in self.stream_loader.list_streams().items():
+            self.payload_combo.addItem(s["name"], sid)
+
+        self.payload_combo.currentIndexChanged.connect(self._on_stream_selection)
+        l_stream.addWidget(self.payload_combo)
+
+        # 3. Dynamic Stacked Panel (Context-Aware UI)
+        self.dynamic_stack = QtWidgets.QStackedWidget()
+
+        # -- A: PID Panel --
+        self.pid_panel = PidTuningPanel()
+        self.pid_section = CollapsableSection("PID Tunning", self.pid_panel)
+        self.imu_panel = ImuCalibrationPanel()
+        self.imu_section = CollapsableSection("IMU Calibration", self.imu_panel)
+
+        # -- B: Empty Panel (for streams with no controls) --
+        self.empty_panel = QtWidgets.QWidget()
+        # l_empty = QtWidgets.QVBoxLayout(self.empty_panel)
+        # l_empty.addWidget(QtWidgets.QLabel("No settings for this stream."))
+
+        self.dynamic_stack.addWidget(self.empty_panel)  # Index 0
+        self.dynamic_stack.addWidget(self.pid_section)  # Index 1
+        self.dynamic_stack.addWidget(self.imu_section)
+
+        # Map string keys from JSON ('panel_type') to widget instances
+        self.panel_map: Dict[str, QtWidgets.QWidget] = {
+            "none": self.empty_panel,
+            "pid": self.pid_section,
+            "imu": self.imu_section,
+        }
+
+        # 4. Fixed Bottom Panels
+        self.time_panel = TimeConfigPanel()
+        self.sig_panel = SignalListPanel()
+
+        # 5. Assemble Main Layout
+        layout.addWidget(self.conn_panel)
+        layout.addWidget(self.grp_stream)
+
+        # Insert the dynamic stack here
+        layout.addWidget(self.dynamic_stack)
+
+        layout.addWidget(self.time_panel)
+        layout.addWidget(self.sig_panel, 1)
+
+        # 6. Wiring & Init
+        self._connect_signals()
+
+        if self.payload_combo.count() > 0:
+            self._on_stream_selection(self.payload_combo.currentIndex())
+
+    def _connect_signals(self) -> None:
+        """Wires internal signals. All panels are wired even if hidden."""
+        # Global
+        self.conn_panel.connection_requested.connect(self.connection_requested)
+        self.conn_panel.pause_requested.connect(self.pause_requested)
+        self.time_panel.time_config_changed.connect(self.time_config_changed)
+        self.sig_panel.signal_visibility_changed.connect(self.signal_visibility_changed)
+
+        # PID Panel
+        self.pid_panel.pid_left_sent.connect(self.pid_left_sent)
+        self.pid_panel.pid_right_sent.connect(self.pid_right_sent)
+        self.pid_panel.run_test_sent.connect(self.pid_all_sent)
+
+        # IMU Panel
+        self.imu_panel.calibration_requested.connect(self.imu_command_sent)
+
+    def _on_stream_selection(self, idx: int) -> None:
+        """
+        Handles switching the data config AND the visible control UI.
+        """
+        sid = self.payload_combo.itemData(idx)
+        if not sid:
+            return
+
+        cfg = self.stream_loader.get_stream(sid)
+
+        # --- DYNAMIC UI SWITCHING ---
+        # 1. Get type from config (default to 'none')
+        panel_type = cfg.get("panel_type", "none")
+
+        # --- FIX: Hide the stack completely if panel_type is 'none' ---
+        if panel_type == "none":
+            self.dynamic_stack.setVisible(False)
+        else:
+            # Resolve widget from map and show it
+            target_widget = self.panel_map.get(panel_type, self.empty_panel)
+            self.dynamic_stack.setCurrentWidget(target_widget)
+            self.dynamic_stack.setVisible(True)
+        # ----------------------------
+
+        # Update Signal List & Notify Main Window
+        self.sig_panel.rebuild_list(cfg)
+        self.stream_changed.emit(cfg)
+
+    # --- Public API ---
+
+    def get_initial_sample_period(self) -> float:
+        return self.time_panel.get_period()
+
+    def get_initial_sample_count(self) -> int:
+        return self.time_panel.get_samples()
+
+    def get_current_stream_config(self) -> dict:
+        idx = self.payload_combo.currentIndex()
+        sid = self.payload_combo.itemData(idx)
+        if sid:
+            return self.stream_loader.get_stream(sid)
+        return {}
+
+    def reload_streams(self) -> None:
+        """
+        Reloads configuration from disk and refreshes the UI list.
+        This allows external controllers to force a refresh safely.
+        """
+        # 1. Reload JSON data (using the new public method)
+        self.stream_loader.load()
+
+        # 2. Refresh Combo Box content
+        self.payload_combo.blockSignals(True)
+        self.payload_combo.clear()
+
+        for sid, s in self.stream_loader.list_streams().items():
+            self.payload_combo.addItem(s["name"], sid)
+
+        self.payload_combo.blockSignals(False)
+
+        # 3. Force selection of the first item
+        if self.payload_combo.count() > 0:
+            self.payload_combo.setCurrentIndex(0)
+            # Explicitly call the handler to ensure the app state syncs up
+            # (Calling internal method from within the class is allowed)
+            self._on_stream_selection(0)
+
+
+################################################################################
+# FILE: ui/panels/imu.py
+################################################################################
+
+"""
+IMU Calibration Panel.
+"""
+
+from PyQt6 import QtCore, QtWidgets
+
+
+class ImuCalibrationPanel(QtWidgets.QGroupBox):
+    # Definiujemy sygnał, który ten panel wysyła w świat
+    # Np. (command_id: int)
+    calibration_requested = QtCore.pyqtSignal(int)
+
+    def __init__(self):
+        super().__init__("IMU Control")
+
+        layout = QtWidgets.QVBoxLayout(self)
+
+        self.btn_zero_gyro = QtWidgets.QPushButton("Zero Gyroscope")
+        self.btn_acc_calib = QtWidgets.QPushButton("Calibrate Accelerometer")
+
+        layout.addWidget(self.btn_zero_gyro)
+        layout.addWidget(self.btn_acc_calib)
+
+        # Podłączamy przyciski
+        self.btn_zero_gyro.clicked.connect(lambda: self.calibration_requested.emit(1))
+        self.btn_acc_calib.clicked.connect(lambda: self.calibration_requested.emit(2))
+
+
+################################################################################
+# FILE: ui/panels/pid.py
+################################################################################
+
+from PyQt6 import QtCore, QtWidgets
+
+# Float params
+PARAM_KP = "Kp"
+PARAM_KI = "Ki"
+PARAM_K1 = "K1"
+PARAM_K2 = "K2"
+PARAM_K3 = "K3"
+PARAM_KAW = "Kaw"
+PARAM_ALPHA = "Alpha"
+PARAM_RPS = "Rps"
+
+# Checkbox params
+PARAM_USE_RAMP = "useRamp"
+PARAM_USE_PI = "usePI"
+
+
+class PidTuningPanel(QtWidgets.QWidget):
+    """
+    Pure content widget for PID tuning.
+    Collapsing/expanding is handled EXTERNALLY by CollapsableSection.
+    """
+
+    pid_left_sent = QtCore.pyqtSignal(
+        int, int, float, float, float, float, float, float, float, float
+    )
+    pid_right_sent = QtCore.pyqtSignal(
+        int, int, float, float, float, float, float, float, float, float
+    )
+    run_test_sent = QtCore.pyqtSignal(
+        int,
+        int,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        int,
+        int,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+    )
+
+    def __init__(self):
+        super().__init__()
+
+        grid = QtWidgets.QGridLayout(self)
+        grid.setContentsMargins(8, 6, 8, 6)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(6)
+
+        # ===== Header Row =====
+        grid.addWidget(QtWidgets.QLabel(""), 0, 0)
+        grid.addWidget(QtWidgets.QLabel("<b>Left</b>"), 0, 1)
+        grid.addWidget(QtWidgets.QLabel("<b>Right</b>"), 0, 2)
+
+        self.left = {}
+        self.right = {}
+
+        params = [
+            (PARAM_KP, 0.1),
+            (PARAM_KI, 0.02),
+            (PARAM_K1, 26.5),
+            (PARAM_K2, 8.0),
+            (PARAM_K3, 5.0),
+            (PARAM_KAW, 1.0),
+            (PARAM_ALPHA, 0.2),
+            (PARAM_RPS, 0.3),
+        ]
+
+        row = 1
+        for name, val in params:
+            grid.addWidget(QtWidgets.QLabel(f"{name}:"), row, 0)
+            self.left[name] = self._sb(val)
+            self.right[name] = self._sb(val)
+            grid.addWidget(self.left[name], row, 1)
+            grid.addWidget(self.right[name], row, 2)
+            row += 1
+
+        # ===== Ramp =====
+        grid.addWidget(QtWidgets.QLabel("Use Ramp:"), row, 0)
+        self.left[PARAM_USE_RAMP] = QtWidgets.QCheckBox()
+        self.right[PARAM_USE_RAMP] = QtWidgets.QCheckBox()
+        grid.addWidget(self.left[PARAM_USE_RAMP], row, 1)
+        grid.addWidget(self.right[PARAM_USE_RAMP], row, 2)
+        row += 1
+
+        # ===== Use PI =====
+        grid.addWidget(QtWidgets.QLabel("Use PI:"), row, 0)
+        self.left[PARAM_USE_PI] = QtWidgets.QCheckBox()
+        self.right[PARAM_USE_PI] = QtWidgets.QCheckBox()
+        grid.addWidget(self.left[PARAM_USE_PI], row, 1)
+        grid.addWidget(self.right[PARAM_USE_PI], row, 2)
+        row += 1
+
+        # ===== Update buttons =====
+        btn_l = QtWidgets.QPushButton("Update Left PID")
+        btn_r = QtWidgets.QPushButton("Update Right PID")
+        btn_l.clicked.connect(self._emit_left)
+        btn_r.clicked.connect(self._emit_right)
+
+        grid.addWidget(btn_l, row, 1)
+        grid.addWidget(btn_r, row, 2)
+        row += 1
+
+        # ===== Run test =====
+        run_btn = QtWidgets.QPushButton("Run Test (Both Motors)")
+        run_btn.clicked.connect(self._emit_run_test)
+        grid.addWidget(run_btn, row, 0, 1, 3)
+
+    # ======================================================
+    # Helpers
+    # ======================================================
+    def _sb(self, val: float) -> QtWidgets.QDoubleSpinBox:
+        sb = QtWidgets.QDoubleSpinBox()
+        sb.setRange(0.0, 1000.0)
+        sb.setDecimals(3)
+        sb.setSingleStep(0.1)
+        sb.setValue(val)
+        return sb
+
+    def _emit_left(self):
+        self.pid_left_sent.emit(
+            int(self.left[PARAM_USE_RAMP].isChecked()),
+            int(self.left[PARAM_USE_PI].isChecked()),
+            self.left[PARAM_KP].value(),
+            self.left[PARAM_KI].value(),
+            self.left[PARAM_K1].value(),
+            self.left[PARAM_K2].value(),
+            self.left[PARAM_K3].value(),
+            self.left[PARAM_KAW].value(),
+            self.left[PARAM_ALPHA].value(),
+            self.left[PARAM_RPS].value(),
+        )
+
+    def _emit_right(self):
+        self.pid_right_sent.emit(
+            int(self.right[PARAM_USE_RAMP].isChecked()),
+            int(self.right[PARAM_USE_PI].isChecked()),
+            self.right[PARAM_KP].value(),
+            self.right[PARAM_KI].value(),
+            self.right[PARAM_K1].value(),
+            self.right[PARAM_K2].value(),
+            self.right[PARAM_K3].value(),
+            self.right[PARAM_KAW].value(),
+            self.right[PARAM_ALPHA].value(),
+            self.right[PARAM_RPS].value(),
+        )
+
+    def _emit_run_test(self):
+        self.run_test_sent.emit(
+            int(self.left[PARAM_USE_RAMP].isChecked()),
+            int(self.left[PARAM_USE_PI].isChecked()),
+            self.left[PARAM_KP].value(),
+            self.left[PARAM_KI].value(),
+            self.left[PARAM_K1].value(),
+            self.left[PARAM_K2].value(),
+            self.left[PARAM_K3].value(),
+            self.left[PARAM_KAW].value(),
+            self.left[PARAM_ALPHA].value(),
+            self.left[PARAM_RPS].value(),
+            int(self.right[PARAM_USE_RAMP].isChecked()),
+            int(self.right[PARAM_USE_PI].isChecked()),
+            self.right[PARAM_KP].value(),
+            self.right[PARAM_KI].value(),
+            self.right[PARAM_K1].value(),
+            self.right[PARAM_K2].value(),
+            self.right[PARAM_K3].value(),
+            self.right[PARAM_KAW].value(),
+            self.right[PARAM_ALPHA].value(),
+            self.right[PARAM_RPS].value(),
+        )
+
+
+################################################################################
+# FILE: ui/panels/signals.py
+################################################################################
+
+"""
+Signal List Panel Module (Simplified).
+
+Handles the dynamic display of signal visibility controls in a flat list.
+Removed: Accordion groups, collapsible logic.
+"""
+
+from typing import Dict, List
+
+from PyQt6 import QtCore, QtWidgets
+
+# Zakładamy, że YAxisControlWidget jest teraz prostym widżetem (Label + Checkbox + Kolor)
+from ui.common.widgets import YAxisControlWidget
+
+
+class SignalListPanel(QtWidgets.QWidget):
+    """
+    Manages a flat list of signals and their visibility controls.
+    """
+
+    signal_visibility_changed = QtCore.pyqtSignal(str, bool)
+
+    def __init__(self):
+        super().__init__()
+
+        # --- Main Layout ---
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        grp_sigs = QtWidgets.QGroupBox("Signals Visibility")
+        l_sigs = QtWidgets.QVBoxLayout(grp_sigs)
+
+        # --- Scroll Area ---
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+
+        self.signals_container = QtWidgets.QWidget()
+        self.signals_layout = QtWidgets.QVBoxLayout(self.signals_container)
+        self.signals_layout.setSpacing(2)  # Mniejszy odstęp dla płaskiej listy
+        self.signals_layout.addStretch()
+
+        scroll.setWidget(self.signals_container)
+        l_sigs.addWidget(scroll)
+        layout.addWidget(grp_sigs)
+
+    def rebuild_list(self, cfg: dict) -> None:
+        """
+        Rebuilds the flat list of signals.
+        """
+        # 1. Clear existing widgets
+        while self.signals_layout.count() > 1:
+            item = self.signals_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+
+        # 2. Create Signal Controls (Flat List)
+        for sid, sdata in cfg["signals"].items():
+            w = YAxisControlWidget(sdata["label"], sdata["color"], sdata["visible"])
+
+            # Podpięcie checkboxa widoczności
+            # captured_sid gwarantuje, że lambda użyje poprawnego ID w pętli
+            w.enable_checkbox.toggled.connect(
+                lambda checked, captured_sid=sid: self.signal_visibility_changed.emit(
+                    captured_sid, checked
+                )
+            )
+
+            # Wstawiamy do głównego layoutu przed spacerem
+            self.signals_layout.insertWidget(self.signals_layout.count() - 1, w)
+
+
+################################################################################
+# FILE: ui/panels/timing.py
+################################################################################
+
+"""
+Time Configuration Panel Module.
+
+This module provides the `TimeConfigPanel` widget, which controls the temporal
+parameters of the data acquisition system:
+1. **Sampling Period**: How often data is read/generated.
+2. **Buffer Size**: How much history is kept in memory (and shown on the plot).
+"""
+
+from PyQt6 import QtCore, QtWidgets
+
+
+class TimeConfigPanel(QtWidgets.QGroupBox):
+    """
+    A group box for configuring time window parameters.
+
+    It bridges the UI inputs to the TelemetryEngine, allowing dynamic resizing
+    of data buffers and adjustment of the acquisition loop speed.
+
+    Attributes:
+        time_config_changed (pyqtSignal): Emitted when period or sample count changes.
+            Payload: (period_ms: float, max_samples: int).
+    """
+
+    time_config_changed = QtCore.pyqtSignal(float, int)
+
+    def __init__(self):
+        """Initializes the Time Config panel layout and widgets."""
+        super().__init__("Time Window")
+
+        layout = QtWidgets.QGridLayout(self)
+        layout.setSpacing(8)
+
+        # --- Sample Period Input ---
+        # Controls the dt (delta time) between points.
+        self.period_sb = QtWidgets.QDoubleSpinBox()
+        self.period_sb.setRange(1.0, 1000.0)
+        self.period_sb.setValue(5.0)  # Default: 5ms (200Hz)
+        self.period_sb.setSuffix(" ms")
+        self.period_sb.setSingleStep(1.0)
+        self.period_sb.setToolTip(
+            "Time interval between data points.\n"
+            "Lower value = Higher frequency (more CPU usage)."
+        )
+
+        # --- Sample Count Input ---
+        # Controls the size of the Deque (Ring Buffer).
+        self.samples_sb = QtWidgets.QSpinBox()
+        self.samples_sb.setRange(10, 100000)
+        self.samples_sb.setValue(2000)  # Default: 2000 points history
+        self.samples_sb.setSingleStep(100)
+        self.samples_sb.setToolTip(
+            "Number of data points to keep in history.\n" "Total Time Window = Period * Samples."
+        )
+
+        # --- Signal Wiring ---
+        # Emit signal immediately on change to update Engine/Plot in real-time
+        self.period_sb.valueChanged.connect(self._emit_config)
+        self.samples_sb.valueChanged.connect(self._emit_config)
+
+        # --- Layout Assembly ---
+        layout.addWidget(QtWidgets.QLabel("Period:"), 0, 0)
+        layout.addWidget(self.period_sb, 0, 1)
+
+        layout.addWidget(QtWidgets.QLabel("Samples:"), 1, 0)
+        layout.addWidget(self.samples_sb, 1, 1)
+
+    def _emit_config(self) -> None:
+        """
+        Slot called when spinboxes change.
+        Emits the current configuration values to the container.
+        """
+        self.time_config_changed.emit(self.period_sb.value(), self.samples_sb.value())
+
+    # --- Public Accessors (for MainWindow Initialization) ---
+
+    def get_period(self) -> float:
+        """Returns the current sampling period in milliseconds."""
+        return self.period_sb.value()
+
+    def get_samples(self) -> int:
+        """Returns the current sample buffer size."""
+        return self.samples_sb.value()
+
+
