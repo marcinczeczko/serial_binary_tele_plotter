@@ -1,5 +1,19 @@
 from PyQt6 import QtCore, QtWidgets
 
+# Float params
+PARAM_KP = "Kp"
+PARAM_KI = "Ki"
+PARAM_K1 = "K1"
+PARAM_K2 = "K2"
+PARAM_K3 = "K3"
+PARAM_KAW = "Kaw"
+PARAM_ALPHA = "Alpha"
+PARAM_RPS = "Rps"
+
+# Checkbox params
+PARAM_USE_RAMP = "useRamp"
+PARAM_USE_PI = "usePI"
+
 
 class PidTuningPanel(QtWidgets.QWidget):
     """
@@ -7,10 +21,33 @@ class PidTuningPanel(QtWidgets.QWidget):
     Collapsing/expanding is handled EXTERNALLY by CollapsableSection.
     """
 
-    pid_left_sent = QtCore.pyqtSignal(int, float, float, float, float, float)
-    pid_right_sent = QtCore.pyqtSignal(int, float, float, float, float, float)
+    pid_left_sent = QtCore.pyqtSignal(
+        int, int, float, float, float, float, float, float, float, float
+    )
+    pid_right_sent = QtCore.pyqtSignal(
+        int, int, float, float, float, float, float, float, float, float
+    )
     run_test_sent = QtCore.pyqtSignal(
-        int, float, float, float, float, float, int, float, float, float, float, float
+        int,
+        int,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        int,
+        int,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
     )
 
     def __init__(self):
@@ -30,11 +67,14 @@ class PidTuningPanel(QtWidgets.QWidget):
         self.right = {}
 
         params = [
-            ("Kp", 1.0),
-            ("Ki", 0.0),
-            ("Kff", 0.0),
-            ("Alpha", 0.5),
-            ("Rps", 0.5),
+            (PARAM_KP, 0.1),
+            (PARAM_KI, 0.02),
+            (PARAM_K1, 26.5),
+            (PARAM_K2, 8.0),
+            (PARAM_K3, 5.0),
+            (PARAM_KAW, 1.0),
+            (PARAM_ALPHA, 0.2),
+            (PARAM_RPS, 0.3),
         ]
 
         row = 1
@@ -47,11 +87,19 @@ class PidTuningPanel(QtWidgets.QWidget):
             row += 1
 
         # ===== Ramp =====
-        grid.addWidget(QtWidgets.QLabel("Ramp:"), row, 0)
-        self.left["Ramp"] = QtWidgets.QCheckBox()
-        self.right["Ramp"] = QtWidgets.QCheckBox()
-        grid.addWidget(self.left["Ramp"], row, 1)
-        grid.addWidget(self.right["Ramp"], row, 2)
+        grid.addWidget(QtWidgets.QLabel("Use Ramp:"), row, 0)
+        self.left[PARAM_USE_RAMP] = QtWidgets.QCheckBox()
+        self.right[PARAM_USE_RAMP] = QtWidgets.QCheckBox()
+        grid.addWidget(self.left[PARAM_USE_RAMP], row, 1)
+        grid.addWidget(self.right[PARAM_USE_RAMP], row, 2)
+        row += 1
+
+        # ===== Use PI =====
+        grid.addWidget(QtWidgets.QLabel("Use PI:"), row, 0)
+        self.left[PARAM_USE_PI] = QtWidgets.QCheckBox()
+        self.right[PARAM_USE_PI] = QtWidgets.QCheckBox()
+        grid.addWidget(self.left[PARAM_USE_PI], row, 1)
+        grid.addWidget(self.right[PARAM_USE_PI], row, 2)
         row += 1
 
         # ===== Update buttons =====
@@ -82,36 +130,52 @@ class PidTuningPanel(QtWidgets.QWidget):
 
     def _emit_left(self):
         self.pid_left_sent.emit(
-            int(self.left["Ramp"].isChecked()),
-            self.left["Kp"].value(),
-            self.left["Ki"].value(),
-            self.left["Kff"].value(),
-            self.left["Alpha"].value(),
-            self.left["Rps"].value(),
+            int(self.left[PARAM_USE_RAMP].isChecked()),
+            int(self.left[PARAM_USE_PI].isChecked()),
+            self.left[PARAM_KP].value(),
+            self.left[PARAM_KI].value(),
+            self.left[PARAM_K1].value(),
+            self.left[PARAM_K2].value(),
+            self.left[PARAM_K3].value(),
+            self.left[PARAM_KAW].value(),
+            self.left[PARAM_ALPHA].value(),
+            self.left[PARAM_RPS].value(),
         )
 
     def _emit_right(self):
         self.pid_right_sent.emit(
-            int(self.right["Ramp"].isChecked()),
-            self.right["Kp"].value(),
-            self.right["Ki"].value(),
-            self.right["Kff"].value(),
-            self.right["Alpha"].value(),
-            self.right["Rps"].value(),
+            int(self.right[PARAM_USE_RAMP].isChecked()),
+            int(self.right[PARAM_USE_PI].isChecked()),
+            self.right[PARAM_KP].value(),
+            self.right[PARAM_KI].value(),
+            self.right[PARAM_K1].value(),
+            self.right[PARAM_K2].value(),
+            self.right[PARAM_K3].value(),
+            self.right[PARAM_KAW].value(),
+            self.right[PARAM_ALPHA].value(),
+            self.right[PARAM_RPS].value(),
         )
 
     def _emit_run_test(self):
         self.run_test_sent.emit(
-            int(self.left["Ramp"].isChecked()),
-            self.left["Kp"].value(),
-            self.left["Ki"].value(),
-            self.left["Kff"].value(),
-            self.left["Alpha"].value(),
-            self.left["Rps"].value(),
-            int(self.right["Ramp"].isChecked()),
-            self.right["Kp"].value(),
-            self.right["Ki"].value(),
-            self.right["Kff"].value(),
-            self.right["Alpha"].value(),
-            self.right["Rps"].value(),
+            int(self.left[PARAM_USE_RAMP].isChecked()),
+            int(self.left[PARAM_USE_PI].isChecked()),
+            self.left[PARAM_KP].value(),
+            self.left[PARAM_KI].value(),
+            self.left[PARAM_K1].value(),
+            self.left[PARAM_K2].value(),
+            self.left[PARAM_K3].value(),
+            self.left[PARAM_KAW].value(),
+            self.left[PARAM_ALPHA].value(),
+            self.left[PARAM_RPS].value(),
+            int(self.right[PARAM_USE_RAMP].isChecked()),
+            int(self.right[PARAM_USE_PI].isChecked()),
+            self.right[PARAM_KP].value(),
+            self.right[PARAM_KI].value(),
+            self.right[PARAM_K1].value(),
+            self.right[PARAM_K2].value(),
+            self.right[PARAM_K3].value(),
+            self.right[PARAM_KAW].value(),
+            self.right[PARAM_ALPHA].value(),
+            self.right[PARAM_RPS].value(),
         )

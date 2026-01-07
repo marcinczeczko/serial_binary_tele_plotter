@@ -155,38 +155,69 @@ class TelemetryEngine(QtCore.QObject):
         except ValueError as e:
             self.status_msg.emit(f"Frame Config Error: {e}")
 
-    @QtCore.pyqtSlot(int, float, float, float, float, float)
-    def send_left_config(self, ramp_type, kp, ki, kff, alpha, rps):
-        self._send_motor_config(0, ramp_type, kp, ki, kff, alpha, rps)
+    @QtCore.pyqtSlot(int, int, float, float, float, float, float, float, float, float)
+    def send_left_config(self, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps):
+        self._send_motor_config(0, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps)
 
-    @QtCore.pyqtSlot(int, float, float, float, float, float)
-    def send_right_config(self, ramp_type, kp, ki, kff, alpha, rps):
-        self._send_motor_config(1, ramp_type, kp, ki, kff, alpha, rps)
+    @QtCore.pyqtSlot(int, int, float, float, float, float, float, float, float, float)
+    def send_right_config(self, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps):
+        self._send_motor_config(1, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps)
 
-    def _send_motor_config(self, motor_id, ramp_type, kp, ki, kff, alpha, rps):
+    def _send_motor_config(self, motor_id, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps):
         """Constructs and sends a PID configuration packet to the MCU."""
         if not self.serial_port or not self.serial_port.is_open:
             return
 
-        packet = self.protocol.create_pid_packet(ramp_type, motor_id, kp, ki, kff, alpha, rps)
+        packet = self.protocol.create_pid_packet(
+            motor_id, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps
+        )
         try:
             self.serial_port.write(packet)
         except (serial.SerialTimeoutException, serial.SerialException) as e:
             print(f"Write Error: {e}")
 
-    @QtCore.pyqtSlot(int, float, float, float, float, float, int, float, float, float, float, float)
+    @QtCore.pyqtSlot(
+        int,
+        int,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        int,
+        int,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+    )
     def send_all_config(
         self,
-        l_ramp_type,
+        l_use_ramp,
+        l_use_pi,
         l_kp,
         l_ki,
-        l_kff,
+        l_k1,
+        l_k2,
+        l_k3,
+        l_k_aw,
         l_alpha,
         l_rps,
-        r_ramp_type,
+        r_use_ramp,
+        r_use_pi,
         r_kp,
         r_ki,
-        r_kff,
+        r_k1,
+        r_k2,
+        r_k3,
+        r_k_aw,
         r_alpha,
         r_rps,
     ):
@@ -194,16 +225,24 @@ class TelemetryEngine(QtCore.QObject):
             return
 
         packet = self.protocol.create_pid_packet_all_motors(
-            l_ramp_type,
+            l_use_ramp,
+            l_use_pi,
             l_kp,
             l_ki,
-            l_kff,
+            l_k1,
+            l_k2,
+            l_k3,
+            l_k_aw,
             l_alpha,
             l_rps,
-            r_ramp_type,
+            r_use_ramp,
+            r_use_pi,
             r_kp,
             r_ki,
-            r_kff,
+            r_k1,
+            r_k2,
+            r_k3,
+            r_k_aw,
             r_alpha,
             r_rps,
         )

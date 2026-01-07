@@ -24,7 +24,7 @@ from core.protocol.decoder import FrameDecoder
 
 DEBUG_DECODE = False
 TRACE_DECODE = False
-DEBUG_DECODE_PAYLOAD = True
+DEBUG_DECODE_PAYLOAD = False
 
 
 class ProtocolHandler:
@@ -176,19 +176,19 @@ class ProtocolHandler:
         except struct.error:
             return None
 
-    def create_pid_packet(self, ramp_type, motor_id, kp, ki, kff, alpha, rps) -> bytes:
+    def create_pid_packet(
+        self, motor_id, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps
+    ) -> bytes:
         """
         Constructs a binary packet for PID configuration to be sent to the MCU.
 
         Structure:
         [Header: MAGIC0, MAGIC1, PID_REQ_ID, LEN] + [H_CRC] + [Payload] + [P_CRC]
 
-        Payload format (<BfffffB):
-        - u8: motor_id
-        - f32: kp, ki, kff, alpha, rps
-        - u8: ramp_type
         """
-        payload = struct.pack("<BfffffB", motor_id, kp, ki, kff, alpha, rps, ramp_type)
+        payload = struct.pack(
+            "<BffffffffBB", motor_id, kp, ki, k1, k2, k3, k_aw, alpha, rps, use_ramp, use_pi
+        )
 
         h_base = struct.pack("BBBB", MAGIC_0, MAGIC_1, RTP_REQ_PID_SINGLE, len(payload))
         h_crc = calculate_crc8(h_base)
@@ -198,16 +198,24 @@ class ProtocolHandler:
 
     def create_pid_packet_all_motors(
         self,
-        l_ramp_type,
+        l_use_ramp,
+        l_use_pi,
         l_kp,
         l_ki,
-        l_kff,
+        l_k1,
+        l_k2,
+        l_k3,
+        l_k_aw,
         l_alpha,
         l_rps,
-        r_ramp_type,
+        r_use_ramp,
+        r_use_pi,
         r_kp,
         r_ki,
-        r_kff,
+        r_k1,
+        r_k2,
+        r_k3,
+        r_k_aw,
         r_alpha,
         r_rps,
     ) -> bytes:
@@ -215,19 +223,27 @@ class ProtocolHandler:
         Constructs a binary packet for PID configuration to be sent to the MCU for both motors
         """
         payload = struct.pack(
-            "<fffffBfffffB",
+            "<ffffffffBBffffffffBB",
             l_kp,
             l_ki,
-            l_kff,
+            l_k1,
+            l_k2,
+            l_k3,
+            l_k_aw,
             l_alpha,
             l_rps,
-            l_ramp_type,
+            l_use_ramp,
+            l_use_pi,
             r_kp,
             r_ki,
-            r_kff,
+            r_k1,
+            r_k2,
+            r_k3,
+            r_k_aw,
             r_alpha,
             r_rps,
-            r_ramp_type,
+            r_use_ramp,
+            r_use_pi,
         )
 
         h_base = struct.pack("BBBB", MAGIC_0, MAGIC_1, RTP_REQ_PID_ALL, len(payload))

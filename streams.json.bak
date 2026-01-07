@@ -803,16 +803,6 @@
                         "style": "dashed",
                         "width": 2
                     }
-                },
-                "left_pwm_cmd": {
-                    "label": "L: PWM_CMD",
-                    "field": "left_pwm_cmd",
-                    "color": "#00fdff",
-                    "visible": true,
-                    "line": {
-                        "style": "dashed",
-                        "width": 2
-                    }
                 }
             }
         },

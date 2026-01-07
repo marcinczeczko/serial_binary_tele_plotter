@@ -27,10 +27,33 @@ class MainControlPanel(QtWidgets.QWidget):
     # --- Public Signals ---
     connection_requested = QtCore.pyqtSignal(str, int)
     pause_requested = QtCore.pyqtSignal(bool)
-    pid_left_sent = QtCore.pyqtSignal(int, float, float, float, float, float)
-    pid_right_sent = QtCore.pyqtSignal(int, float, float, float, float, float)
+    pid_left_sent = QtCore.pyqtSignal(
+        int, int, float, float, float, float, float, float, float, float
+    )
+    pid_right_sent = QtCore.pyqtSignal(
+        int, int, float, float, float, float, float, float, float, float
+    )
     pid_all_sent = QtCore.pyqtSignal(
-        int, float, float, float, float, float, int, float, float, float, float, float
+        int,
+        int,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        int,
+        int,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
+        float,
     )
 
     time_config_changed = QtCore.pyqtSignal(float, int)
