@@ -26,6 +26,10 @@ class TelemetryPlot(QtWidgets.QWidget):
         self._render_busy = False
         self._last_render_ts = 0.0
         self._min_render_interval = 0.07
+        
+        # Performance: Throttle range updates
+        self._last_range_update_ts = 0.0
+        self._range_update_interval = 0.2  # Update ranges every 200ms instead of every frame
 
         # signal_views: trzymamy tu tylko referencje do krzywych
         # Format: { "signal_id": { "curve": pg.PlotDataItem, "config": dict } }
@@ -51,7 +55,6 @@ class TelemetryPlot(QtWidgets.QWidget):
         # --- PERFORMANCE CRITICAL ---
         self.plot.setDownsampling(mode="peak")
         self.plot.setClipToView(True)
-        self.plot.setDownsampling(mode="peak")
 
         # WŁĄCZAMY lewą oś Y i włączamy auto-skalowanie
         self.plot.getAxis("left").setVisible(True)
@@ -119,13 +122,22 @@ class TelemetryPlot(QtWidgets.QWidget):
             self.signal_views[sid] = {"curve": c, "config": sig}
 
     def _compute_y_bounds(self, signals: dict) -> tuple[float, float]:
+        """Compute Y-axis bounds efficiently, only checking visible signals."""
         lo = float("inf")
         hi = float("-inf")
 
-        for arr in signals.values():
+        # Only compute bounds for visible signals
+        for sid, arr in signals.items():
+            if sid not in self.signal_views:
+                continue
+            if not self.signal_views[sid]["curve"].isVisible():
+                continue
             if len(arr):
-                lo = min(lo, float(np.min(arr)))
-                hi = max(hi, float(np.max(arr)))
+                # Use numpy's nanmin/nanmax for safety, but faster than min/max on large arrays
+                arr_min = float(np.nanmin(arr))
+                arr_max = float(np.nanmax(arr))
+                lo = min(lo, arr_min)
+                hi = max(hi, arr_max)
 
         if not np.isfinite(lo) or not np.isfinite(hi):
             return -1.0, 1.0
@@ -167,19 +179,25 @@ class TelemetryPlot(QtWidgets.QWidget):
                     # RAW_Y idzie prosto do setData. Bez odejmowania, bez dzielenia.
                     self.signal_views[sid]["curve"].setData(time_arr, raw_y, clear=False)
 
-            # Przesuwanie osi X (czas)
-            self.plot.setXRange(time_arr[0], time_arr[-1], padding=0)
+            # Throttle range updates for better performance
+            now = time.perf_counter()
+            should_update_ranges = (now - self._last_range_update_ts) >= self._range_update_interval
+            
+            if should_update_ranges:
+                # Przesuwanie osi X (czas)
+                self.plot.setXRange(time_arr[0], time_arr[-1], padding=0)
 
-            # --- Y AXIS (ANCHOR ZERO, NO DANCING) ---
-            y_min, y_max = self._compute_y_bounds(signals_data)
+                # --- Y AXIS (ANCHOR ZERO, NO DANCING) ---
+                y_min, y_max = self._compute_y_bounds(signals_data)
 
-            span = max(abs(y_min), abs(y_max), 1e-6)
-            pad = 0.1 * span
+                span = max(abs(y_min), abs(y_max), 1e-6)
+                pad = 0.1 * span
 
-            lo = min(y_min - pad, -pad)
-            hi = max(y_max + pad, pad)
+                lo = min(y_min - pad, -pad)
+                hi = max(y_max + pad, pad)
 
-            self.plot.setYRange(lo, hi, padding=0)
+                self.plot.setYRange(lo, hi, padding=0)
+                self._last_range_update_ts = now
 
             self.update_hud_position()
         finally:
@@ -250,8 +268,13 @@ class TelemetryPlot(QtWidgets.QWidget):
         self.label.setPos(x_pos, y_pos)
 
     def update_tooltip(self, cur_t: float, ds: dict):
+        """Update tooltip with optimized interpolation."""
         t_arr = ds["time"]
         raw_map = ds["signals"]
+        
+        # Early exit if no data
+        if len(t_arr) < 2:
+            return
 
         html = f'<div style="background-color: rgba(0, 0, 0, 0.7); padding: 6px; font-family: monospace; border: 1px solid #444;">'
         html += f'<b style="color: white;">T: {cur_t:.3f} s</b>'
@@ -260,6 +283,9 @@ class TelemetryPlot(QtWidgets.QWidget):
             html += f' <span style="color: #00E676;">(Δ {dt:+.3f} s)</span>'
         html += "<br><hr style='margin: 4px 0; border: 0; border-top: 1px solid #555;'>"
 
+        # Pre-clip time to valid range to avoid repeated checks
+        t_clamped = float(np.clip(cur_t, t_arr[0], t_arr[-1]))
+        
         sorted_sids = sorted(raw_map.keys())
         for sid in sorted_sids:
             if sid not in self.signal_views:
@@ -269,11 +295,11 @@ class TelemetryPlot(QtWidgets.QWidget):
                 continue
 
             vals = raw_map[sid]
-            data_len = min(len(t_arr), len(vals))
-            if data_len < 2:
+            if len(vals) < 2:
                 continue
 
-            v = float(np.interp(cur_t, t_arr[:data_len], vals[:data_len]))
+            # Use pre-clipped time value
+            v = float(np.interp(t_clamped, t_arr, vals))
             color = view_data["config"]["color"]
             label = view_data["config"].get("label", sid)
 
