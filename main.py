@@ -7,6 +7,8 @@ sets up signal handling for graceful termination (e.g., via Ctrl+C), and
 launches the main window.
 """
 
+from __future__ import annotations
+
 import signal
 import sys
 
@@ -16,7 +18,7 @@ from styles import apply_dark_theme
 from ui.main_window import MainWindow
 
 
-def main():
+def main() -> int:
     """
     Main execution function.
 
@@ -42,13 +44,13 @@ def main():
     # Create a dummy timer that fires every 500ms.
     # This wakes up the Python interpreter periodically, allowing it to process
     # system signals (like Ctrl+C) which are otherwise blocked by the C++ Qt event loop.
-    timer = QtCore.QTimer()
+    timer = QtCore.QTimer(app)
     timer.start(500)
     timer.timeout.connect(lambda: None)
 
     # Enter the main event loop
-    sys.exit(app.exec())
+    return app.exec()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

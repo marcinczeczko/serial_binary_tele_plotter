@@ -3,12 +3,18 @@ Configuration Tab Module.
 Manages the list of streams, file I/O operations, and integrates the Stream Editor.
 """
 
+from __future__ import annotations
+
 import json
+import logging
 import shutil
 
 from PyQt6 import QtCore, QtWidgets
 
 from ui.config.stream_editor import StreamEditor
+from core.types import StreamConfig
+
+logger = logging.getLogger(__name__)
 
 
 class ConfiguratorTab(QtWidgets.QWidget):
@@ -20,14 +26,14 @@ class ConfiguratorTab(QtWidgets.QWidget):
 
     config_saved = QtCore.pyqtSignal()
 
-    def __init__(self, filepath="streams.json", parent=None):
+    def __init__(self, filepath: str = "streams.json", parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        self.filepath = filepath
-        self.data = {}
+        self.filepath: str = filepath
+        self.data: dict[str, StreamConfig] = {}
         self.init_ui()
         self.load_from_file()
 
-    def init_ui(self):
+    def init_ui(self) -> None:
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
 
@@ -79,30 +85,30 @@ class ConfiguratorTab(QtWidgets.QWidget):
 
         layout.addWidget(splitter)
 
-    def load_from_file(self):
+    def load_from_file(self) -> None:
         try:
-            with open(self.filepath, "r") as f:
+            with open(self.filepath, "r", encoding="utf-8") as f:
                 self.data = json.load(f).get("streams", {})
-        except Exception as e:
-            print(f"Config load error: {e}")
+        except (OSError, json.JSONDecodeError) as e:
+            logger.exception("Config load error: %s", e)
             self.data = {}
         self.refresh_list()
 
-    def refresh_list(self):
+    def refresh_list(self) -> None:
         self.stream_list.clear()
         for k in self.data.keys():
             self.stream_list.addItem(k)
         if self.stream_list.count() > 0:
             self.stream_list.setCurrentRow(0)
 
-    def on_stream_selected(self, row):
+    def on_stream_selected(self, row: int) -> None:
         if row < 0:
             return
         key = self.stream_list.item(row).text()
         if key in self.data:
             self.editor.load_data(key, self.data[key])
 
-    def create_stream(self):
+    def create_stream(self) -> None:
         i = 1
         while f"new_stream_{i}" in self.data:
             i += 1
@@ -118,14 +124,14 @@ class ConfiguratorTab(QtWidgets.QWidget):
         self.stream_list.addItem(key)
         self.stream_list.setCurrentRow(self.stream_list.count() - 1)
 
-    def delete_stream(self):
+    def delete_stream(self) -> None:
         r = self.stream_list.currentRow()
         if r < 0:
             return
         del self.data[self.stream_list.item(r).text()]
         self.stream_list.takeItem(r)
 
-    def save_current(self):
+    def save_current(self) -> None:
         if self.stream_list.currentRow() < 0:
             return
         old_k = self.stream_list.currentItem().text()
@@ -136,16 +142,16 @@ class ConfiguratorTab(QtWidgets.QWidget):
             self.stream_list.currentItem().setText(new_k)
         self.data[new_k] = content
 
-    def save_to_file(self):
+    def save_to_file(self) -> None:
         self.save_current()
         try:
             shutil.copy(self.filepath, self.filepath + ".bak")
-        except:
-            pass
+        except OSError:
+            logger.warning("Could not create backup file: %s.bak", self.filepath)
         try:
-            with open(self.filepath, "w") as f:
+            with open(self.filepath, "w", encoding="utf-8") as f:
                 json.dump({"streams": self.data}, f, indent=4)
             QtWidgets.QMessageBox.information(self, "Saved", "Configuration saved!")
             self.config_saved.emit()
-        except Exception as e:
+        except OSError as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Save failed: {e}")

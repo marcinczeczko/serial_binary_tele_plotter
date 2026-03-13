@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import cast
+
 from PyQt6 import QtCore, QtWidgets
 
 # Float params
@@ -50,7 +54,7 @@ class PidTuningPanel(QtWidgets.QWidget):
         float,
     )
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
 
         grid = QtWidgets.QGridLayout(self)
@@ -63,8 +67,8 @@ class PidTuningPanel(QtWidgets.QWidget):
         grid.addWidget(QtWidgets.QLabel("<b>Left</b>"), 0, 1)
         grid.addWidget(QtWidgets.QLabel("<b>Right</b>"), 0, 2)
 
-        self.left = {}
-        self.right = {}
+        self.left: dict[str, QtWidgets.QDoubleSpinBox | QtWidgets.QCheckBox] = {}
+        self.right: dict[str, QtWidgets.QDoubleSpinBox | QtWidgets.QCheckBox] = {}
 
         params = [
             (PARAM_KP, 0.1),
@@ -128,54 +132,54 @@ class PidTuningPanel(QtWidgets.QWidget):
         sb.setValue(val)
         return sb
 
-    def _emit_left(self):
+    def _emit_left(self) -> None:
         self.pid_left_sent.emit(
-            int(self.left[PARAM_USE_RAMP].isChecked()),
-            int(self.left[PARAM_USE_PI].isChecked()),
-            self.left[PARAM_KP].value(),
-            self.left[PARAM_KI].value(),
-            self.left[PARAM_K1].value(),
-            self.left[PARAM_K2].value(),
-            self.left[PARAM_K3].value(),
-            self.left[PARAM_KAW].value(),
-            self.left[PARAM_ALPHA].value(),
-            self.left[PARAM_RPS].value(),
+            int(cast(QtWidgets.QCheckBox, self.left[PARAM_USE_RAMP]).isChecked()),
+            int(cast(QtWidgets.QCheckBox, self.left[PARAM_USE_PI]).isChecked()),
+            cast(QtWidgets.QDoubleSpinBox, self.left[PARAM_KP]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.left[PARAM_KI]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.left[PARAM_K1]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.left[PARAM_K2]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.left[PARAM_K3]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.left[PARAM_KAW]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.left[PARAM_ALPHA]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.left[PARAM_RPS]).value(),
         )
 
-    def _emit_right(self):
+    def _emit_right(self) -> None:
         self.pid_right_sent.emit(
-            int(self.right[PARAM_USE_RAMP].isChecked()),
-            int(self.right[PARAM_USE_PI].isChecked()),
-            self.right[PARAM_KP].value(),
-            self.right[PARAM_KI].value(),
-            self.right[PARAM_K1].value(),
-            self.right[PARAM_K2].value(),
-            self.right[PARAM_K3].value(),
-            self.right[PARAM_KAW].value(),
-            self.right[PARAM_ALPHA].value(),
-            self.right[PARAM_RPS].value(),
+            int(cast(QtWidgets.QCheckBox, self.right[PARAM_USE_RAMP]).isChecked()),
+            int(cast(QtWidgets.QCheckBox, self.right[PARAM_USE_PI]).isChecked()),
+            cast(QtWidgets.QDoubleSpinBox, self.right[PARAM_KP]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.right[PARAM_KI]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.right[PARAM_K1]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.right[PARAM_K2]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.right[PARAM_K3]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.right[PARAM_KAW]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.right[PARAM_ALPHA]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.right[PARAM_RPS]).value(),
         )
 
-    def _emit_run_test(self):
+    def _emit_run_test(self) -> None:
         self.run_test_sent.emit(
-            int(self.left[PARAM_USE_RAMP].isChecked()),
-            int(self.left[PARAM_USE_PI].isChecked()),
-            self.left[PARAM_KP].value(),
-            self.left[PARAM_KI].value(),
-            self.left[PARAM_K1].value(),
-            self.left[PARAM_K2].value(),
-            self.left[PARAM_K3].value(),
-            self.left[PARAM_KAW].value(),
-            self.left[PARAM_ALPHA].value(),
-            self.left[PARAM_RPS].value(),
-            int(self.right[PARAM_USE_RAMP].isChecked()),
-            int(self.right[PARAM_USE_PI].isChecked()),
-            self.right[PARAM_KP].value(),
-            self.right[PARAM_KI].value(),
-            self.right[PARAM_K1].value(),
-            self.right[PARAM_K2].value(),
-            self.right[PARAM_K3].value(),
-            self.right[PARAM_KAW].value(),
-            self.right[PARAM_ALPHA].value(),
-            self.right[PARAM_RPS].value(),
+            int(cast(QtWidgets.QCheckBox, self.left[PARAM_USE_RAMP]).isChecked()),
+            int(cast(QtWidgets.QCheckBox, self.left[PARAM_USE_PI]).isChecked()),
+            cast(QtWidgets.QDoubleSpinBox, self.left[PARAM_KP]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.left[PARAM_KI]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.left[PARAM_K1]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.left[PARAM_K2]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.left[PARAM_K3]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.left[PARAM_KAW]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.left[PARAM_ALPHA]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.left[PARAM_RPS]).value(),
+            int(cast(QtWidgets.QCheckBox, self.right[PARAM_USE_RAMP]).isChecked()),
+            int(cast(QtWidgets.QCheckBox, self.right[PARAM_USE_PI]).isChecked()),
+            cast(QtWidgets.QDoubleSpinBox, self.right[PARAM_KP]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.right[PARAM_KI]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.right[PARAM_K1]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.right[PARAM_K2]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.right[PARAM_K3]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.right[PARAM_KAW]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.right[PARAM_ALPHA]).value(),
+            cast(QtWidgets.QDoubleSpinBox, self.right[PARAM_RPS]).value(),
         )

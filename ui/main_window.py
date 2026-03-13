@@ -7,13 +7,19 @@ in the application architecture, managing high-level signal wiring, thread
 lifecycle, and global events.
 """
 
+from __future__ import annotations
+
+import logging
+
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.acquisition.engine import TelemetryEngine
-from core.types import EngineState
+from core.types import EngineState, StreamConfig
 from ui.charts.telemetry_plot import TelemetryPlot
 from ui.config.tab import ConfiguratorTab
 from ui.panels.container import MainControlPanel
+
+logger = logging.getLogger(__name__)
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -28,15 +34,15 @@ class MainWindow(QtWidgets.QMainWindow):
     4. **Lifecycle**: Managing startup configuration and safe shutdown sequences.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """
         Initializes the main window, UI layout, and background engine.
         """
         super().__init__()
 
         # --- State Tracking ---
-        self.active_port = None
-        self.active_baud = 115200
+        self.active_port: str | None = None
+        self.active_baud: int = 115200
 
         # --- Window Setup ---
         self.setWindowTitle("DiffBot Telemetry Viewer (Pro)")
@@ -93,10 +99,12 @@ class MainWindow(QtWidgets.QMainWindow):
         initial_period = self.panel.get_initial_sample_period()
         initial_samples = self.panel.get_initial_sample_count()
 
-        self.engine = TelemetryEngine(initial_period, initial_samples)
+        self.engine: TelemetryEngine = TelemetryEngine(initial_period, initial_samples)
 
-        self.engine_thread = QtCore.QThread()
+        self.engine_thread: QtCore.QThread = QtCore.QThread(self)
         self.engine.moveToThread(self.engine_thread)
+        self.engine_thread.finished.connect(self.engine.deleteLater)
+        self.engine_thread.finished.connect(self.engine_thread.deleteLater)
         self.engine_thread.start()
 
         # --- Signal Wiring ---
@@ -129,7 +137,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # --- Final Setup ---
         self._initial_stream_setup()
 
-    def _reload_configuration(self):
+    def _reload_configuration(self) -> None:
         """
         Called when streams.json is modified via the Configurator tab.
         We need to reload the StreamConfigLoader in the panel and refresh lists.
@@ -168,7 +176,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.engine.configure_signals(cfg["signals"])
         self.engine.configure_frame(cfg)
 
-    def _on_stream_changed(self, stream_cfg: dict) -> None:
+    def _on_stream_changed(self, stream_cfg: StreamConfig) -> None:
         """
         Handles the event when the user selects a different stream type in the panel.
         It safely restarts the engine if it was running.
@@ -244,6 +252,7 @@ class MainWindow(QtWidgets.QMainWindow):
             QtCore.QMetaObject.invokeMethod(
                 self.engine, "stop_working", QtCore.Qt.ConnectionType.QueuedConnection
             )
+            self._set_pause_state(False, update_status=False)
             self.lbl_status.setText("Disconnected")
             self.lbl_status.setStyleSheet("color: #F44336; font-weight: bold;")
 
@@ -253,6 +262,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         self.active_port = None
         self.panel.conn_panel.set_connected(False)
+        self._set_pause_state(False, update_status=False)
         self.lbl_status.setText(message)
         self.lbl_status.setStyleSheet("color: #F44336; font-weight: bold;")
 
@@ -260,13 +270,26 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         Toggles the pause state of the plotter.
         """
-        if paused:
-            self.engine.data_ready.disconnect(self.plot.on_data_ready)
-        else:
-            self.engine.data_ready.connect(self.plot.on_data_ready)
+        self._set_pause_state(paused, update_status=True)
 
+    def _set_pause_state(self, paused: bool, update_status: bool) -> None:
+        if paused:
+            self._disconnect_data_ready()
+        else:
+            self._ensure_data_ready_connected()
         self.plot.set_paused(paused)
-        self.lbl_status.setText("PAUSED" if paused else "Connected")
+        if update_status:
+            self.lbl_status.setText("PAUSED" if paused else "Connected")
+
+    def _disconnect_data_ready(self) -> None:
+        try:
+            self.engine.data_ready.disconnect(self.plot.on_data_ready)
+        except TypeError:
+            pass
+
+    def _ensure_data_ready_connected(self) -> None:
+        self._disconnect_data_ready()
+        self.engine.data_ready.connect(self.plot.on_data_ready)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         """
@@ -282,7 +305,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # 3. Wait for cleanup (with timeout to prevent freezing the app on close)
         if not self.engine_thread.wait(2000):
-            print("Engine thread hung, forcing termination...")
+            logger.warning("Engine thread hung, forcing termination...")
             self.engine_thread.terminate()
             self.engine_thread.wait()
 

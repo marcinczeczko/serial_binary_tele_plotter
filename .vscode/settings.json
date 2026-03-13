@@ -36,5 +36,6 @@
     "--disable=no-member,c-extension-no-member",
     //"--variable-rgx=[a-z_][a-z0-9_]{1,30}$",  // Less restrictive nameology of variables
    // "--disable=C0114,C0115,C0116"             // Disable the need for docstrings
-  ]
+  ],
+  "chatgpt.openOnStartup": true
 }

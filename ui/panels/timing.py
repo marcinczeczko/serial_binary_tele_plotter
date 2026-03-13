@@ -7,6 +7,8 @@ parameters of the data acquisition system:
 2. **Buffer Size**: How much history is kept in memory (and shown on the plot).
 """
 
+from __future__ import annotations
+
 from PyQt6 import QtCore, QtWidgets
 
 
@@ -24,7 +26,7 @@ class TimeConfigPanel(QtWidgets.QGroupBox):
 
     time_config_changed = QtCore.pyqtSignal(float, int)
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initializes the Time Config panel layout and widgets."""
         super().__init__("Time Window")
 

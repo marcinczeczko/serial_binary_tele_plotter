@@ -7,10 +7,12 @@ and overrides the color palette and stylesheets to create a modern, high-contras
 dark interface suitable for telemetry visualization.
 """
 
+from __future__ import annotations
+
 from PyQt6 import QtCore, QtWidgets
 
 
-def apply_dark_theme(app: QtWidgets.QApplication):
+def apply_dark_theme(app: QtWidgets.QApplication) -> None:
     """
     Applies a custom dark theme to the given QApplication instance.
 

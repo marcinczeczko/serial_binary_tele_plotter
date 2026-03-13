@@ -7,9 +7,12 @@ around Python's built-in `struct` module, allowing the binary structure to be de
 dynamically via configuration files rather than hardcoded classes.
 """
 
+from __future__ import annotations
+
 import struct
 
 from core.protocol.constants import STRUCT_TYPE_MAP
+from core.types import StreamFrameField
 
 
 class FrameDecoder:
@@ -27,7 +30,7 @@ class FrameDecoder:
         names (list): Pre-cached list of field names to map unpacked values quickly.
     """
 
-    def __init__(self, endian: str, fields: list):
+    def __init__(self, endian: str, fields: list[StreamFrameField]) -> None:
         """
         Initializes the FrameDecoder.
 
@@ -36,18 +39,18 @@ class FrameDecoder:
             fields (list): A list of field dicts, e.g.:
                            [{'name': 'cnt', 'type': 'u32'}, {'name': 'val', 'type': 'f32'}]
         """
-        self.fields = fields
+        self.fields: list[StreamFrameField] = fields
 
         # Translate readable endianness to struct format characters
         # '<' = Little-endian (standard for ARM Cortex-M)
         # '>' = Big-endian
-        self.endian = "<" if endian == "little" else ">"
+        self.endian: str = "<" if endian == "little" else ">"
 
         # Pre-compile the format string for performance
-        self.format = self._build_struct_fmt()
+        self.format: str = self._build_struct_fmt()
 
         # Cache names to avoid re-iterating the list during high-frequency decoding
-        self.names = [f["name"] for f in fields]
+        self.names: list[str] = [f["name"] for f in fields]
 
     def _build_struct_fmt(self) -> str:
         """
@@ -70,7 +73,7 @@ class FrameDecoder:
             fmt += code
         return fmt
 
-    def decode(self, payload: bytes) -> dict:
+    def decode(self, payload: bytes) -> dict[str, int | float]:
         """
         Unpacks binary data into a dictionary.
 

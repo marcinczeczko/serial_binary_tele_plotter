@@ -7,6 +7,8 @@ It includes:
 - YAxisControlWidget: A composite widget for configuring signal visualization (scale, visibility).
 """
 
+from __future__ import annotations
+
 from PyQt6 import QtCore, QtWidgets
 
 
@@ -25,7 +27,7 @@ class CollapsibleGroup(QtWidgets.QWidget):
 
     expanded = QtCore.pyqtSignal(object)
 
-    def __init__(self, title: str):
+    def __init__(self, title: str) -> None:
         """
         Initializes the collapsible group.
 
@@ -57,7 +59,7 @@ class CollapsibleGroup(QtWidgets.QWidget):
         layout.addWidget(self.toggle)
         layout.addWidget(self.content)
 
-    def _on_toggled(self, checked: bool):
+    def _on_toggled(self, checked: bool) -> None:
         """
         Slot handling the toggle state change.
 
@@ -77,7 +79,7 @@ class YAxisControlWidget(QtWidgets.QWidget):
     Simple widget for a single signal: [X] Color_Icon Label_Name
     """
 
-    def __init__(self, label: str, color: str, checked: bool):
+    def __init__(self, label: str, color: str, checked: bool) -> None:
         super().__init__()
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(5, 2, 5, 2)
@@ -103,7 +105,7 @@ class YAxisControlWidget(QtWidgets.QWidget):
 
 
 class CollapsableSection(QtWidgets.QWidget):
-    def __init__(self, title: str, content: QtWidgets.QWidget):
+    def __init__(self, title: str, content: QtWidgets.QWidget) -> None:
         super().__init__()
 
         self.content = content
@@ -121,7 +123,7 @@ class CollapsableSection(QtWidgets.QWidget):
 
         self.layout.addWidget(self.header)
 
-    def toggle(self):
+    def toggle(self) -> None:
         expanded = self.header.isChecked()
 
         if expanded:

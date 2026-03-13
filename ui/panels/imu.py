@@ -2,6 +2,8 @@
 IMU Calibration Panel.
 """
 
+from __future__ import annotations
+
 from PyQt6 import QtCore, QtWidgets
 
 
@@ -10,7 +12,7 @@ class ImuCalibrationPanel(QtWidgets.QGroupBox):
     # Np. (command_id: int)
     calibration_requested = QtCore.pyqtSignal(int)
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__("IMU Control")
 
         layout = QtWidgets.QVBoxLayout(self)

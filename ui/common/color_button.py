@@ -2,6 +2,8 @@
 Reusable UI Component: Color Picker Button.
 """
 
+from __future__ import annotations
+
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 
@@ -13,7 +15,7 @@ class ColorButton(QtWidgets.QPushButton):
 
     colorChanged = QtCore.pyqtSignal(str)
 
-    def __init__(self, hex_color: str = "#FFFFFF", parent=None):
+    def __init__(self, hex_color: str = "#FFFFFF", parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.hex_color = hex_color
         self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
@@ -22,7 +24,7 @@ class ColorButton(QtWidgets.QPushButton):
         self.clicked.connect(self.pick_color)
         self.refresh_style()
 
-    def refresh_style(self):
+    def refresh_style(self) -> None:
         """Updates the button background and text color based on brightness."""
         text_col = "black"
         try:
@@ -50,11 +52,11 @@ class ColorButton(QtWidgets.QPushButton):
         )
         self.setText(self.hex_color)
 
-    def set_color(self, hex_color: str):
+    def set_color(self, hex_color: str) -> None:
         self.hex_color = hex_color
         self.refresh_style()
 
-    def pick_color(self):
+    def pick_color(self) -> None:
         color = QtWidgets.QColorDialog.getColor(
             QtGui.QColor(self.hex_color), self, "Pick Signal Color"
         )

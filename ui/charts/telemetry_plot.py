@@ -4,42 +4,49 @@ No normalization. No scaling math. No ViewBox stacking.
 What comes in packet['signals'] is displayed exactly on the Y-axis.
 """
 
+from __future__ import annotations
+
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Optional, TypedDict
 
 import numpy as np
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtWidgets
 
-from core.types import PlotMode
+from core.types import PlotMode, PlotPacketWithRaw, SignalsConfig, StreamSignalConfig
+
+
+class _SignalView(TypedDict):
+    curve: pg.PlotDataItem
+    config: StreamSignalConfig
 
 
 class TelemetryPlot(QtWidgets.QWidget):
     cursor_moved = QtCore.pyqtSignal(str)
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
 
         # --- State ---
-        self.mode = PlotMode.LIVE
+        self.mode: PlotMode = PlotMode.LIVE
 
-        self._render_busy = False
-        self._last_render_ts = 0.0
-        self._min_render_interval = 0.07
+        self._render_busy: bool = False
+        self._last_render_ts: float = 0.0
+        self._min_render_interval: float = 0.07
         
         # Performance: Throttle range updates
-        self._last_range_update_ts = 0.0
-        self._range_update_interval = 0.2  # Update ranges every 200ms instead of every frame
+        self._last_range_update_ts: float = 0.0
+        self._range_update_interval: float = 0.2  # Update ranges every 200ms instead of every frame
 
         # signal_views: trzymamy tu tylko referencje do krzywych
         # Format: { "signal_id": { "curve": pg.PlotDataItem, "config": dict } }
-        self.signal_views: Dict[str, Dict[str, Any]] = {}
+        self.signal_views: dict[str, _SignalView] = {}
 
-        self.last_packet: Optional[dict] = None
-        self.analysis_packet: Optional[dict] = None
+        self.last_packet: Optional[PlotPacketWithRaw] = None
+        self.analysis_packet: Optional[PlotPacketWithRaw] = None
 
         self.anchor_time: Optional[float] = None
-        self.anchor_values: Dict[str, float] = {}
+        self.anchor_values: dict[str, float] = {}
 
         # --- UI Layout ---
         layout = QtWidgets.QVBoxLayout(self)
@@ -84,7 +91,7 @@ class TelemetryPlot(QtWidgets.QWidget):
         self.plot.sigRangeChanged.connect(self.update_hud_position)
 
     @QtCore.pyqtSlot(dict)
-    def configure_signals(self, signals_cfg: dict):
+    def configure_signals(self, signals_cfg: SignalsConfig) -> None:
         """
         Recreates curves on the single shared plot.
         IGNORES min/max/range settings completely.
@@ -124,7 +131,7 @@ class TelemetryPlot(QtWidgets.QWidget):
 
             self.signal_views[sid] = {"curve": c, "config": sig}
 
-    def _compute_y_bounds(self, signals: dict) -> tuple[float, float]:
+    def _compute_y_bounds(self, signals: dict[str, np.ndarray]) -> tuple[float, float]:
         """Compute Y-axis bounds efficiently, only checking visible signals."""
         lo = float("inf")
         hi = float("-inf")
@@ -148,7 +155,7 @@ class TelemetryPlot(QtWidgets.QWidget):
         return lo, hi
 
     @QtCore.pyqtSlot(dict)
-    def on_data_ready(self, packet: dict):
+    def on_data_ready(self, packet: PlotPacketWithRaw) -> None:
         """
         Takes RAW floats from packet and puts them on the chart.
         NO MATH HERE.
@@ -207,7 +214,7 @@ class TelemetryPlot(QtWidgets.QWidget):
             self._render_busy = False
 
     @QtCore.pyqtSlot(bool)
-    def set_paused(self, paused: bool):
+    def set_paused(self, paused: bool) -> None:
         if paused:
             self.mode = PlotMode.ANALYSIS
             self.analysis_packet = self.last_packet  # copy.deepcopy(self.last_packet)
@@ -218,13 +225,13 @@ class TelemetryPlot(QtWidgets.QWidget):
             self.anchorLine.setVisible(False)
             self.label.setHtml("")
 
-    def mouse_moved_handler(self, pos: QtCore.QPointF):
+    def mouse_moved_handler(self, pos: QtCore.QPointF) -> None:
         vb = self.plot.getViewBox()
         if vb.sceneBoundingRect().contains(pos):
             mousePoint = vb.mapSceneToView(pos)
             self._process_mouse_movement(mousePoint.x())
 
-    def _process_mouse_movement(self, x_curr: float):
+    def _process_mouse_movement(self, x_curr: float) -> None:
         ds = self.analysis_packet if self.mode == PlotMode.ANALYSIS else self.last_packet
         if not ds or len(ds["time"]) < 2:
             return
@@ -235,7 +242,7 @@ class TelemetryPlot(QtWidgets.QWidget):
         self.vLine.setPos(x_clamped)
         self.update_tooltip(x_clamped, ds)
 
-    def on_mouse_clicked(self, evt):
+    def on_mouse_clicked(self, evt: Any) -> None:
         if self.mode != PlotMode.ANALYSIS:
             return
         if evt.button() != QtCore.Qt.MouseButton.LeftButton:
@@ -252,7 +259,7 @@ class TelemetryPlot(QtWidgets.QWidget):
             self._capture_anchor_values(t_stamp)
             self._process_mouse_movement(t_stamp)
 
-    def _capture_anchor_values(self, t_anchor: float):
+    def _capture_anchor_values(self, t_anchor: float) -> None:
         if not self.analysis_packet:
             return
         t_arr = self.analysis_packet["time"]
@@ -262,7 +269,7 @@ class TelemetryPlot(QtWidgets.QWidget):
             sid: float(np.interp(t_anchor, t_arr, vals)) for sid, vals in raw_map.items()
         }
 
-    def update_hud_position(self):
+    def update_hud_position(self) -> None:
         vb = self.plot.getViewBox()
         ranges = vb.viewRange()
         xr, yr = ranges[0], ranges[1]
@@ -270,7 +277,7 @@ class TelemetryPlot(QtWidgets.QWidget):
         y_pos = yr[1] - 0.02 * (yr[1] - yr[0])
         self.label.setPos(x_pos, y_pos)
 
-    def update_tooltip(self, cur_t: float, ds: dict):
+    def update_tooltip(self, cur_t: float, ds: PlotPacketWithRaw) -> None:
         """Update tooltip with optimized interpolation."""
         t_arr = ds["time"]
         raw_map = ds["signals"]
@@ -316,6 +323,6 @@ class TelemetryPlot(QtWidgets.QWidget):
         self.update_hud_position()
 
     @QtCore.pyqtSlot(str, bool)
-    def set_signal_visible(self, sig_id: str, visible: bool):
+    def set_signal_visible(self, sig_id: str, visible: bool) -> None:
         if sig_id in self.signal_views:
             self.signal_views[sig_id]["curve"].setVisible(visible)

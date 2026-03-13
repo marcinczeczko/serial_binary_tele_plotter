@@ -9,13 +9,20 @@ It acts as a Controller, orchestrating the flow of data between:
 4. GUI Output (Signaling via Timer)
 """
 
+from __future__ import annotations
+
+import logging
+
 import serial
 from PyQt6 import QtCore
 
 from core.acquisition.storage import SignalDataManager
 from core.acquisition.virtual import VirtualDevice
 from core.protocol.handler import ProtocolHandler
-from core.types import EngineState
+from core.types import EngineState, SignalsConfig, StreamConfig
+
+
+logger = logging.getLogger(__name__)
 
 
 class TelemetryEngine(QtCore.QObject):
@@ -27,13 +34,13 @@ class TelemetryEngine(QtCore.QObject):
     status_msg = QtCore.pyqtSignal(str)
     connection_failed = QtCore.pyqtSignal(str)
 
-    def __init__(self, sample_period_ms: float, max_samples: int):
+    def __init__(self, sample_period_ms: float, max_samples: int) -> None:
         super().__init__()
-        self.sample_period_s = sample_period_ms / 1000.0
+        self.sample_period_s: float = sample_period_ms / 1000.0
 
         # --- Sub-components (Composition Pattern) ---
-        self.data_mgr = SignalDataManager(max_samples)
-        self.protocol = ProtocolHandler()
+        self.data_mgr: SignalDataManager = SignalDataManager(max_samples)
+        self.protocol: ProtocolHandler = ProtocolHandler()
 
         # 'parent=self' is crucial here! It ensures that when TelemetryEngine is moved
         # to a new QThread, the VirtualDevice (and its internal QTimer) moves with it.
@@ -41,20 +48,20 @@ class TelemetryEngine(QtCore.QObject):
         self.virtual.frame_generated.connect(self.data_mgr.store_frame)
 
         # --- IO & State ---
-        self.serial_port = None
+        self.serial_port: serial.Serial | None = None
         self.state: EngineState = EngineState.IDLE
 
         # --- GUI Update Timer ---
-        self.gui_update_timer = QtCore.QTimer(self)
+        self.gui_update_timer: QtCore.QTimer = QtCore.QTimer(self)
         self.gui_update_timer.timeout.connect(self._emit_buffered_data)
         self.gui_update_timer.setInterval(100)  # ~10 FPS
 
-        self.serial_timer = QtCore.QTimer(self)
+        self.serial_timer: QtCore.QTimer = QtCore.QTimer(self)
         self.serial_timer.timeout.connect(self._serial_read_step)
         self.serial_timer.setInterval(1)  # 1 ms is MORE than enough
 
     @QtCore.pyqtSlot(str, int)
-    def start_working(self, port_name, baudrate):
+    def start_working(self, port_name: str, baudrate: int) -> None:
         """Initiates the data acquisition process."""
         if self.state != EngineState.CONFIGURED:
             self.status_msg.emit("Worker not configured yet")
@@ -82,7 +89,7 @@ class TelemetryEngine(QtCore.QObject):
         self.gui_update_timer.start()
 
     @QtCore.pyqtSlot()
-    def stop_working(self):
+    def stop_working(self) -> None:
         """Safely stops all operations."""
         self.gui_update_timer.stop()
         self.serial_timer.stop()
@@ -101,12 +108,12 @@ class TelemetryEngine(QtCore.QObject):
             self.serial_port = None
 
     @QtCore.pyqtSlot(int)
-    def send_imu_command(self, cmd_id):
+    def send_imu_command(self, cmd_id: int) -> None:
         # Tutaj logika wysyłania pakietu binarnego do MCU
         # self.protocol.create_imu_packet(cmd_id)...
         self.status_msg.emit(f"Sending IMU command: {cmd_id}")
 
-    def _serial_read_step(self):
+    def _serial_read_step(self) -> None:
         """Performs a single, non-blocking read operation from the serial port."""
         if self.state != EngineState.RUNNING or not self.serial_port:
             return
@@ -132,7 +139,7 @@ class TelemetryEngine(QtCore.QObject):
 
         # QtCore.QTimer.singleShot(0, self._serial_read_step)
 
-    def _emit_buffered_data(self):
+    def _emit_buffered_data(self) -> None:
         """Periodic task (triggered by gui_update_timer)."""
         if self.state != EngineState.RUNNING:
             return
@@ -142,14 +149,14 @@ class TelemetryEngine(QtCore.QObject):
             self.data_ready.emit(data)
 
     @QtCore.pyqtSlot(float, int)
-    def update_time_config(self, period_ms, max_samples):
+    def update_time_config(self, period_ms: float, max_samples: int) -> None:
         """Updates sampling settings and resizes buffers."""
         self.sample_period_s = period_ms / 1000.0
         self.data_mgr.update_max_samples(max_samples)
         self.virtual.update_params(self.sample_period_s)
 
     @QtCore.pyqtSlot(dict)
-    def configure_signals(self, signals_cfg: dict):
+    def configure_signals(self, signals_cfg: SignalsConfig) -> None:
         """Configures the Data Manager with the signal definitions."""
         self.data_mgr.configure(signals_cfg)
         self.state = EngineState.CONFIGURED
@@ -157,7 +164,7 @@ class TelemetryEngine(QtCore.QObject):
     # --- FIX: Dodano dekorator @QtCore.pyqtSlot(dict) ---
     # Jest to wymagane, aby metoda była widoczna dla QMetaObject.invokeMethod
     @QtCore.pyqtSlot(dict)
-    def configure_frame(self, stream_cfg: dict):
+    def configure_frame(self, stream_cfg: StreamConfig) -> None:
         """Configures the Protocol Handler with the binary frame structure."""
         try:
             self.protocol.configure(stream_cfg)
@@ -167,14 +174,51 @@ class TelemetryEngine(QtCore.QObject):
             self.status_msg.emit(f"Frame Config Error: {e}")
 
     @QtCore.pyqtSlot(int, int, float, float, float, float, float, float, float, float)
-    def send_left_config(self, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps):
+    def send_left_config(
+        self,
+        use_ramp: int,
+        use_pi: int,
+        kp: float,
+        ki: float,
+        k1: float,
+        k2: float,
+        k3: float,
+        k_aw: float,
+        alpha: float,
+        rps: float,
+    ) -> None:
         self._send_motor_config(0, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps)
 
     @QtCore.pyqtSlot(int, int, float, float, float, float, float, float, float, float)
-    def send_right_config(self, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps):
+    def send_right_config(
+        self,
+        use_ramp: int,
+        use_pi: int,
+        kp: float,
+        ki: float,
+        k1: float,
+        k2: float,
+        k3: float,
+        k_aw: float,
+        alpha: float,
+        rps: float,
+    ) -> None:
         self._send_motor_config(1, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps)
 
-    def _send_motor_config(self, motor_id, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps):
+    def _send_motor_config(
+        self,
+        motor_id: int,
+        use_ramp: int,
+        use_pi: int,
+        kp: float,
+        ki: float,
+        k1: float,
+        k2: float,
+        k3: float,
+        k_aw: float,
+        alpha: float,
+        rps: float,
+    ) -> None:
         """Constructs and sends a PID configuration packet to the MCU."""
         if not self.serial_port or not self.serial_port.is_open:
             return
@@ -185,7 +229,8 @@ class TelemetryEngine(QtCore.QObject):
         try:
             self.serial_port.write(packet)
         except (serial.SerialTimeoutException, serial.SerialException) as e:
-            print(f"Write Error: {e}")
+            logger.warning("Serial write error: %s", e)
+            self.status_msg.emit(f"Write Error: {e}")
 
     @QtCore.pyqtSlot(
         int,
@@ -211,27 +256,27 @@ class TelemetryEngine(QtCore.QObject):
     )
     def send_all_config(
         self,
-        l_use_ramp,
-        l_use_pi,
-        l_kp,
-        l_ki,
-        l_k1,
-        l_k2,
-        l_k3,
-        l_k_aw,
-        l_alpha,
-        l_rps,
-        r_use_ramp,
-        r_use_pi,
-        r_kp,
-        r_ki,
-        r_k1,
-        r_k2,
-        r_k3,
-        r_k_aw,
-        r_alpha,
-        r_rps,
-    ):
+        l_use_ramp: int,
+        l_use_pi: int,
+        l_kp: float,
+        l_ki: float,
+        l_k1: float,
+        l_k2: float,
+        l_k3: float,
+        l_k_aw: float,
+        l_alpha: float,
+        l_rps: float,
+        r_use_ramp: int,
+        r_use_pi: int,
+        r_kp: float,
+        r_ki: float,
+        r_k1: float,
+        r_k2: float,
+        r_k3: float,
+        r_k_aw: float,
+        r_alpha: float,
+        r_rps: float,
+    ) -> None:
         if not self.serial_port or not self.serial_port.is_open:
             return
 
@@ -260,4 +305,5 @@ class TelemetryEngine(QtCore.QObject):
         try:
             self.serial_port.write(packet)
         except (serial.SerialTimeoutException, serial.SerialException) as e:
-            print(f"Write Error: {e}")
+            logger.warning("Serial write error: %s", e)
+            self.status_msg.emit(f"Write Error: {e}")

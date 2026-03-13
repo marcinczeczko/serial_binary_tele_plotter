@@ -5,12 +5,13 @@ Handles the dynamic display of signal visibility controls in a flat list.
 Removed: Accordion groups, collapsible logic.
 """
 
-from typing import Dict, List
+from __future__ import annotations
 
 from PyQt6 import QtCore, QtWidgets
 
 # Zakładamy, że YAxisControlWidget jest teraz prostym widżetem (Label + Checkbox + Kolor)
 from ui.common.widgets import YAxisControlWidget
+from core.types import StreamConfig
 
 
 class SignalListPanel(QtWidgets.QWidget):
@@ -20,7 +21,7 @@ class SignalListPanel(QtWidgets.QWidget):
 
     signal_visibility_changed = QtCore.pyqtSignal(str, bool)
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
 
         # --- Main Layout ---
@@ -44,7 +45,7 @@ class SignalListPanel(QtWidgets.QWidget):
         l_sigs.addWidget(scroll)
         layout.addWidget(grp_sigs)
 
-    def rebuild_list(self, cfg: dict) -> None:
+    def rebuild_list(self, cfg: StreamConfig) -> None:
         """
         Rebuilds the flat list of signals.
         """
@@ -55,7 +56,8 @@ class SignalListPanel(QtWidgets.QWidget):
                 item.widget().deleteLater()
 
         # 2. Create Signal Controls (Flat List)
-        for sid, sdata in cfg["signals"].items():
+        signals = cfg.get("signals", {})
+        for sid, sdata in signals.items():
             w = YAxisControlWidget(sdata["label"], sdata["color"], sdata["visible"])
 
             # Podpięcie checkboxa widoczności

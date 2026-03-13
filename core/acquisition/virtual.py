@@ -6,9 +6,11 @@ It generates synthetic telemetry data (sine waves, noise, PID terms) to allow
 testing the GUI and data pipeline without a physical connection.
 """
 
+from __future__ import annotations
+
 import math
 import random
-from typing import Any, Dict, Optional
+from typing import Optional
 
 from PyQt6 import QtCore
 
@@ -30,7 +32,7 @@ class VirtualDevice(QtCore.QObject):
     # Signal emitting the simulated data frame (dictionary)
     frame_generated = QtCore.pyqtSignal(dict)
 
-    def __init__(self, parent: Optional[QtCore.QObject] = None):
+    def __init__(self, parent: Optional[QtCore.QObject] = None) -> None:
         """
         Initializes the Virtual Device.
 
@@ -45,10 +47,10 @@ class VirtualDevice(QtCore.QObject):
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self._step)
 
-        self._loop_cntr = 0
-        self._period_s = 0.05
-        self._stream_type = "pid"  # Default stream type
-        self._pid_sim = {
+        self._loop_cntr: int = 0
+        self._period_s: float = 0.05
+        self._stream_type: str = "pid"  # Default stream type
+        self._pid_sim: dict[str, dict[str, float]] = {
             "left": {
                 "measurement": 0.0,
                 "integral": 0.0,
@@ -63,7 +65,7 @@ class VirtualDevice(QtCore.QObject):
             },
         }
 
-    def start(self, period_s: float):
+    def start(self, period_s: float) -> None:
         """
         Starts the data generation loop.
 
@@ -76,11 +78,11 @@ class VirtualDevice(QtCore.QObject):
         # Interval expects milliseconds
         self.timer.start(int(period_s * 1000))
 
-    def stop(self):
+    def stop(self) -> None:
         """Stops the data generation loop."""
         self.timer.stop()
 
-    def update_params(self, period_s: float):
+    def update_params(self, period_s: float) -> None:
         """
         Updates simulation parameters on the fly without resetting the counter.
 
@@ -93,7 +95,7 @@ class VirtualDevice(QtCore.QObject):
         if self.timer.isActive():
             self.timer.setInterval(int(period_s * 1000))
 
-    def configure_stream(self, stream_type: str):
+    def configure_stream(self, stream_type: str) -> None:
         """
         Sets the type of data to simulate based on config name.
         Example: "PID Telemetry" or "IMU 6-Axis"
@@ -106,13 +108,13 @@ class VirtualDevice(QtCore.QObject):
         else:
             self._stream_type = "pid"
 
-    def _step(self):
+    def _step(self) -> None:
         """
         Internal slot called by the timer.
         Generates one frame of synthetic data based on the selected stream type.
         """
 
-        def ramp(current, target, rate, dt):
+        def ramp(current: float, target: float, rate: float, dt: float) -> float:
             delta = target - current
             max_step = rate * dt
             if abs(delta) <= max_step:
@@ -124,7 +126,7 @@ class VirtualDevice(QtCore.QObject):
         # --- FIX: Explicit Type Hinting ---
         # Definiujemy frame jako słownik string->cokolwiek, żeby Pylance
         # nie krzyczał, gdy dodajemy floaty do intów.
-        frame: Dict[str, Any] = {
+        frame: dict[str, float | int] = {
             LOOP_CNTR_NAME: self._loop_cntr,
         }
 

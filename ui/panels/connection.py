@@ -8,6 +8,8 @@ This module provides the `ConnectionPanel` widget responsible for:
 4. Controlling the data stream flow (Pause/Resume).
 """
 
+from __future__ import annotations
+
 from PyQt6 import QtCore, QtWidgets
 from serial.tools import list_ports
 
@@ -30,7 +32,7 @@ class ConnectionPanel(QtWidgets.QGroupBox):
     connection_requested = QtCore.pyqtSignal(str, int)
     pause_requested = QtCore.pyqtSignal(bool)
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initializes the connection controls and styling."""
         super().__init__("Serial Connection")
 

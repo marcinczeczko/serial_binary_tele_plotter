@@ -10,6 +10,9 @@ low-level details of the binary communication protocol. It handles:
 5. Encoding configuration commands back into binary frames.
 """
 
+from __future__ import annotations
+
+import logging
 import struct
 from typing import Generator, Optional
 
@@ -21,10 +24,13 @@ from core.protocol.constants import (
 )
 from core.protocol.crc import calculate_crc8
 from core.protocol.decoder import FrameDecoder
+from core.types import StreamConfig
 
 DEBUG_DECODE = False
 TRACE_DECODE = False
 DEBUG_DECODE_PAYLOAD = False
+
+logger = logging.getLogger(__name__)
 
 
 class ProtocolHandler:
@@ -36,13 +42,13 @@ class ProtocolHandler:
     complete, validated frames.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initializes the handler with an empty buffer."""
-        self.rx_buffer = bytearray()
+        self.rx_buffer: bytearray = bytearray()
         self.decoder: Optional[FrameDecoder] = None
         self.active_stream_id: Optional[int] = None
 
-    def configure(self, stream_cfg: dict):
+    def configure(self, stream_cfg: StreamConfig) -> None:
         """
         Configures the FrameDecoder based on the JSON stream definition.
 
@@ -60,9 +66,9 @@ class ProtocolHandler:
         self.active_stream_id = frame.get("stream_id")
 
         if DEBUG_DECODE:
-            print(f"[PROTO] Configured Stream ID: {self.active_stream_id}")
+            logger.debug("[PROTO] Configured Stream ID: %s", self.active_stream_id)
 
-    def add_data(self, data: bytes):
+    def add_data(self, data: bytes) -> None:
         """
         Ingests raw bytes into the internal processing buffer.
 
@@ -70,10 +76,10 @@ class ProtocolHandler:
             data (bytes): Chunk of data read from the serial port.
         """
         if TRACE_DECODE:
-            print(f"[RX][BUF] +{len(data)} bytes")
+            logger.debug("[RX][BUF] +%s bytes", len(data))
         self.rx_buffer.extend(data)
 
-    def process_available_frames(self) -> Generator[dict, None, None]:
+    def process_available_frames(self) -> Generator[dict[str, int | float], None, None]:
         """
         Parses the internal buffer and yields all complete, valid frames found.
 
@@ -89,7 +95,7 @@ class ProtocolHandler:
         # Safety: Prevent infinite memory growth if sync is never found
         if len(self.rx_buffer) > 4096:
             if TRACE_DECODE:
-                print("[RX][WARN] Buffer overflow (>4KB), clearing to reset sync.")
+                logger.warning("[RX] Buffer overflow (>4KB), clearing to reset sync.")
             self.rx_buffer.clear()
             return
 
@@ -143,9 +149,11 @@ class ProtocolHandler:
                 if decoded is not None:
                     yield decoded
             elif TRACE_DECODE:
-                print("[RX][CRC] Payload CRC check failed")
+                logger.debug("[RX][CRC] Payload CRC check failed")
 
-    def _decode_payload(self, p_type: int, payload: bytes) -> Optional[dict]:
+    def _decode_payload(
+        self, p_type: int, payload: bytes
+    ) -> Optional[dict[str, int | float]]:
         """
         Decodes payload ONLY if p_type matches the active stream configuration.
         """
@@ -159,25 +167,42 @@ class ProtocolHandler:
         # Double check size (though header validation usually covers this)
         if len(payload) != self.decoder.size:
             if DEBUG_DECODE:
-                print(
-                    f"[RX][ERR] Size mismatch for ID {p_type}. Got {len(payload)}, expected {self.decoder.size}"
+                logger.debug(
+                    "[RX][ERR] Size mismatch for ID %s. Got %s, expected %s",
+                    p_type,
+                    len(payload),
+                    self.decoder.size,
                 )
             return None
         else:
             if DEBUG_DECODE:
-                print(
-                    f"[RX][OK] Size match for ID {p_type}. Got {len(payload)}, expected {self.decoder.size}"
+                logger.debug(
+                    "[RX][OK] Size match for ID %s. Got %s, expected %s",
+                    p_type,
+                    len(payload),
+                    self.decoder.size,
                 )
         try:
             decoded = self.decoder.decode(payload)
             if DEBUG_DECODE_PAYLOAD:
-                print(f"[RX][DATA] {decoded}")
+                logger.debug("[RX][DATA] %s", decoded)
             return decoded
         except struct.error:
             return None
 
     def create_pid_packet(
-        self, motor_id, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps
+        self,
+        motor_id: int,
+        use_ramp: int,
+        use_pi: int,
+        kp: float,
+        ki: float,
+        k1: float,
+        k2: float,
+        k3: float,
+        k_aw: float,
+        alpha: float,
+        rps: float,
     ) -> bytes:
         """
         Constructs a binary packet for PID configuration to be sent to the MCU.
@@ -198,26 +223,26 @@ class ProtocolHandler:
 
     def create_pid_packet_all_motors(
         self,
-        l_use_ramp,
-        l_use_pi,
-        l_kp,
-        l_ki,
-        l_k1,
-        l_k2,
-        l_k3,
-        l_k_aw,
-        l_alpha,
-        l_rps,
-        r_use_ramp,
-        r_use_pi,
-        r_kp,
-        r_ki,
-        r_k1,
-        r_k2,
-        r_k3,
-        r_k_aw,
-        r_alpha,
-        r_rps,
+        l_use_ramp: int,
+        l_use_pi: int,
+        l_kp: float,
+        l_ki: float,
+        l_k1: float,
+        l_k2: float,
+        l_k3: float,
+        l_k_aw: float,
+        l_alpha: float,
+        l_rps: float,
+        r_use_ramp: int,
+        r_use_pi: int,
+        r_kp: float,
+        r_ki: float,
+        r_k1: float,
+        r_k2: float,
+        r_k3: float,
+        r_k_aw: float,
+        r_alpha: float,
+        r_rps: float,
     ) -> bytes:
         """
         Constructs a binary packet for PID configuration to be sent to the MCU for both motors

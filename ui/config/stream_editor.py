@@ -3,14 +3,17 @@ Stream Editor Module.
 Simplified Version: Flat signal list (no groups), removed Lock/Scale features.
 """
 
+from __future__ import annotations
+
 import re
 from collections import OrderedDict
-from typing import Any, Dict, List
+from typing import Any
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 # Core Imports
 from core.protocol.constants import STRUCT_TYPE_MAP
+from core.types import StreamConfig
 
 # Common UI Imports
 from ui.common.color_button import ColorButton
@@ -24,13 +27,13 @@ class StreamEditor(QtWidgets.QWidget):
     Manages Frame Table and a Flat Signal List.
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        self.current_stream_key = None
+        self.current_stream_key: str | None = None
         self.init_ui()
         self.apply_styles()
 
-    def apply_styles(self):
+    def apply_styles(self) -> None:
         self.setStyleSheet(
             """
             QTreeWidget, QTableWidget {
@@ -60,7 +63,7 @@ class StreamEditor(QtWidgets.QWidget):
         """
         )
 
-    def init_ui(self):
+    def init_ui(self) -> None:
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
@@ -93,7 +96,7 @@ class StreamEditor(QtWidgets.QWidget):
         self._init_signal_tab()
         self.tabs.addTab(self.sig_widget, "2. Signals (Flat List)")
 
-    def _init_frame_tab(self):
+    def _init_frame_tab(self) -> None:
         l = QtWidgets.QVBoxLayout(self.frame_widget)
         self.frame_table = QtWidgets.QTableWidget()
         self.frame_table.setColumnCount(2)
@@ -115,7 +118,7 @@ class StreamEditor(QtWidgets.QWidget):
         l.addWidget(self.frame_table)
         l.addLayout(btns)
 
-    def _init_signal_tab(self):
+    def _init_signal_tab(self) -> None:
         l = QtWidgets.QVBoxLayout(self.sig_widget)
 
         self.sig_tree = QtWidgets.QTreeWidget()
@@ -144,7 +147,7 @@ class StreamEditor(QtWidgets.QWidget):
         l.addWidget(self.sig_tree)
         l.addLayout(btns)
 
-    def load_data(self, key: str, data: Dict[str, Any]):
+    def load_data(self, key: str, data: StreamConfig) -> None:
         self.current_stream_key = key
         self.key_edit.setText(key)
         self.name_edit.setText(data.get("name", ""))
@@ -178,7 +181,7 @@ class StreamEditor(QtWidgets.QWidget):
             }
             self.add_signal_row(row)
 
-    def get_data(self):
+    def get_data(self) -> tuple[str, StreamConfig]:
         data = OrderedDict()
         data["name"] = self.name_edit.text()
         data["panel_type"] = self.panel_combo.currentText()
@@ -227,7 +230,7 @@ class StreamEditor(QtWidgets.QWidget):
         return self.key_edit.text(), data
 
     # --- Helpers ---
-    def add_frame_row(self, name="", ftype="f32"):
+    def add_frame_row(self, name: str = "", ftype: str = "f32") -> None:
         r = self.frame_table.rowCount()
         self.frame_table.insertRow(r)
         self.frame_table.setItem(r, 0, QtWidgets.QTableWidgetItem(name))
@@ -237,22 +240,22 @@ class StreamEditor(QtWidgets.QWidget):
         combo.setCurrentIndex(combo.findData(ftype) if combo.findData(ftype) >= 0 else 0)
         self.frame_table.setCellWidget(r, 1, combo)
 
-    def remove_table_row(self, t):
+    def remove_table_row(self, t: QtWidgets.QTableWidget) -> None:
         if t.currentRow() >= 0:
             t.removeRow(t.currentRow())
 
-    def get_fields(self):
+    def get_fields(self) -> list[str]:
         return [
             self.frame_table.item(r, 0).text().strip()
             for r in range(self.frame_table.rowCount())
             if self.frame_table.item(r, 0).text().strip()
         ]
 
-    def add_signal_item(self):
+    def add_signal_item(self) -> None:
         # Adds directly to root (flat list)
         self.add_signal_row()
 
-    def add_signal_row(self, d=None):
+    def add_signal_row(self, d: dict[str, Any] | None = None) -> None:
         if not d:
             d = {
                 "label": "New Signal",
@@ -297,7 +300,7 @@ class StreamEditor(QtWidgets.QWidget):
         self.sig_tree.setItemWidget(item, 3, w_chk)
         self.sig_tree.setItemWidget(item, 4, cb_sty)
 
-    def remove_tree_item(self):
+    def remove_tree_item(self) -> None:
         # Removes selected signal
         for item in self.sig_tree.selectedItems():
             index = self.sig_tree.indexOfTopLevelItem(item)

@@ -3,13 +3,14 @@ Data Manager Module.
 Uses numpy arrays directly for buffers (no deque → array conversion).
 """
 
-from typing import Dict, Optional, Union
+from __future__ import annotations
+
+from typing import Dict, Optional
 
 import numpy as np
 
 from core.protocol.constants import LOOP_CNTR_NAME
-
-BufferValue = Union[float, int]
+from core.types import DecodedFrame, PlotPacketWithRaw, SignalsConfig
 
 
 class SignalDataManager:
@@ -28,7 +29,7 @@ class SignalDataManager:
         self._write_index: int = 0
         self._count: int = 0
 
-    def configure(self, signals_cfg: dict) -> None:
+    def configure(self, signals_cfg: SignalsConfig) -> None:
         """Initializes buffers based on configuration."""
         self._signal_arrays.clear()
         self._field_map.clear()
@@ -72,7 +73,7 @@ class SignalDataManager:
         self._write_index = 0
         self._count = 0
 
-    def store_frame(self, decoded_frame: dict) -> None:
+    def store_frame(self, decoded_frame: DecodedFrame) -> None:
         loop_cntr = float(decoded_frame.get(LOOP_CNTR_NAME, 0))
         idx = self._write_index
         self._loop_arr[idx] = loop_cntr
@@ -87,7 +88,7 @@ class SignalDataManager:
         start = (self._write_index - self._count) % self.max_samples
         return (np.arange(self._count) + start) % self.max_samples
 
-    def get_plot_data(self, sample_period_s: float) -> Optional[dict]:
+    def get_plot_data(self, sample_period_s: float) -> Optional[PlotPacketWithRaw]:
         if self._count < 2:
             return None
         idx = self._logical_indices()

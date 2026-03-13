@@ -6,11 +6,14 @@ It uses **QStackedWidget** to dynamically switch the central control panel
 (e.g., PID Tuning vs Empty) based on the active stream type.
 """
 
+from __future__ import annotations
+
 from typing import Dict
 
 from PyQt6 import QtCore, QtWidgets
 
 from core.config import StreamConfigLoader
+from core.types import StreamConfig
 from ui.common.widgets import CollapsableSection
 from ui.panels.connection import ConnectionPanel
 from ui.panels.imu import ImuCalibrationPanel
@@ -61,7 +64,7 @@ class MainControlPanel(QtWidgets.QWidget):
     signal_visibility_changed = QtCore.pyqtSignal(str, bool)
     imu_command_sent = QtCore.pyqtSignal(int)
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
 
         layout = QtWidgets.QVBoxLayout(self)
@@ -149,7 +152,7 @@ class MainControlPanel(QtWidgets.QWidget):
         Handles switching the data config AND the visible control UI.
         """
         sid = self.payload_combo.itemData(idx)
-        if not sid:
+        if sid is None:
             return
 
         cfg = self.stream_loader.get_stream(sid)
@@ -180,12 +183,12 @@ class MainControlPanel(QtWidgets.QWidget):
     def get_initial_sample_count(self) -> int:
         return self.time_panel.get_samples()
 
-    def get_current_stream_config(self) -> dict:
+    def get_current_stream_config(self) -> StreamConfig | None:
         idx = self.payload_combo.currentIndex()
         sid = self.payload_combo.itemData(idx)
-        if sid:
+        if sid is not None:
             return self.stream_loader.get_stream(sid)
-        return {}
+        return None
 
     def reload_streams(self) -> None:
         """
