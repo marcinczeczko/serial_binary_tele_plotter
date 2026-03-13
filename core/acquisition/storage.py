@@ -1,10 +1,9 @@
 """
 Data Manager Module.
-FIXED: Removed normalization logic. Returns RAW values in 'signals' key.
+Uses numpy arrays directly for buffers (no deque → array conversion).
 """
 
-from collections import deque
-from typing import Deque, Dict, Optional, Union
+from typing import Dict, Optional, Union
 
 import numpy as np
 
@@ -15,101 +14,89 @@ BufferValue = Union[float, int]
 
 class SignalDataManager:
     """
-    Manages telemetry data buffers.
-    CLEANED: No scaling, no normalization. Pure raw data storage.
+    Manages telemetry data in pre-allocated numpy arrays (circular buffer).
+    No conversion overhead: get_plot_data returns array slices.
     """
 
     def __init__(self, max_samples: int):
-        self.max_samples = max_samples
-        self.buffers: Dict[str, Deque[BufferValue]] = {}
-        self.field_map: Dict[str, str] = {}
-        
-        # Performance: Cache numpy arrays to avoid repeated conversions
-        self._cached_arrays: Dict[str, np.ndarray] = {}
-        self._cache_valid = False
+        self.max_samples = max(int(max_samples), 1)
+        # Pre-allocated arrays: [max_samples] each
+        self._loop_arr: np.ndarray = np.zeros(self.max_samples, dtype=np.float64)
+        self._signal_arrays: Dict[str, np.ndarray] = {}
+        self._field_map: Dict[str, str] = {}
+        # Circular buffer state
+        self._write_index: int = 0
+        self._count: int = 0
 
-    def configure(self, signals_cfg: dict):
+    def configure(self, signals_cfg: dict) -> None:
         """Initializes buffers based on configuration."""
-        self.buffers.clear()
-        self.field_map.clear()
-        self._cached_arrays.clear()
-        self._cache_valid = False
-
-        self.buffers["__loop__"] = deque(maxlen=self.max_samples)
-
+        self._signal_arrays.clear()
+        self._field_map.clear()
+        self._loop_arr = np.zeros(self.max_samples, dtype=np.float64)
         for sig_id, sig in signals_cfg.items():
-            self.field_map[sig_id] = sig["field"]
-            self.buffers[sig_id] = deque(maxlen=self.max_samples)
+            self._field_map[sig_id] = sig["field"]
+            self._signal_arrays[sig_id] = np.zeros(self.max_samples, dtype=np.float64)
+        self._write_index = 0
+        self._count = 0
 
-    def update_max_samples(self, max_samples: int):
-        self.max_samples = max_samples
-        for sig_id, old_buf in self.buffers.items():
-            self.buffers[sig_id] = deque(old_buf, maxlen=max_samples)
-        # Invalidate cache when buffer size changes
-        self._cache_valid = False
+    def update_max_samples(self, max_samples: int) -> None:
+        max_samples = int(max_samples)
+        if max_samples == self.max_samples:
+            return
+        old_max = self.max_samples
+        old_count = self._count
+        old_write = self._write_index
+        old_loop = self._loop_arr
+        old_signals = dict(self._signal_arrays)
+        self.max_samples = max(max_samples, 1)
+        self._loop_arr = np.zeros(self.max_samples, dtype=np.float64)
+        self._signal_arrays = {
+            sid: np.zeros(self.max_samples, dtype=np.float64)
+            for sid in old_signals
+        }
+        self._write_index = 0
+        self._count = 0
+        if old_count > 0:
+            start = (old_write - old_count) % old_max
+            indices = (np.arange(old_count) + start) % old_max
+            copy_n = min(old_count, self.max_samples)
+            # Keep the most recent copy_n samples
+            src_idx = indices[-copy_n:]
+            self._loop_arr[:copy_n] = old_loop[src_idx]
+            for sid, arr in old_signals.items():
+                self._signal_arrays[sid][:copy_n] = arr[src_idx]
+            self._count = copy_n
+            self._write_index = copy_n % self.max_samples
 
-    def clear_all(self):
-        for buf in self.buffers.values():
-            buf.clear()
-        self._cache_valid = False
+    def clear_all(self) -> None:
+        self._write_index = 0
+        self._count = 0
 
-    def store_frame(self, decoded_frame: dict):
-        loop_cntr = decoded_frame.get(LOOP_CNTR_NAME, 0)
+    def store_frame(self, decoded_frame: dict) -> None:
+        loop_cntr = float(decoded_frame.get(LOOP_CNTR_NAME, 0))
+        idx = self._write_index
+        self._loop_arr[idx] = loop_cntr
+        for sig_id, field in self._field_map.items():
+            val = decoded_frame.get(field, 0.0)
+            self._signal_arrays[sig_id][idx] = float(val)
+        self._write_index = (idx + 1) % self.max_samples
+        self._count = min(self._count + 1, self.max_samples)
 
-        self.buffers["__loop__"].append(loop_cntr)
-
-        for sig_id, field in self.field_map.items():
-            if field in decoded_frame:
-                self.buffers[sig_id].append(decoded_frame[field])
-            else:
-                # keep timeline consisten
-                self.buffers[sig_id].append(0.0)
-        
-        # Invalidate cache when new data arrives
-        self._cache_valid = False
+    def _logical_indices(self) -> np.ndarray:
+        """Indices for valid samples in chronological order (oldest to newest)."""
+        start = (self._write_index - self._count) % self.max_samples
+        return (np.arange(self._count) + start) % self.max_samples
 
     def get_plot_data(self, sample_period_s: float) -> Optional[dict]:
-        loop_buf = self.buffers.get("__loop__")
-        if loop_buf is None or len(loop_buf) < 2:
+        if self._count < 2:
             return None
-
-        # Rebuild cache if invalidated (e.g., after store_frame)
-        if not self._cache_valid:
-            # Convert loop counter buffer
-            loop_cntr_arr = np.asarray(loop_buf, dtype=float)
-            self._cached_arrays["__loop__"] = loop_cntr_arr
-            
-            # Convert all signal buffers
-            for sig_id, buf in self.buffers.items():
-                if sig_id != "__loop__":
-                    self._cached_arrays[sig_id] = np.asarray(buf, dtype=float)
-            
-            self._cache_valid = True
-        else:
-            # Use cached arrays, but verify lengths match (safety check)
-            loop_cntr_arr = self._cached_arrays.get("__loop__")
-            if loop_cntr_arr is None or len(loop_cntr_arr) != len(loop_buf):
-                # Cache mismatch, rebuild everything
-                loop_cntr_arr = np.asarray(loop_buf, dtype=float)
-                self._cached_arrays["__loop__"] = loop_cntr_arr
-                for sig_id, buf in self.buffers.items():
-                    if sig_id != "__loop__":
-                        self._cached_arrays[sig_id] = np.asarray(buf, dtype=float)
-        
-        time_axis = loop_cntr_arr * sample_period_s
-
-        snapshot_raw = {}
-
-        for sig_id, buf in self.buffers.items():
-            if sig_id == "__loop__":
-                continue
-
-            arr = self._cached_arrays.get(sig_id)
-            if arr is None or len(arr) != len(time_axis):
-                continue
-
-            snapshot_raw[sig_id] = arr
-
+        idx = self._logical_indices()
+        # Return copies so callers (e.g. last_packet) don't hold views into our buffer
+        time_axis = (self._loop_arr[idx].copy() * sample_period_s)
+        snapshot_raw: Dict[str, np.ndarray] = {
+            sid: self._signal_arrays[sid][idx].copy()
+            for sid in self._signal_arrays
+        }
         return {
             "time": time_axis,
             "signals": snapshot_raw,
