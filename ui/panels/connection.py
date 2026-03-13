@@ -111,6 +111,29 @@ class ConnectionPanel(QtWidgets.QGroupBox):
         # Populate ports immediately on startup
         self.refresh_ports()
 
+    def _set_connected_ui(self, checked: bool) -> None:
+        """Updates UI state without emitting connection signals."""
+        if checked:
+            # Entering Connected State
+            self.connect_btn.setText("Disconnect")
+            self.pause_btn.setEnabled(True)
+        else:
+            # Entering Disconnected State
+            self.connect_btn.setText("Connect")
+
+            # Reset Pause button state
+            self.pause_btn.setChecked(False)
+            self.pause_btn.setEnabled(False)
+
+    def set_connected(self, connected: bool) -> None:
+        """Programmatically updates connection UI without emitting signals."""
+        self.connect_btn.blockSignals(True)
+        self.pause_btn.blockSignals(True)
+        self.connect_btn.setChecked(connected)
+        self._set_connected_ui(connected)
+        self.pause_btn.blockSignals(False)
+        self.connect_btn.blockSignals(False)
+
     def refresh_ports(self) -> None:
         """
         Refreshes the list of available COM ports via PySerial.
@@ -142,11 +165,9 @@ class ConnectionPanel(QtWidgets.QGroupBox):
         Args:
             checked (bool): True if button is pressed (Connecting), False otherwise.
         """
-        if checked:
-            # Entering Connected State
-            self.connect_btn.setText("Disconnect")
-            self.pause_btn.setEnabled(True)
+        self._set_connected_ui(checked)
 
+        if checked:
             port = self.port_combo.currentText()
             baud_text = self.baud_combo.currentText()
 
@@ -155,13 +176,6 @@ class ConnectionPanel(QtWidgets.QGroupBox):
 
             self.connection_requested.emit(port, baud)
         else:
-            # Entering Disconnected State
-            self.connect_btn.setText("Connect")
-
-            # Reset Pause button state
-            self.pause_btn.setChecked(False)
-            self.pause_btn.setEnabled(False)
-
             # Emit STOP signal (0 baud indicates disconnect)
             self.connection_requested.emit("STOP", 0)
 

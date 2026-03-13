@@ -121,6 +121,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # 4. Data Flow: Engine -> Plot/UI
         self.engine.data_ready.connect(self.plot.on_data_ready)
         self.engine.status_msg.connect(self.lbl_status.setText)
+        self.engine.connection_failed.connect(self._handle_connection_failed)
 
         # 6. Interactivity: Plot -> UI
         self.plot.cursor_moved.connect(self.lbl_cursor.setText)
@@ -245,6 +246,15 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             self.lbl_status.setText("Disconnected")
             self.lbl_status.setStyleSheet("color: #F44336; font-weight: bold;")
+
+    def _handle_connection_failed(self, message: str) -> None:
+        """
+        Syncs UI state after a connection failure from the worker.
+        """
+        self.active_port = None
+        self.panel.conn_panel.set_connected(False)
+        self.lbl_status.setText(message)
+        self.lbl_status.setStyleSheet("color: #F44336; font-weight: bold;")
 
     def _handle_pause(self, paused: bool) -> None:
         """

@@ -101,7 +101,8 @@ class TelemetryPlot(QtWidgets.QWidget):
         # 2. REBUILD
         for sid, sig in signals_cfg.items():
             # Styl linii
-            style = sig["line"].get("style", "solid")
+            line_cfg = sig.get("line", {})
+            style = line_cfg.get("style", "solid")
             pen_style = QtCore.Qt.PenStyle.SolidLine
             if style == "dashed":
                 pen_style = QtCore.Qt.PenStyle.DashLine
@@ -109,8 +110,10 @@ class TelemetryPlot(QtWidgets.QWidget):
                 pen_style = QtCore.Qt.PenStyle.DotLine
 
             # Tworzymy krzywą bezpośrednio w głównym oknie
+            color = sig.get("color", "#FFFFFF")
+            width = line_cfg.get("width", 2)
             c = pg.PlotDataItem(
-                pen=pg.mkPen(color=sig["color"], width=sig["line"]["width"], style=pen_style),
+                pen=pg.mkPen(color=color, width=width, style=pen_style),
                 name=sig.get("label", sid),
                 skipFiniteCheck=True,
             )
@@ -278,7 +281,7 @@ class TelemetryPlot(QtWidgets.QWidget):
 
         html = f'<div style="background-color: rgba(0, 0, 0, 0.7); padding: 6px; font-family: monospace; border: 1px solid #444;">'
         html += f'<b style="color: white;">T: {cur_t:.3f} s</b>'
-        if self.anchor_time:
+        if self.anchor_time is not None:
             dt = cur_t - self.anchor_time
             html += f' <span style="color: #00E676;">(Δ {dt:+.3f} s)</span>'
         html += "<br><hr style='margin: 4px 0; border: 0; border-top: 1px solid #555;'>"
@@ -304,7 +307,7 @@ class TelemetryPlot(QtWidgets.QWidget):
             label = view_data["config"].get("label", sid)
 
             row = f'<span style="color: {color};">{label}: <b>{v:+.3f}</b>'
-            if self.anchor_time and sid in self.anchor_values:
+            if self.anchor_time is not None and sid in self.anchor_values:
                 d_val = v - self.anchor_values[sid]
                 row += f' <span style="color: #aaa; font-size: smaller;">(Δ {d_val:+.3f})</span>'
             html += row + "</span><br>"

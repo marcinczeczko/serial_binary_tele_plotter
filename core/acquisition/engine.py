@@ -25,6 +25,7 @@ class TelemetryEngine(QtCore.QObject):
 
     data_ready = QtCore.pyqtSignal(dict)
     status_msg = QtCore.pyqtSignal(str)
+    connection_failed = QtCore.pyqtSignal(str)
 
     def __init__(self, sample_period_ms: float, max_samples: int):
         super().__init__()
@@ -72,7 +73,9 @@ class TelemetryEngine(QtCore.QObject):
                 self.serial_timer.start()
                 QtCore.QTimer.singleShot(0, self._serial_read_step)
             except (ValueError, serial.SerialException) as e:
-                self.status_msg.emit(f"Connection Error: {e}")
+                msg = f"Connection Error: {e}"
+                self.status_msg.emit(msg)
+                self.connection_failed.emit(msg)
                 self.state = EngineState.CONFIGURED
                 return
 
@@ -121,7 +124,9 @@ class TelemetryEngine(QtCore.QObject):
                         self.data_mgr.store_frame(frame)
 
         except (serial.SerialException, OSError) as e:
-            self.status_msg.emit(f"Serial error: {str(e)}")
+            msg = f"Serial error: {str(e)}"
+            self.status_msg.emit(msg)
+            self.connection_failed.emit(msg)
             self.stop_working()
             return
 

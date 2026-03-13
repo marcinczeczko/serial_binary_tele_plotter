@@ -20,15 +20,6 @@ class StreamConfigLoader:
         self.data = {}
         self.load()
 
-        # Basic sanity validation
-        if "streams" not in self.data or not isinstance(self.data["streams"], dict):
-            raise ValueError("Invalid streams.json: missing or invalid 'streams' section")
-
-        # --- FIX: Ensure panel_type exists ---
-        for key, val in self.data["streams"].items():
-            if "panel_type" not in val:
-                val["panel_type"] = "none"
-
     def load(self):
         """Loads and parses the JSON configuration file."""
         try:
@@ -36,6 +27,16 @@ class StreamConfigLoader:
                 self.data = json.load(f)
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON in {self.path}: {e}") from e
+        self._validate_loaded_data()
+
+    def _validate_loaded_data(self) -> None:
+        """Validates the loaded configuration and applies defaults."""
+        if "streams" not in self.data or not isinstance(self.data["streams"], dict):
+            raise ValueError("Invalid streams.json: missing or invalid 'streams' section")
+
+        for val in self.data["streams"].values():
+            if "panel_type" not in val:
+                val["panel_type"] = "none"
 
     def list_streams(self) -> dict:
         """Returns all available stream definitions."""

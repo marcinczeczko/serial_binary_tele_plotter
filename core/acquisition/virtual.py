@@ -129,7 +129,7 @@ class VirtualDevice(QtCore.QObject):
         }
 
         if self._stream_type == "pid":
-            dt = 0.005  # 5ms
+            dt = max(self._period_s, 1e-6)
             ticks_per_rev = 3800
             ramp_rate = 1.5  # RPS/s – jak w MCU
 

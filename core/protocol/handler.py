@@ -140,7 +140,7 @@ class ProtocolHandler:
             # 8. Validate Payload CRC and Decode
             if calculate_crc8(payload) == p_crc:
                 decoded = self._decode_payload(p_type, payload)
-                if decoded:
+                if decoded is not None:
                     yield decoded
             elif TRACE_DECODE:
                 print("[RX][CRC] Payload CRC check failed")
