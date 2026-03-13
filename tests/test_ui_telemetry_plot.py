@@ -11,7 +11,7 @@ def test_compute_y_bounds_ignores_hidden(pyqt_stub):
         def isVisible(self) -> bool:
             return self._visible
 
-    plot = TelemetryPlot.__new__(TelemetryPlot)
+    plot = object.__new__(TelemetryPlot)
     plot.signal_views = {
         "a": {"curve": _Curve(True)},
         "b": {"curve": _Curve(False)},
@@ -22,7 +22,7 @@ def test_compute_y_bounds_ignores_hidden(pyqt_stub):
         "b": np.array([-100.0, 100.0]),
     }
 
-    lo, hi = TelemetryPlot._compute_y_bounds(plot, signals)
+    lo, hi = plot._compute_y_bounds(signals)
     assert lo == 1.0
     assert hi == 3.0
 
@@ -41,7 +41,7 @@ def test_update_tooltip_anchor_zero(pyqt_stub):
         def setHtml(self, html: str) -> None:
             self.html = html
 
-    plot = TelemetryPlot.__new__(TelemetryPlot)
+    plot = object.__new__(TelemetryPlot)
     plot.label = _Label()
     plot.update_hud_position = lambda: None
     plot.anchor_time = 0.0
@@ -55,6 +55,6 @@ def test_update_tooltip_anchor_zero(pyqt_stub):
         "signals": {"sig": np.array([1.0, 2.0])},
     }
 
-    TelemetryPlot.update_tooltip(plot, 0.0, ds)
+    plot.update_tooltip(0.0, ds)
     assert "(Δ +0.000 s)" in plot.label.html
     assert "(Δ +0.000)" in plot.label.html
