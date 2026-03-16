@@ -21,6 +21,12 @@ serial-bin-plotter = "main:main"
 [project.optional-dependencies]
 dev = [
   "pytest",
+  "pytest-qt",
+  "ruff",
+  "mypy",
+]
+ai = [
+  "anthropic",
 ]
 
 [tool.hatch.build.targets.wheel]
