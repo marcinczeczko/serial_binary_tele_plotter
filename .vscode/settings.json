@@ -6,20 +6,21 @@
     "**/*.pyc": true
   },
   
+  // Pin the interpreter to the project venv so VSCode never picks up a stale path
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+
   "python.languageServer": "None",
   "python.analysis.typeCheckingMode": "basic",
-  
+
   "[python]": {
-    "editor.defaultFormatter": "ms-python.black-formatter",
+    // Use ruff for both formatting and import sorting — matches `uv run ruff format .`
+    "editor.defaultFormatter": "charliermarsh.ruff",
     "editor.formatOnSave": true,
     "editor.codeActionsOnSave": {
-      "source.organizeImports": "explicit"
+      "source.fixAll.ruff": "explicit",
+      "source.organizeImports.ruff": "explicit"
     }
   },
-
-  "black-formatter.args": [
-    "--line-length", "100"
-  ],
 
   "terminal.integrated.defaultProfile.osx": "zsh",
   
