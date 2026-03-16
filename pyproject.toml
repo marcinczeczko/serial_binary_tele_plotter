@@ -18,15 +18,14 @@ dependencies = [
 [project.scripts]
 serial-bin-plotter = "main:main"
 
-[project.optional-dependencies]
+# PEP 735 dependency group: included by `uv sync` by default, not part of the
+# published package metadata — the right place for dev-only tools.
+[dependency-groups]
 dev = [
   "pytest",
   "pytest-qt",
   "ruff",
   "mypy",
-]
-ai = [
-  "anthropic",
 ]
 
 [tool.hatch.build.targets.wheel]
