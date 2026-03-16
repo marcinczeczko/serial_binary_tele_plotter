@@ -11,7 +11,7 @@ def test_compute_y_bounds_ignores_hidden(pyqt_stub):
         def isVisible(self) -> bool:
             return self._visible
 
-    plot = object.__new__(TelemetryPlot)
+    plot = TelemetryPlot.__new__(TelemetryPlot)  # bypass __init__; safe in Python 3.14+
     plot.signal_views = {
         "a": {"curve": _Curve(True)},
         "b": {"curve": _Curve(False)},
@@ -22,7 +22,8 @@ def test_compute_y_bounds_ignores_hidden(pyqt_stub):
         "b": np.array([-100.0, 100.0]),
     }
 
-    lo, hi = plot._compute_y_bounds(signals)
+    # Pass empty signal_bounds so the fallback nanmin/nanmax path is exercised
+    lo, hi = plot._compute_y_bounds(signals, {})
     assert lo == 1.0
     assert hi == 3.0
 
@@ -41,7 +42,7 @@ def test_update_tooltip_anchor_zero(pyqt_stub):
         def setHtml(self, html: str) -> None:
             self.html = html
 
-    plot = object.__new__(TelemetryPlot)
+    plot = TelemetryPlot.__new__(TelemetryPlot)  # bypass __init__; safe in Python 3.14+
     plot.label = _Label()
     plot.update_hud_position = lambda: None
     plot.anchor_time = 0.0

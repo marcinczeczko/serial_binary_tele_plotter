@@ -11,8 +11,8 @@ import shutil
 
 from PyQt6 import QtCore, QtWidgets
 
-from ui.config.stream_editor import StreamEditor
 from core.types import StreamConfig
+from ui.config.stream_editor import StreamEditor
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,9 @@ class ConfiguratorTab(QtWidgets.QWidget):
 
     config_saved = QtCore.pyqtSignal()
 
-    def __init__(self, filepath: str = "streams.json", parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self, filepath: str = "streams.json", parent: QtWidgets.QWidget | None = None
+    ) -> None:
         super().__init__(parent)
         self.filepath: str = filepath
         self.data: dict[str, StreamConfig] = {}
@@ -47,7 +49,9 @@ class ConfiguratorTab(QtWidgets.QWidget):
             """
             QListWidget { background-color: #121212; border: 1px solid #333; font-size: 13px; }
             QListWidget::item { padding: 8px; border-bottom: 1px solid #1a1a1a; }
-            QListWidget::item:selected { background-color: #2c3e50; color: white; border-left: 3px solid #4FC3F7; }
+            QListWidget::item:selected {
+                background-color: #2c3e50; color: white; border-left: 3px solid #4FC3F7;
+            }
         """
         )
         self.stream_list.currentRowChanged.connect(self.on_stream_selected)
@@ -63,7 +67,9 @@ class ConfiguratorTab(QtWidgets.QWidget):
 
         b_save = QtWidgets.QPushButton("💾 SAVE TO DISK")
         b_save.setStyleSheet(
-            "QPushButton { background-color: #2E7D32; color: white; font-weight: bold; padding: 10px; } QPushButton:hover { background-color: #388E3C; }"
+            "QPushButton { background-color: #2E7D32; color: white;"
+            " font-weight: bold; padding: 10px; }"
+            " QPushButton:hover { background-color: #388E3C; }"
         )
         b_save.clicked.connect(self.save_to_file)
 
@@ -87,7 +93,7 @@ class ConfiguratorTab(QtWidgets.QWidget):
 
     def load_from_file(self) -> None:
         try:
-            with open(self.filepath, "r", encoding="utf-8") as f:
+            with open(self.filepath, encoding="utf-8") as f:
                 self.data = json.load(f).get("streams", {})
         except (OSError, json.JSONDecodeError) as e:
             logger.exception("Config load error: %s", e)
@@ -114,7 +120,6 @@ class ConfiguratorTab(QtWidgets.QWidget):
             i += 1
         key = f"new_stream_{i}"
 
-        # Uproszczona struktura nowego strumienia (brak grup)
         self.data[key] = {
             "name": "New Stream",
             "panel_type": "none",

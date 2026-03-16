@@ -76,12 +76,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.addTab(self.dashboard_widget, "📊 Dashboard")
 
         # ================= TAB 2: CONFIGURATION =================
-        # Tworzymy instancję konfiguratora
         self.configurator = ConfiguratorTab("streams.json")
-
-        # Podłączamy sygnał zapisu do metody przeładowania (którą dodałeś wcześniej)
         self.configurator.config_saved.connect(self._reload_configuration)
-
         self.tabs.addTab(self.configurator, "⚙️ Configuration")
 
         # --- Status Bar Initialization ---
@@ -116,9 +112,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.panel.pid_right_sent.connect(self.engine.send_right_config)
         self.panel.pid_all_sent.connect(self.engine.send_all_config)
 
-        # Jeśli usunąłeś panel IMU, usuń też tę linię (lub zostaw, jeśli już go masz)
-        # self.panel.imu_command_sent.connect(self.engine.send_imu_command)
-
         # 2. Control Logic: Panel -> Main Window
         self.panel.connection_requested.connect(self._handle_connection)
         self.panel.pause_requested.connect(self._handle_pause)
@@ -142,20 +135,13 @@ class MainWindow(QtWidgets.QMainWindow):
         Called when streams.json is modified via the Configurator tab.
         We need to reload the StreamConfigLoader in the panel and refresh lists.
         """
-        # 1. Przeładuj loader w panelu bocznym
-        # (Musisz dodać metodę reload() do MainControlPanel lub utworzyć loader na nowo)
-
-        # Najprościej: Wymuś odświeżenie listy w panelu
-        self.panel.stream_loader.load()  # Przeładuj JSON z dysku
-
-        # Wyczyść i wypełnij combobox od nowa
+        self.panel.stream_loader.load()
         self.panel.payload_combo.blockSignals(True)
         self.panel.payload_combo.clear()
         for sid, s in self.panel.stream_loader.list_streams().items():
             self.panel.payload_combo.addItem(s["name"], sid)
         self.panel.payload_combo.blockSignals(False)
 
-        # Ustaw pierwszy element
         if self.panel.payload_combo.count() > 0:
             self.panel.payload_combo.setCurrentIndex(0)
             self.panel.reload_streams()

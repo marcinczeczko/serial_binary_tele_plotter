@@ -5,8 +5,6 @@ Uses numpy arrays directly for buffers (no deque → array conversion).
 
 from __future__ import annotations
 
-from typing import Dict, Optional
-
 import numpy as np
 
 from core.protocol.constants import LOOP_CNTR_NAME
@@ -23,8 +21,8 @@ class SignalDataManager:
         self.max_samples = max(int(max_samples), 1)
         # Pre-allocated arrays: [max_samples] each
         self._loop_arr: np.ndarray = np.zeros(self.max_samples, dtype=np.float64)
-        self._signal_arrays: Dict[str, np.ndarray] = {}
-        self._field_map: Dict[str, str] = {}
+        self._signal_arrays: dict[str, np.ndarray] = {}
+        self._field_map: dict[str, str] = {}
         # Circular buffer state
         self._write_index: int = 0
         self._count: int = 0
@@ -88,18 +86,24 @@ class SignalDataManager:
         start = (self._write_index - self._count) % self.max_samples
         return (np.arange(self._count) + start) % self.max_samples
 
-    def get_plot_data(self, sample_period_s: float) -> Optional[PlotPacketWithRaw]:
+    def get_plot_data(self, sample_period_s: float) -> PlotPacketWithRaw | None:
         if self._count < 2:
             return None
         idx = self._logical_indices()
-        # Return copies so callers (e.g. last_packet) don't hold views into our buffer
-        time_axis = (self._loop_arr[idx].copy() * sample_period_s)
-        snapshot_raw: Dict[str, np.ndarray] = {
-            sid: self._signal_arrays[sid][idx].copy()
-            for sid in self._signal_arrays
-        }
+        # Fancy (integer-array) indexing always returns an independent copy in numpy,
+        # so the explicit .copy() calls are redundant and can be removed.
+        time_axis: np.ndarray = self._loop_arr[idx] * sample_period_s
+        snapshot_raw: dict[str, np.ndarray] = {}
+        signal_bounds: dict[str, tuple[float, float]] = {}
+        for sid, arr in self._signal_arrays.items():
+            data = arr[idx]  # fancy index → new array, no extra copy needed
+            snapshot_raw[sid] = data
+            # Compute per-signal bounds here on the worker thread so the UI thread only
+            # needs an O(num_signals) visibility filter instead of O(n * num_signals) scans.
+            signal_bounds[sid] = (float(np.nanmin(data)), float(np.nanmax(data)))
         return {
             "time": time_axis,
             "signals": snapshot_raw,
             "raw": snapshot_raw,
+            "signal_bounds": signal_bounds,
         }

@@ -2,7 +2,6 @@ import struct
 
 import pytest
 
-import core.protocol
 from core.protocol.constants import MAGIC_0, MAGIC_1, STRUCT_TYPE_MAP
 from core.protocol.crc import calculate_crc8
 from core.protocol.decoder import FrameDecoder

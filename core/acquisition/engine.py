@@ -21,7 +21,6 @@ from core.acquisition.virtual import VirtualDevice
 from core.protocol.handler import ProtocolHandler
 from core.types import EngineState, SignalsConfig, StreamConfig
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -38,7 +37,6 @@ class TelemetryEngine(QtCore.QObject):
         super().__init__()
         self.sample_period_s: float = sample_period_ms / 1000.0
 
-        # --- Sub-components (Composition Pattern) ---
         self.data_mgr: SignalDataManager = SignalDataManager(max_samples)
         self.protocol: ProtocolHandler = ProtocolHandler()
 
@@ -58,7 +56,9 @@ class TelemetryEngine(QtCore.QObject):
 
         self.serial_timer: QtCore.QTimer = QtCore.QTimer(self)
         self.serial_timer.timeout.connect(self._serial_read_step)
-        self.serial_timer.setInterval(1)  # 1 ms is MORE than enough
+        # 10 ms: serial data arrives in bursts; in_waiting drains the full buffer each call,
+        # so reducing from 1 ms eliminates ~900 wasted syscall wakeups/sec with no latency loss.
+        self.serial_timer.setInterval(10)
 
     @QtCore.pyqtSlot(str, int)
     def start_working(self, port_name: str, baudrate: int) -> None:
@@ -109,8 +109,6 @@ class TelemetryEngine(QtCore.QObject):
 
     @QtCore.pyqtSlot(int)
     def send_imu_command(self, cmd_id: int) -> None:
-        # Tutaj logika wysyłania pakietu binarnego do MCU
-        # self.protocol.create_imu_packet(cmd_id)...
         self.status_msg.emit(f"Sending IMU command: {cmd_id}")
 
     def _serial_read_step(self) -> None:
@@ -137,8 +135,6 @@ class TelemetryEngine(QtCore.QObject):
             self.stop_working()
             return
 
-        # QtCore.QTimer.singleShot(0, self._serial_read_step)
-
     def _emit_buffered_data(self) -> None:
         """Periodic task (triggered by gui_update_timer)."""
         if self.state != EngineState.RUNNING:
@@ -161,8 +157,6 @@ class TelemetryEngine(QtCore.QObject):
         self.data_mgr.configure(signals_cfg)
         self.state = EngineState.CONFIGURED
 
-    # --- FIX: Dodano dekorator @QtCore.pyqtSlot(dict) ---
-    # Jest to wymagane, aby metoda była widoczna dla QMetaObject.invokeMethod
     @QtCore.pyqtSlot(dict)
     def configure_frame(self, stream_cfg: StreamConfig) -> None:
         """Configures the Protocol Handler with the binary frame structure."""

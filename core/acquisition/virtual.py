@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Optional
 
 from PyQt6 import QtCore
 
@@ -32,7 +31,7 @@ class VirtualDevice(QtCore.QObject):
     # Signal emitting the simulated data frame (dictionary)
     frame_generated = QtCore.pyqtSignal(dict)
 
-    def __init__(self, parent: Optional[QtCore.QObject] = None) -> None:
+    def __init__(self, parent: QtCore.QObject | None = None) -> None:
         """
         Initializes the Virtual Device.
 
@@ -123,9 +122,8 @@ class VirtualDevice(QtCore.QObject):
 
         t = self._loop_cntr * self._period_s
 
-        # --- FIX: Explicit Type Hinting ---
-        # Definiujemy frame jako słownik string->cokolwiek, żeby Pylance
-        # nie krzyczał, gdy dodajemy floaty do intów.
+        # We define frame as a dictionary of string keys and float/int values, so that Pylance
+        # doesn't complain when we add floats to integers.
         frame: dict[str, float | int] = {
             LOOP_CNTR_NAME: self._loop_cntr,
         }
@@ -133,7 +131,7 @@ class VirtualDevice(QtCore.QObject):
         if self._stream_type == "pid":
             dt = max(self._period_s, 1e-6)
             ticks_per_rev = 3800
-            ramp_rate = 1.5  # RPS/s – jak w MCU
+            ramp_rate = 1.5  # RPS/s – like in MCUs
 
             base_target = math.sin(t * 0.5) * 1.0
 

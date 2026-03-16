@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import struct
-from typing import Generator, Optional
+from collections.abc import Generator
 
 from core.protocol.constants import (
     MAGIC_0,
@@ -45,8 +45,8 @@ class ProtocolHandler:
     def __init__(self) -> None:
         """Initializes the handler with an empty buffer."""
         self.rx_buffer: bytearray = bytearray()
-        self.decoder: Optional[FrameDecoder] = None
-        self.active_stream_id: Optional[int] = None
+        self.decoder: FrameDecoder | None = None
+        self.active_stream_id: int | None = None
 
     def configure(self, stream_cfg: StreamConfig) -> None:
         """
@@ -79,7 +79,7 @@ class ProtocolHandler:
             logger.debug("[RX][BUF] +%s bytes", len(data))
         self.rx_buffer.extend(data)
 
-    def process_available_frames(self) -> Generator[dict[str, int | float], None, None]:
+    def process_available_frames(self) -> Generator[dict[str, int | float]]:
         """
         Parses the internal buffer and yields all complete, valid frames found.
 
@@ -107,8 +107,15 @@ class ProtocolHandler:
 
             # 2. Synchronization (Find Magic Bytes)
             if self.rx_buffer[0] != MAGIC_0 or self.rx_buffer[1] != MAGIC_1:
-                # If first bytes aren't magic, drop one byte and retry (sliding window)
-                del self.rx_buffer[0]
+                # Jump directly to the next magic-byte pair instead of dropping one byte at a
+                # time — avoids up to 4096 iterations during sync loss or corruption.
+                magic_offset = self.rx_buffer.find(bytes([MAGIC_0, MAGIC_1]))
+                if magic_offset < 0:
+                    # No magic bytes anywhere; keep the last byte in case it is the first half
+                    # of a split [0xAA | 0x55] sequence that arrives in the next chunk.
+                    del self.rx_buffer[:-1]
+                    break
+                del self.rx_buffer[:magic_offset]  # advance buffer to the magic pair
                 continue
 
             # 3. Parse Header
@@ -153,7 +160,7 @@ class ProtocolHandler:
 
     def _decode_payload(
         self, p_type: int, payload: bytes
-    ) -> Optional[dict[str, int | float]]:
+    ) -> dict[str, int | float] | None:
         """
         Decodes payload ONLY if p_type matches the active stream configuration.
         """

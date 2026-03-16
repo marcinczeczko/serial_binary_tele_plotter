@@ -56,7 +56,9 @@ class StreamEditor(QtWidgets.QWidget):
                 padding: 4px; border-bottom: 1px solid #1a1a1a; height: 32px;
             }
             QTreeWidget::item:hover, QTableWidget::item:hover { background-color: #1f1f1f; }
-            QTreeWidget::item:selected, QTableWidget::item:selected { background-color: #2c3e50; color: white; }
+            QTreeWidget::item:selected, QTableWidget::item:selected {
+                background-color: #2c3e50; color: white;
+            }
             QComboBox, QLineEdit {
                 background-color: #121212; border: 1px solid #333; color: #4FC3F7; padding: 2px 5px;
             }
@@ -97,7 +99,7 @@ class StreamEditor(QtWidgets.QWidget):
         self.tabs.addTab(self.sig_widget, "2. Signals (Flat List)")
 
     def _init_frame_tab(self) -> None:
-        l = QtWidgets.QVBoxLayout(self.frame_widget)
+        layout = QtWidgets.QVBoxLayout(self.frame_widget)
         self.frame_table = QtWidgets.QTableWidget()
         self.frame_table.setColumnCount(2)
         self.frame_table.setHorizontalHeaderLabels(["Field Name (C++)", "Data Type"])
@@ -115,14 +117,14 @@ class StreamEditor(QtWidgets.QWidget):
         btns.addWidget(b_add)
         btns.addWidget(b_del)
         btns.addStretch()
-        l.addWidget(self.frame_table)
-        l.addLayout(btns)
+        layout.addWidget(self.frame_table)
+        layout.addLayout(btns)
 
     def _init_signal_tab(self) -> None:
-        l = QtWidgets.QVBoxLayout(self.sig_widget)
+        layout = QtWidgets.QVBoxLayout(self.sig_widget)
 
         self.sig_tree = QtWidgets.QTreeWidget()
-        self.sig_tree.setRootIsDecorated(False)  # Ukrywamy strzałki (bo brak grup)
+        self.sig_tree.setRootIsDecorated(False)
 
         # Cols: Label | Field | Color | Vis | Style
         self.sig_cols = ["Label Name", "Field Map", "Color", "Vis", "Style"]
@@ -136,7 +138,6 @@ class StreamEditor(QtWidgets.QWidget):
         h.resizeSection(3, 40)
 
         btns = QtWidgets.QHBoxLayout()
-        # Usunięto przycisk "Add Group"
         b_sig = QtWidgets.QPushButton("📈 Add Signal")
         b_sig.clicked.connect(self.add_signal_item)
         b_rem = QtWidgets.QPushButton("❌ Remove")
@@ -144,8 +145,8 @@ class StreamEditor(QtWidgets.QWidget):
         btns.addWidget(b_sig)
         btns.addWidget(b_rem)
         btns.addStretch()
-        l.addWidget(self.sig_tree)
-        l.addLayout(btns)
+        layout.addWidget(self.sig_tree)
+        layout.addLayout(btns)
 
     def load_data(self, key: str, data: StreamConfig) -> None:
         self.current_stream_key = key
@@ -166,11 +167,7 @@ class StreamEditor(QtWidgets.QWidget):
         # Signals (Flattened)
         self.sig_tree.clear()
 
-        # Pobieramy sygnały. Ignorujemy klucz "groups" całkowicie.
         signals_data = data.get("signals", {})
-
-        # Jeśli sygnały mają pole 'order', możemy posortować, w przeciwnym razie wg klucza lub kolejności JSON
-        # W Python 3.7+ słowniki zachowują kolejność wstawiania, więc powinno być ok.
         for skey, sdata in signals_data.items():
             row = {
                 "label": sdata.get("label", skey),
@@ -213,7 +210,6 @@ class StreamEditor(QtWidgets.QWidget):
             vis = self.sig_tree.itemWidget(item, 3).findChild(QtWidgets.QCheckBox).isChecked()
             style = self.sig_tree.itemWidget(item, 4).currentText()
 
-            # Klucz sygnału: jeśli pole mapowania jest puste, generujemy z etykiety
             skey = fld if fld else re.sub(r"[^a-zA-Z0-9]", "", label)
 
             signals[skey] = {
@@ -222,10 +218,8 @@ class StreamEditor(QtWidgets.QWidget):
                 "color": col,
                 "visible": vis,
                 "line": {"style": style, "width": 2},
-                # Brak grup, brak min/max, brak lock
             }
 
-        # Nie zapisujemy już sekcji "groups"
         data["signals"] = signals
         return self.key_edit.text(), data
 
@@ -285,10 +279,10 @@ class StreamEditor(QtWidgets.QWidget):
         chk = QtWidgets.QCheckBox()
         chk.setChecked(d["visible"])
         w_chk = QtWidgets.QWidget()
-        l = QtWidgets.QHBoxLayout(w_chk)
-        l.setContentsMargins(0, 0, 0, 0)
-        l.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        l.addWidget(chk)
+        chk_layout = QtWidgets.QHBoxLayout(w_chk)
+        chk_layout.setContentsMargins(0, 0, 0, 0)
+        chk_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        chk_layout.addWidget(chk)
 
         # Col 4: Style
         cb_sty = QtWidgets.QComboBox()

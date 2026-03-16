@@ -7,8 +7,9 @@ circular imports.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import Enum, auto
-from typing import Mapping, TYPE_CHECKING, TypedDict, Union
+from typing import TYPE_CHECKING, TypedDict
 
 if TYPE_CHECKING:
     import numpy as np
@@ -64,13 +65,14 @@ class StreamConfig(TypedDict, total=False):
     signals: SignalsConfig
 
 
-DecodedFrame = Mapping[str, Union[float, int]]
+DecodedFrame = Mapping[str, float | int]
 
 
 class PlotPacket(TypedDict):
-    time: "np.ndarray"
-    signals: dict[str, "np.ndarray"]
+    time: np.ndarray
+    signals: dict[str, np.ndarray]
 
 
 class PlotPacketWithRaw(PlotPacket, total=False):
-    raw: dict[str, "np.ndarray"]
+    raw: dict[str, np.ndarray]
+    signal_bounds: dict[str, tuple[float, float]]  # pre-computed (min, max) per signal

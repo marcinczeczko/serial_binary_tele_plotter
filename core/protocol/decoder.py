@@ -91,7 +91,7 @@ class FrameDecoder:
 
         # Zip combines the names list with the values tuple to create the dict
         # Example: zip(['cnt', 'val'], (100, 3.14)) -> {'cnt': 100, 'val': 3.14}
-        return dict(zip(self.names, values))
+        return dict(zip(self.names, values, strict=True))
 
     @property
     def size(self) -> int:

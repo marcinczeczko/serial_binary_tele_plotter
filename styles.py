@@ -56,12 +56,22 @@ def apply_dark_theme(app: QtWidgets.QApplication) -> None:
             background-color: gray;
         }
   
-        QDoubleSpinBox, QSpinBox, QLineEdit { padding: 2px; background-color: #1e1e1e; border: 1px solid #333; color: #fff; }
-        
-        QGroupBox { border: 1px solid #333; margin-top: 6px; padding-top: 10px; font-weight: bold; color: #aaa; }
-        QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 3px; }
-        
-        QPushButton { background-color: #333; border: 1px solid #555; border-radius: 3px; padding: 5px; color: white; }
+        QDoubleSpinBox, QSpinBox, QLineEdit {
+            padding: 2px; background-color: #1e1e1e; border: 1px solid #333; color: #fff;
+        }
+
+        QGroupBox {
+            border: 1px solid #333; margin-top: 6px; padding-top: 10px;
+            font-weight: bold; color: #aaa;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin; subcontrol-position: top left; padding: 0 3px;
+        }
+
+        QPushButton {
+            background-color: #333; border: 1px solid #555;
+            border-radius: 3px; padding: 5px; color: white;
+        }
         QPushButton:hover { background-color: #444; }
         QPushButton:pressed { background-color: #222; }
         QPushButton:checked { background-color: #555; border: 1px solid #888; }

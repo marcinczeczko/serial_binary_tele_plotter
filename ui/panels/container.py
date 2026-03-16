@@ -8,8 +8,6 @@ It uses **QStackedWidget** to dynamically switch the central control panel
 
 from __future__ import annotations
 
-from typing import Dict
-
 from PyQt6 import QtCore, QtWidgets
 
 from core.config import StreamConfigLoader
@@ -97,15 +95,13 @@ class MainControlPanel(QtWidgets.QWidget):
 
         # -- B: Empty Panel (for streams with no controls) --
         self.empty_panel = QtWidgets.QWidget()
-        # l_empty = QtWidgets.QVBoxLayout(self.empty_panel)
-        # l_empty.addWidget(QtWidgets.QLabel("No settings for this stream."))
 
         self.dynamic_stack.addWidget(self.empty_panel)  # Index 0
         self.dynamic_stack.addWidget(self.pid_section)  # Index 1
         self.dynamic_stack.addWidget(self.imu_section)
 
         # Map string keys from JSON ('panel_type') to widget instances
-        self.panel_map: Dict[str, QtWidgets.QWidget] = {
+        self.panel_map: dict[str, QtWidgets.QWidget] = {
             "none": self.empty_panel,
             "pid": self.pid_section,
             "imu": self.imu_section,
@@ -157,7 +153,6 @@ class MainControlPanel(QtWidgets.QWidget):
 
         cfg = self.stream_loader.get_stream(sid)
 
-        # --- DYNAMIC UI SWITCHING ---
         # 1. Get type from config (default to 'none')
         panel_type = cfg.get("panel_type", "none")
 
@@ -169,13 +164,10 @@ class MainControlPanel(QtWidgets.QWidget):
             target_widget = self.panel_map.get(panel_type, self.empty_panel)
             self.dynamic_stack.setCurrentWidget(target_widget)
             self.dynamic_stack.setVisible(True)
-        # ----------------------------
 
         # Update Signal List & Notify Main Window
         self.sig_panel.rebuild_list(cfg)
         self.stream_changed.emit(cfg)
-
-    # --- Public API ---
 
     def get_initial_sample_period(self) -> float:
         return self.time_panel.get_period()

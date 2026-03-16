@@ -10,6 +10,7 @@ from typing import Any
 
 from core.types import StreamConfig
 
+
 class StreamConfigLoader:
     """
     Manages the configuration for data streams.

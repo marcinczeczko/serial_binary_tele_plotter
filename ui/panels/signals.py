@@ -9,9 +9,8 @@ from __future__ import annotations
 
 from PyQt6 import QtCore, QtWidgets
 
-# Zakładamy, że YAxisControlWidget jest teraz prostym widżetem (Label + Checkbox + Kolor)
-from ui.common.widgets import YAxisControlWidget
 from core.types import StreamConfig
+from ui.common.widgets import YAxisControlWidget
 
 
 class SignalListPanel(QtWidgets.QWidget):
@@ -60,13 +59,10 @@ class SignalListPanel(QtWidgets.QWidget):
         for sid, sdata in signals.items():
             w = YAxisControlWidget(sdata["label"], sdata["color"], sdata["visible"])
 
-            # Podpięcie checkboxa widoczności
-            # captured_sid gwarantuje, że lambda użyje poprawnego ID w pętli
             w.enable_checkbox.toggled.connect(
                 lambda checked, captured_sid=sid: self.signal_visibility_changed.emit(
                     captured_sid, checked
                 )
             )
 
-            # Wstawiamy do głównego layoutu przed spacerem
             self.signals_layout.insertWidget(self.signals_layout.count() - 1, w)
