@@ -137,3 +137,28 @@ def test_loader_excludes_only_broken_streams(tmp_path):
     assert list(loader.list_streams()) == ["good"]
     assert [p.stream for p in loader.problems] == ["bad"]
     assert "ERROR: [bad]" in str(loader.problems[0])
+
+
+def test_resolve_config_path_prefers_cli_then_remembered_then_default(tmp_path):
+    from core.config import DEFAULT_CONFIG_PATH, resolve_config_path
+
+    remembered = tmp_path / "last.json"
+    remembered.write_text("{}", encoding="utf-8")
+
+    assert resolve_config_path("x/../mine.json", remembered) == (tmp_path.cwd() / "mine.json")
+    assert resolve_config_path(None, remembered) == remembered.resolve()
+    assert resolve_config_path(None, tmp_path / "gone.json") == DEFAULT_CONFIG_PATH
+    assert resolve_config_path(None, None) == DEFAULT_CONFIG_PATH
+    assert DEFAULT_CONFIG_PATH.is_file()  # bundled next to the code, not the CWD
+
+
+def test_loader_does_not_mutate_the_raw_document(tmp_path):
+    stream = _stream()
+    del stream["panel_type"]
+    path = tmp_path / "streams.json"
+    path.write_text(json.dumps({"streams": {"s": stream}}), encoding="utf-8")
+
+    loader = StreamConfigLoader(path)
+
+    assert loader.list_streams()["s"]["panel_type"] == "none"
+    assert "panel_type" not in loader.data["streams"]["s"]

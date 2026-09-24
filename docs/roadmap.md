@@ -89,13 +89,17 @@ No architectural change. Each item is a focused PR.
   `terminate()` is removed. Time-config input is debounced (`editingFinished`).
 - [x] **R1.8 Serial write timeout** (C9)
   Set `write_timeout=0.2`. On timeout, report it and keep acquiring.
-- [ ] **R1.9 Wire or hide dead features** (C7, C8)
+- [x] **R1.9 Wire or hide dead features** (C7, C8)
   Either wire the IMU commands to a real packet or hide the panel. Add a `control` panel
   entry or remove it from `PANEL_TYPES`. Allow negative PID values with a configurable
   range and precision. Drop the unused `raw` packet key and `_render_busy`.
   *Partly done in R1.5:* `PANEL_TYPES` now lives in `core/config.py` as `none/pid/imu`.
   The editor no longer offers `control`, and validation warns about unknown panel types.
-- [ ] **R1.10 Config path** (C10)
+  *Decision:* the IMU buttons are **disabled with an explanatory tooltip**, not wired. The
+  protocol has no IMU command packet, and inventing one would be a firmware-visible
+  change. Commands come from config in R5.2. PID ranges and precision are per-parameter
+  `ParamSpec`s in `ui/panels/pid.py` until R5.2 moves them into config.
+- [x] **R1.10 Config path** (C10)
   Resolve `streams.json` via a `--config` CLI arg, then `QSettings`-remembered path, then
   the bundled default. One loader instance is shared by the panel and the configurator.
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import cast
 
 from PyQt6 import QtCore, QtWidgets
@@ -17,6 +18,29 @@ PARAM_RPS = "Rps"
 # Checkbox params
 PARAM_USE_RAMP = "useRamp"
 PARAM_USE_PI = "usePI"
+
+
+@dataclass(frozen=True)
+class ParamSpec:
+    default: float
+    minimum: float = -1000.0
+    maximum: float = 1000.0
+    decimals: int = 4
+    step: float = 0.01
+
+
+# Signed ranges: a negative Rps is reverse, and a sign-flipped gain is a valid experiment
+# (C8). Moving these into streams.json command definitions is roadmap R5.2.
+PARAM_SPECS: dict[str, ParamSpec] = {
+    PARAM_KP: ParamSpec(0.1),
+    PARAM_KI: ParamSpec(0.02, decimals=5, step=0.001),
+    PARAM_K1: ParamSpec(26.5, step=0.1),
+    PARAM_K2: ParamSpec(8.0, step=0.1),
+    PARAM_K3: ParamSpec(5.0, step=0.1),
+    PARAM_KAW: ParamSpec(1.0),
+    PARAM_ALPHA: ParamSpec(0.2, minimum=0.0, maximum=1.0),
+    PARAM_RPS: ParamSpec(0.3, minimum=-50.0, maximum=50.0),
+}
 
 
 class PidTuningPanel(QtWidgets.QWidget):
@@ -70,22 +94,11 @@ class PidTuningPanel(QtWidgets.QWidget):
         self.left: dict[str, QtWidgets.QDoubleSpinBox | QtWidgets.QCheckBox] = {}
         self.right: dict[str, QtWidgets.QDoubleSpinBox | QtWidgets.QCheckBox] = {}
 
-        params = [
-            (PARAM_KP, 0.1),
-            (PARAM_KI, 0.02),
-            (PARAM_K1, 26.5),
-            (PARAM_K2, 8.0),
-            (PARAM_K3, 5.0),
-            (PARAM_KAW, 1.0),
-            (PARAM_ALPHA, 0.2),
-            (PARAM_RPS, 0.3),
-        ]
-
         row = 1
-        for name, val in params:
+        for name, spec in PARAM_SPECS.items():
             grid.addWidget(QtWidgets.QLabel(f"{name}:"), row, 0)
-            self.left[name] = self._sb(val)
-            self.right[name] = self._sb(val)
+            self.left[name] = self._sb(spec)
+            self.right[name] = self._sb(spec)
             grid.addWidget(self.left[name], row, 1)
             grid.addWidget(self.right[name], row, 2)
             row += 1
@@ -124,12 +137,12 @@ class PidTuningPanel(QtWidgets.QWidget):
     # ======================================================
     # Helpers
     # ======================================================
-    def _sb(self, val: float) -> QtWidgets.QDoubleSpinBox:
+    def _sb(self, spec: ParamSpec) -> QtWidgets.QDoubleSpinBox:
         sb = QtWidgets.QDoubleSpinBox()
-        sb.setRange(0.0, 1000.0)
-        sb.setDecimals(3)
-        sb.setSingleStep(0.1)
-        sb.setValue(val)
+        sb.setRange(spec.minimum, spec.maximum)
+        sb.setDecimals(spec.decimals)
+        sb.setSingleStep(spec.step)
+        sb.setValue(spec.default)
         return sb
 
     def _emit_left(self) -> None:

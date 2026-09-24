@@ -162,10 +162,6 @@ class TelemetryEngine(QtCore.QObject):
             self.state = state
             self.state_changed.emit(state)
 
-    @QtCore.pyqtSlot(int)
-    def send_imu_command(self, cmd_id: int) -> None:
-        self.status_msg.emit(f"Sending IMU command: {cmd_id}")
-
     def _serial_read_step(self) -> None:
         """Performs a single, non-blocking read operation from the serial port."""
         if self.state != EngineState.RUNNING or not self.serial_port:

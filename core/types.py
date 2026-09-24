@@ -73,6 +73,5 @@ class PlotPacket(TypedDict):
     signals: dict[str, np.ndarray]
 
 
-class PlotPacketWithRaw(PlotPacket, total=False):
-    raw: dict[str, np.ndarray]
+class PlotPacketWithBounds(PlotPacket, total=False):
     signal_bounds: dict[str, tuple[float, float]]  # pre-computed (min, max) per signal

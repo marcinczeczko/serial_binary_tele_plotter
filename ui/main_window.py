@@ -10,10 +10,12 @@ lifecycle, and global events.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.acquisition.engine import TelemetryEngine
+from core.config import DEFAULT_CONFIG_PATH, StreamConfigLoader
 from core.protocol.stats import LinkReport, format_link_report
 from core.types import EngineState, StreamConfig
 from ui.charts.telemetry_plot import TelemetryPlot
@@ -35,11 +37,15 @@ class MainWindow(QtWidgets.QMainWindow):
     4. **Lifecycle**: Managing startup configuration and safe shutdown sequences.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, config_path: Path = DEFAULT_CONFIG_PATH) -> None:
         """
         Initializes the main window, UI layout, and background engine.
+
+        `config_path` is the streams.json to use; one loader for it is shared by the
+        dashboard and the Configuration tab.
         """
         super().__init__()
+        self.stream_loader = StreamConfigLoader(config_path)
 
         # --- State Tracking ---
         # Mirror of the engine's state, updated only from `state_changed` (never read across
@@ -65,7 +71,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
 
         # Instantiate the main view components
-        self.panel = MainControlPanel()
+        self.panel = MainControlPanel(self.stream_loader)
         self.plot = TelemetryPlot()
 
         self.splitter.addWidget(self.panel)
@@ -79,7 +85,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.addTab(self.dashboard_widget, "📊 Dashboard")
 
         # ================= TAB 2: CONFIGURATION =================
-        self.configurator = ConfiguratorTab("streams.json")
+        self.configurator = ConfiguratorTab(self.stream_loader)
         self.configurator.config_saved.connect(self._reload_configuration)
         self.tabs.addTab(self.configurator, "⚙️ Configuration")
 

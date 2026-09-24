@@ -9,13 +9,30 @@ launches the main window.
 
 from __future__ import annotations
 
+import argparse
 import signal
 import sys
 
 from PyQt6 import QtCore, QtWidgets
 
+from core.config import resolve_config_path
 from styles import apply_dark_theme
 from ui.main_window import MainWindow
+
+SETTINGS_ORG = "serial-bin-plotter"
+SETTINGS_APP = "Serial Binary Plotter"
+SETTINGS_CONFIG_KEY = "config_path"
+
+
+def parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
+    """Parses our options and leaves unknown ones (e.g. Qt's -platform) for QApplication."""
+    parser = argparse.ArgumentParser(description="Real-time plotter for binary serial telemetry.")
+    parser.add_argument(
+        "--config",
+        metavar="PATH",
+        help="streams.json to use (default: the last used file, else the bundled one)",
+    )
+    return parser.parse_known_args(argv)
 
 
 def main() -> int:
@@ -29,13 +46,23 @@ def main() -> int:
     4. Configures system signal handling (SIGINT) to allow terminal termination.
     5. Starts the Qt Event Loop.
     """
-    app = QtWidgets.QApplication(sys.argv)
+    args, qt_args = parse_args(sys.argv[1:])
+    app = QtWidgets.QApplication(sys.argv[:1] + qt_args)
 
     # Apply the global dark theme
     apply_dark_theme(app)
 
-    # Initialize and display the main UI
-    win = MainWindow()
+    # Pick the config file: --config, then the last used one, then the bundled default (C10).
+    settings = QtCore.QSettings(SETTINGS_ORG, SETTINGS_APP)
+    remembered = settings.value(SETTINGS_CONFIG_KEY, None, type=str)
+    config_path = resolve_config_path(args.config, remembered)
+    try:
+        win = MainWindow(config_path)
+    except (OSError, ValueError) as e:
+        QtWidgets.QMessageBox.critical(None, "Cannot load configuration", str(e))
+        return 2
+    settings.setValue(SETTINGS_CONFIG_KEY, str(config_path))
+    win.setWindowTitle(f"Serial Binary Plotter - {config_path.name}")
     win.show()
 
     # Handle Ctrl+C (SIGINT) to gracefully quit the application from the terminal

@@ -27,7 +27,7 @@ Always go through `uv`. Never run bare `python`/`pytest`.
 
 ```bash
 uv sync                               # install runtime + dev deps into .venv (Python 3.14)
-uv run python main.py                 # run the app (CWD must be the repo root, see C10)
+uv run python main.py [--config PATH] # run the app (default: last used, else bundled streams.json)
 uv run pytest                         # all tests; `qt` ones use real Qt (offscreen)
 uv run pytest -p no:pytest-qt         # when Qt can't load (no libEGL): `qt` tests skip
 uv run ruff check . && uv run ruff format --check .

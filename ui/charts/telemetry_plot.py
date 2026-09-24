@@ -14,7 +14,7 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtWidgets
 
-from core.types import PlotMode, PlotPacketWithRaw, SignalsConfig, StreamSignalConfig
+from core.types import PlotMode, PlotPacketWithBounds, SignalsConfig, StreamSignalConfig
 
 DEFAULT_LINE_WIDTH = 1
 
@@ -33,7 +33,6 @@ class TelemetryPlot(QtWidgets.QWidget):
         # --- State ---
         self.mode: PlotMode = PlotMode.LIVE
 
-        self._render_busy: bool = False
         self._last_render_ts: float = 0.0
         self._min_render_interval: float = 0.07
 
@@ -45,8 +44,8 @@ class TelemetryPlot(QtWidgets.QWidget):
         # Format: { "signal_id": { "curve": pg.PlotDataItem, "config": dict } }
         self.signal_views: dict[str, _SignalView] = {}
 
-        self.last_packet: PlotPacketWithRaw | None = None
-        self.analysis_packet: PlotPacketWithRaw | None = None
+        self.last_packet: PlotPacketWithBounds | None = None
+        self.analysis_packet: PlotPacketWithBounds | None = None
 
         self.anchor_time: float | None = None
         self.anchor_values: dict[str, float] = {}
@@ -174,64 +173,55 @@ class TelemetryPlot(QtWidgets.QWidget):
         return lo, hi
 
     @QtCore.pyqtSlot(dict)
-    def on_data_ready(self, packet: PlotPacketWithRaw) -> None:
+    def on_data_ready(self, packet: PlotPacketWithBounds) -> None:
         """
         Takes RAW floats from packet and puts them on the chart.
         NO MATH HERE.
         """
         # --- FRAME SKIP GUARD ---
         now = time.perf_counter()
-
-        if self._render_busy:
-            return
-
         if (now - self._last_render_ts) < self._min_render_interval:
             return
-
-        self._render_busy = True
         self._last_render_ts = now
 
-        try:
-            self.last_packet = packet
-            if self.mode == PlotMode.ANALYSIS:
-                return
+        self.last_packet = packet
+        if self.mode == PlotMode.ANALYSIS:
+            return
 
-            time_arr = packet["time"]
-            # Get raw signals (floats)
-            signals_data = packet["signals"]
+        time_arr = packet["time"]
+        # Get raw signals (floats)
+        signals_data = packet["signals"]
 
-            if len(time_arr) == 0:
-                return
+        if len(time_arr) == 0:
+            return
 
-            for sid, raw_y in signals_data.items():
-                if sid in self.signal_views:
-                    # RAW_Y goes to setData directly. No subtraction, no division.
-                    self.signal_views[sid]["curve"].setData(time_arr, raw_y, clear=False)
+        for sid, raw_y in signals_data.items():
+            if sid in self.signal_views:
+                # RAW_Y goes to setData directly. No subtraction, no division.
+                self.signal_views[sid]["curve"].setData(time_arr, raw_y, clear=False)
 
-            # Throttle range updates for better performance
-            now = time.perf_counter()
-            should_update_ranges = (now - self._last_range_update_ts) >= self._range_update_interval
+        # Throttle range updates for better performance
+        now = time.perf_counter()
+        should_update_ranges = (now - self._last_range_update_ts) >= self._range_update_interval
 
-            if should_update_ranges:
-                # --- X AXIS (TIME) ---
-                self.plot.setXRange(time_arr[0], time_arr[-1], padding=0)
+        if should_update_ranges:
+            # --- X AXIS (TIME) ---
+            self.plot.setXRange(time_arr[0], time_arr[-1], padding=0)
 
-                # --- Y AXIS (ANCHOR ZERO, NO DANCING) ---
-                signal_bounds: dict[str, tuple[float, float]] = packet.get("signal_bounds", {})
-                y_min, y_max = self._compute_y_bounds(signals_data, signal_bounds)
+            # --- Y AXIS (ANCHOR ZERO, NO DANCING) ---
+            signal_bounds: dict[str, tuple[float, float]] = packet.get("signal_bounds", {})
+            y_min, y_max = self._compute_y_bounds(signals_data, signal_bounds)
 
-                span = max(abs(y_min), abs(y_max), 1e-6)
-                pad = 0.1 * span
+            span = max(abs(y_min), abs(y_max), 1e-6)
+            pad = 0.1 * span
 
-                lo = min(y_min - pad, -pad)
-                hi = max(y_max + pad, pad)
+            lo = min(y_min - pad, -pad)
+            hi = max(y_max + pad, pad)
 
-                self.plot.setYRange(lo, hi, padding=0)
-                self._last_range_update_ts = now
+            self.plot.setYRange(lo, hi, padding=0)
+            self._last_range_update_ts = now
 
-            self.update_hud_position()
-        finally:
-            self._render_busy = False
+        self.update_hud_position()
 
     @QtCore.pyqtSlot(bool)
     def set_paused(self, paused: bool) -> None:
@@ -297,7 +287,7 @@ class TelemetryPlot(QtWidgets.QWidget):
         y_pos = yr[1] - 0.02 * (yr[1] - yr[0])
         self.label.setPos(x_pos, y_pos)
 
-    def update_tooltip(self, cur_t: float, ds: PlotPacketWithRaw) -> None:
+    def update_tooltip(self, cur_t: float, ds: PlotPacketWithBounds) -> None:
         """Update tooltip with optimized interpolation."""
         t_arr = ds["time"]
         raw_map = ds["signals"]

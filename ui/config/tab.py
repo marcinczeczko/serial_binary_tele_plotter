@@ -9,13 +9,14 @@ and refuses to write a file the app couldn't load.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import shutil
 
 from PyQt6 import QtCore, QtWidgets
 
-from core.config import validate_config
+from core.config import StreamConfigLoader, validate_config
 from core.types import StreamConfig
 from ui.config.stream_editor import StreamEditor
 
@@ -32,13 +33,14 @@ class ConfiguratorTab(QtWidgets.QWidget):
     config_saved = QtCore.pyqtSignal()
 
     def __init__(
-        self, filepath: str = "streams.json", parent: QtWidgets.QWidget | None = None
+        self, stream_loader: StreamConfigLoader, parent: QtWidgets.QWidget | None = None
     ) -> None:
         super().__init__(parent)
-        self.filepath: str = filepath
+        self.loader = stream_loader
+        self.filepath: str = str(stream_loader.path)
         self.data: dict[str, StreamConfig] = {}
         self.init_ui()
-        self.load_from_file()
+        self._take_document()
 
     def init_ui(self) -> None:
         layout = QtWidgets.QHBoxLayout(self)
@@ -97,12 +99,17 @@ class ConfiguratorTab(QtWidgets.QWidget):
         layout.addWidget(splitter)
 
     def load_from_file(self) -> None:
+        """Re-reads the file through the shared loader and shows its streams."""
         try:
-            with open(self.filepath, encoding="utf-8") as f:
-                self.data = json.load(f).get("streams", {})
-        except (OSError, json.JSONDecodeError) as e:
-            logger.exception("Config load error: %s", e)
-            self.data = {}
+            self.loader.load()
+        except ValueError as e:
+            logger.error("Config load error: %s", e)
+        self._take_document()
+
+    def _take_document(self) -> None:
+        # Edit a private copy of the raw document, including streams with errors, so they
+        # can be fixed here.
+        self.data = copy.deepcopy(self.loader.data.get("streams", {}))
         self.refresh_list()
 
     def refresh_list(self) -> None:
