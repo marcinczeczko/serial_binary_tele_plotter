@@ -28,8 +28,15 @@ Primary use cases:
   Values may be negative (e.g. a reverse `Rps` setpoint).
 - IMU calibration panel (placeholder: its buttons are disabled until the protocol defines an
   IMU command packet).
-- Virtual device simulator (`VIRTUAL` port) for UI development without hardware.
-- Adjustable sample period and ring-buffer window size.
+- Device simulator (`VIRTUAL` port). It generates real protocol frames for the shown
+  stream, from its definition, so everything downstream is exercised as with hardware.
+  Per-field waveforms and a PID motor model are configurable, and PID gains sent from the
+  panel change the simulated response.
+- A time axis per stream, from a frame field and the stream's configured period. Counter
+  wraps are unwrapped. A device reset starts a new segment, so time never runs backwards.
+  Lost frames are drawn as gaps, never bridged by a line.
+- Adjustable ring-buffer window size, and a per-stream **Period** that can be overridden for
+  the session.
 - Link statistics in the status bar: throughput, samples/s, CRC errors, lost frames
   (`loop_cntr` gaps) and bytes dropped while re-syncing. Hover for the full breakdown.
 
@@ -107,7 +114,10 @@ CI (`.github/workflows/ci.yml`) runs lint, format check, mypy and the tests on e
 4. Click `Pause` to enter analysis mode — the cursor shows interpolated values for all visible
    signals. Click on the plot to set an anchor point for delta (Δ) readouts.
 5. Toggle individual signal visibility in the **Signals Visibility** panel.
-6. Adjust **Period** (ms) and **Samples** to control the sampling rate and history window length.
+6. **Period** shows the time between two frames of the shown stream, from its `time` block
+   in `streams.json`. Changing it re-times that stream's whole history, for this session
+   only; it turns orange while it differs from the file. Set it in the **Configuration**
+   tab (Time Base) to keep it. **Samples** sets how much history every stream keeps.
 7. Use the **Configuration** tab to add/edit streams, frame fields, and signal definitions, then
    save to update `streams.json` on disk.
 
@@ -170,10 +180,23 @@ Each stream entry:
 | `frame.stream_id` | Packet type byte — must match the `TYPE` field sent by the MCU |
 | `frame.endianness` | `"little"` or `"big"` — must match the MCU's byte order |
 | `frame.fields` | Ordered list of `{name, type}` matching the C struct field order |
+| `time` | Optional time base: `field` (default `loop_cntr`), `scale_s` (seconds per tick of that field, default `0.005`), `step` (its increase per frame, default `1`) |
+| `sim` | Optional: what the `VIRTUAL` port generates for this stream (see [Simulator](#simulator-virtual-port)) |
 | `signals` | Map of signal IDs to display config (label, color, visibility, line style and width). Keys you add yourself are kept when the in-app editor saves |
 
-**`loop_cntr` is mandatory** in every frame — it is the loop counter used as the X-axis
-(`loop_cntr × sample_period_s = time in seconds`). It should be a `u32` and the first field.
+**`loop_cntr` is mandatory** in every frame. It's the loop counter used to detect lost
+frames, and by default it's also the X axis. It should be a `u32` and the first field.
+
+**Time axis.** Time in seconds is `unwrapped(time.field) × time.scale_s`:
+- For a loop counter, `scale_s` is the MCU loop period, for example
+  `"time": {"scale_s": 0.001}` for a 1 kHz loop.
+- For a microsecond timestamp field, use
+  `"time": {"field": "t_us", "scale_s": 1e-6, "step": 1000}`.
+- An integer time field that wraps (for example a `u32` µs timestamp, every 71 minutes) is
+  unwrapped.
+- If the field jumps backwards (the MCU restarted), a new segment starts right after the
+  old one, and the status bar says so.
+- A jump of more than 1.5 × `step` is drawn as a gap: frames were lost.
 
 **Validation.** `streams.json` is checked when it's loaded and before the editor saves it:
 - Errors leave a stream out of the stream list, and the status bar reports them (hover for
@@ -183,12 +206,45 @@ Each stream entry:
   - a payload over 255 B
   - `stream_id` outside 0–255
   - a signal whose `field` isn't in the frame
-- Warnings don't block loading: an unknown `panel_type`, or a `loop_cntr` that isn't `u32` or
-  isn't first.
+  - a `time.field` that isn't in the frame, or a `time.scale_s`/`time.step` that isn't a
+    positive number
+- Warnings don't block loading. They cover:
+  - an unknown `panel_type`
+  - a `loop_cntr` that isn't `u32` or isn't first
+  - a `time.field` other than `loop_cntr` without a `time.step`
+  - unknown `time` keys
+  - anything wrong in a `sim` block
 
 The editor refuses to save a file with errors. A signal with no data (a field the source
 doesn't send) is drawn as a gap and reads `n/a` in the cursor readout. It is never plotted
 as zero.
+
+### Simulator (`VIRTUAL` port)
+
+`VIRTUAL` streams real frames for the shown stream at its configured period. The frames
+have the same header, CRC and packed payload the MCU would send, so the parser, time axis
+and link statistics all work as they do with hardware. What each field carries:
+
+- The time field and `loop_cntr` count frames and wrap like the MCU's integers.
+- Fields listed in `sim.fields` follow their spec:
+  - `wave`: `sine`, `step` (a square wave), `noise`, `const` or `counter`
+  - parameters: `amp`, `freq_hz`, `offset`, `phase_deg`, `noise` (standard deviation)
+- `"model": "pid_motor"` fills `left_*`/`right_*` PID fields from a simulated
+  feedforward + PI loop on a DC motor. PID gains sent from the panel change it: `Kp`,
+  `Ki`, `Kaw`, `Alpha` (measurement filter), `Rps` (target amplitude), `useRamp` and
+  `usePI`. `K1` is the feedforward gain and `K2` the friction offset; `K3` is ignored.
+- Any other field gets a default sine, distinct per field.
+
+```json
+"sim": {
+  "fields": {
+    "acc_z": {"wave": "const", "offset": 1.0, "noise": 0.03},
+    "gyro_z": {"wave": "step", "amp": 45, "freq_hz": 0.2}
+  }
+}
+```
+
+Problems in `sim` are only warnings: they affect `VIRTUAL`, never real data.
 
 **Supported field types:** `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`, `f32`, `f64`
 
@@ -213,6 +269,7 @@ Example — a minimal stream definition:
           {"name": "pressure",     "type": "f32"}
         ]
       },
+      "time": {"field": "loop_cntr", "scale_s": 0.01, "step": 1},
       "signals": {
         "temperature": {
           "label": "Temperature (°C)",
@@ -237,28 +294,29 @@ Example — a minimal stream definition:
 ## Project Structure
 
 ```
-serial_bin_plotter/
-├── main.py                    # Entry point, QApplication setup
+serial_binary_tele_plotter/
+├── main.py                    # Entry point, QApplication setup, --config
 ├── streams.json               # Stream and signal definitions (source of truth)
 ├── styles.py                  # Global dark theme
-├── core/
+├── core/                      # protocol/, transport/, simulation/ are Qt-free
 │   ├── types.py               # Shared TypedDicts and Enums
-│   ├── config.py              # streams.json loader
-│   ├── protocol/
-│   │   ├── handler.py         # Frame sync, CRC validation, encode/decode
-│   │   ├── decoder.py         # struct unpacking → Python dict
-│   │   ├── crc.py             # CRC-8 (lookup-table implementation)
-│   │   └── constants.py       # Magic bytes, type IDs, field names
+│   ├── config.py              # streams.json validation and loader
+│   ├── protocol/              # Wire format: CRC-8, FrameParser, RecordDecoder (numpy),
+│   │                          #   StreamRouter (multi-stream), stats, command encoding
+│   ├── transport/             # Transport interface, SerialTransport, SimTransport, ReaderThread
+│   ├── simulation/            # Frame synthesis from `sim` config, PID motor model
 │   └── acquisition/
-│       ├── engine.py          # TelemetryEngine — worker QThread controller
-│       ├── storage.py         # SignalDataManager — numpy ring buffers
-│       └── virtual.py         # VirtualDevice — hardware-free simulator
-└── ui/
-    ├── main_window.py         # MainWindow — thread coordinator
-    ├── charts/
-    │   └── telemetry_plot.py  # Live pyqtgraph plot widget
-    ├── panels/                # Connection, PID, IMU, signals, timing panels
-    └── config/                # Stream configuration editor tab
+│       ├── engine.py          # TelemetryEngine: lifecycle state machine (QThread)
+│       ├── storage.py         # SampleStore: versioned ring buffer per stream
+│       └── timebase.py        # Per-stream time: unwrap, resets, gap markers
+├── ui/
+│   ├── main_window.py         # Composition, engine thread, signal wiring
+│   ├── charts/                # TelemetryPlot (pyqtgraph), LiveFeed (pulls snapshots)
+│   ├── panels/                # Connection, PID, IMU, signals, time window panels
+│   └── config/                # Stream configuration editor tab
+├── tests/                     # pytest; `qt`-marked tests use real Qt
+├── tools/bench_pipeline.py    # Parser/storage benchmark
+└── docs/                      # Roadmap, project log, reviews, ADRs
 ```
 
 ## Architecture Notes
@@ -266,7 +324,7 @@ serial_bin_plotter/
 - **Threading:** a dedicated reader thread does blocking serial reads and parses them, so
   the OS buffer is drained however busy the GUI is. `TelemetryEngine` runs in its own
   `QThread`. The GUI talks to it only through Qt signals and queued calls.
-- **Data flow:** `SerialTransport` → `ReaderThread` → `FrameParser` (sync, CRC, all IDs) →
+- **Data flow:** `SerialTransport` or `SimTransport` → `ReaderThread` → `FrameParser` (sync, CRC, all IDs) →
   `StreamRouter` (numpy batch decode per layout) → one `SampleStore` per stream (a versioned
   ring buffer shared between threads). `LiveFeed` then pulls snapshots of the
   visible signals into `TelemetryPlot` at up to 30 FPS, only when there's new data, and
@@ -282,5 +340,7 @@ serial_bin_plotter/
 | No serial ports appear | OS permission denied | Add user to `dialout` group (Linux) or grant Terminal serial access (macOS) |
 | Plot is flat / no data | `stream_id` or frame layout mismatch | Check the status-bar tooltip: "Frames with unconfigured stream IDs" means no stream in `streams.json` uses the ID the MCU sends; "Size mismatches" means the field list doesn't match the firmware struct |
 | Data looks corrupted | Baud rate mismatch | CRC errors and dropped bytes climb in the status bar; make firmware and UI baud rates identical |
-| Gaps or jumps in traces | Frames lost or MCU reset | The status bar shows "lost N" (`loop_cntr` gaps) and the tooltip shows resets |
+| Gaps in traces | Frames lost | The status bar shows "lost N" (`loop_cntr` gaps); each loss is drawn as a gap in the trace |
+| Time axis runs too fast or slow | `time.scale_s` doesn't match the MCU loop period | Correct **Period** on the dashboard to check, then set it in Configuration → Time Base |
+| "Time counter went backwards" | The MCU restarted (or the time field reset) | Expected after a reset; the new data continues on a new segment after a gap |
 | `uv run pytest` picks up wrong Python | Anaconda or system `pytest` in PATH | Always use `uv run pytest`, never bare `pytest` |

@@ -6,10 +6,14 @@ its own frame rate. Nothing bulky crosses threads through the Qt event queue (P3
 snapshot copies only what will be drawn (P2).
 
 Layout: one column-major (Fortran-order) matrix, `2 * capacity` rows by one column per
-signal, plus the loop counter. Every sample row is written twice, at `i` and
+signal, plus a column of time ticks. Every sample row is written twice, at `i` and
 `i + capacity`. The chronological window is then always the contiguous row range
 `[head + capacity - count, head + capacity)`. So a snapshot is one `memcpy` per requested
 column, and a batch of frames is a few slice assignments.
+
+Time (R2.5): the stream's time field is turned into monotonic ticks at write time
+(`TimeBase`: wrap, reset, gap markers). Seconds are applied at snapshot time
+(`ticks x scale_s`), so correcting the scale re-times the whole history consistently.
 """
 
 from __future__ import annotations
@@ -22,8 +26,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from core.protocol.constants import LOOP_CNTR_NAME
-from core.types import DecodedFrame, SignalsConfig
+from core.acquisition.timebase import TimeBase, TimeBaseConfig, time_base_config
+from core.types import DecodedFrame, SignalsConfig, StreamConfig
 
 
 @dataclass
@@ -54,7 +58,9 @@ class SampleStore:
         self._float_dtype = np.dtype([])
         self._expand: list[int] | None = None
         self._col: dict[str, int] = {}
-        self._loop = self._alloc_loop()
+        self._time = TimeBase()
+        self._scale_s = self._time.cfg.scale_s
+        self._ticks = self._alloc_ticks()
         self._mat = self._alloc_matrix()
         self._head = 0  # next write position, 0..capacity-1
         self._count = 0  # valid samples, <= capacity
@@ -74,9 +80,25 @@ class SampleStore:
     def __len__(self) -> int:
         return self._count
 
-    def configure(self, signals_cfg: SignalsConfig) -> None:
-        """Replaces the signal set; drops all samples."""
+    @property
+    def time_scale_s(self) -> float:
+        return self._scale_s
+
+    @property
+    def time_resets(self) -> int:
+        """Times the time field went backwards (device reset) since the last clear."""
+        return self._time.resets
+
+    @property
+    def time_gaps(self) -> int:
+        """Gap markers inserted for lost frames since the last clear."""
+        return self._time.gaps
+
+    def configure(self, signals_cfg: SignalsConfig, time_cfg: TimeBaseConfig | None = None) -> None:
+        """Replaces the signal set and time base; drops all samples."""
         with self._lock:
+            self._time = TimeBase(time_cfg)
+            self._scale_s = self._time.cfg.scale_s
             self._ids = list(signals_cfg)
             self._fields = [sig["field"] for sig in signals_cfg.values()]
             # Fast path of append_records: cast the *unique* fields once, then expand columns
@@ -101,6 +123,13 @@ class SampleStore:
         with self._lock:
             self._reset_locked()
 
+    def set_time_scale(self, scale_s: float) -> None:
+        """Changes seconds per tick for the whole history (a correction, not a new segment)."""
+        with self._lock:
+            if scale_s > 0 and scale_s != self._scale_s:
+                self._scale_s = float(scale_s)
+                self._version += 1
+
     def resize(self, capacity: int) -> None:
         """Changes the capacity, keeping the newest samples that fit."""
         capacity = max(int(capacity), 1)
@@ -108,14 +137,14 @@ class SampleStore:
             if capacity == self._capacity:
                 return
             keep = min(self._count, capacity)
-            old_loop = self._window_locked(self._loop)[len(self) - keep :]
+            old_ticks = self._window_locked(self._ticks)[len(self) - keep :]
             old_rows = self._window_locked(self._mat)[len(self) - keep :]
             self._capacity = capacity
-            self._loop = self._alloc_loop()
+            self._ticks = self._alloc_ticks()
             self._mat = self._alloc_matrix()
             self._head = 0
             self._count = 0
-            self._write_locked(old_loop, old_rows)
+            self._write_locked(old_ticks, old_rows)
             self._version += 1
 
     # --- writer side -------------------------------------------------------------------
@@ -128,16 +157,10 @@ class SampleStore:
         rows = [[frame.get(f, math.nan) for f in fields] for frame in frames]
         if not rows:
             return 0
-        counters = [frame.get(LOOP_CNTR_NAME, math.nan) for frame in frames]
+        time_field = self._time.cfg.field
+        raw = np.asarray([frame.get(time_field, math.nan) for frame in frames], dtype=np.float64)
         values = np.asarray(rows, dtype=np.float64).reshape(len(rows), len(fields))
-        loop = np.asarray(counters, dtype=np.float64)
-        with self._lock:
-            if fields is not self._fields:
-                return 0  # reconfigured while this batch was being prepared
-            self._write_locked(loop, values)
-            self.total_stored += len(rows)
-            self._version += 1
-        return len(rows)
+        return self._store(fields, raw, values)
 
     def append_records(self, records: np.ndarray) -> int:
         """
@@ -150,10 +173,9 @@ class SampleStore:
         if not n:
             return 0
         names = records.dtype.names or ()
-        loop = (
-            records[LOOP_CNTR_NAME].astype(np.float64)
-            if LOOP_CNTR_NAME in names
-            else np.full(n, math.nan)
+        time_field = self._time.cfg.field
+        raw = (
+            records[time_field].astype(np.float64) if time_field in names else np.full(n, math.nan)
         )
         fields = self._fields
         unique = self._unique_fields
@@ -166,10 +188,20 @@ class SampleStore:
             values = np.empty((n, len(fields)), dtype=np.float64)
             for k, name in enumerate(fields):
                 values[:, k] = records[name] if name in names else math.nan
+        return self._store(fields, raw, values)
+
+    def _store(self, fields: list[str], raw: np.ndarray, values: np.ndarray) -> int:
+        """Converts time and writes one prepared batch; the batch's rows are frames in order."""
+        n = len(raw)
         with self._lock:
             if fields is not self._fields:
                 return 0  # reconfigured while this batch was being prepared
-            self._write_locked(loop, values)
+            ticks, gap_index, gap_ticks = self._time.process(raw)
+            if gap_index:
+                # NaN rows break the drawn line where frames were lost or a segment restarted.
+                ticks = np.insert(ticks, gap_index, gap_ticks)
+                values = np.insert(values, gap_index, math.nan, axis=0)
+            self._write_locked(ticks, values)
             self.total_stored += n
             self._version += 1
         return n
@@ -180,21 +212,22 @@ class SampleStore:
         self,
         signal_ids: Iterable[str] | None = None,
         since_version: int | None = None,
-        sample_period_s: float = 1.0,
     ) -> Snapshot | None:
         """
         Copies the current window of `signal_ids` (all signals if None).
 
         Returns None when fewer than 2 samples are stored, or when nothing changed since
         `since_version`, so a caller polling at frame rate does no work while idle.
-        Time is `loop_cntr * sample_period_s` (per-stream time bases arrive with R2.5).
+        Time is in seconds: the stream's monotonic ticks times its `scale_s`. It never
+        decreases, even across counter wraps and device resets.
         """
         with self._lock:
             if self._count < 2 or (since_version is not None and since_version == self._version):
                 return None
             wanted = self._ids if signal_ids is None else signal_ids
             ids = [sid for sid in wanted if sid in self._col]
-            loop = self._window_locked(self._loop).copy()
+            ticks = self._window_locked(self._ticks).copy()
+            scale_s = self._scale_s
             window = self._window_locked(self._mat)
             data = {sid: window[:, self._col[sid]].copy() for sid in ids}  # contiguous
             version = self._version
@@ -206,35 +239,37 @@ class SampleStore:
                 lo, hi = float(np.nanmin(values)), float(np.nanmax(values))
                 if math.isfinite(lo) and math.isfinite(hi):
                     bounds[sid] = (lo, hi)
-        return Snapshot(version=version, time=loop * sample_period_s, signals=data, bounds=bounds)
+        ticks *= scale_s
+        return Snapshot(version=version, time=ticks, signals=data, bounds=bounds)
 
     # --- internals ---------------------------------------------------------------------
 
-    def _alloc_loop(self) -> np.ndarray:
+    def _alloc_ticks(self) -> np.ndarray:
         return np.full(2 * self._capacity, math.nan, dtype=np.float64)
 
     def _alloc_matrix(self) -> np.ndarray:
         shape = (2 * self._capacity, len(self._ids))
         return np.full(shape, math.nan, dtype=np.float64, order="F")
 
-    def _write_locked(self, loop: np.ndarray, values: np.ndarray) -> None:
+    def _write_locked(self, ticks: np.ndarray, values: np.ndarray) -> None:
         """Appends rows (both copies), wrapping at capacity; keeps the newest if too many."""
         cap = self._capacity
-        n = len(loop)
+        n = len(ticks)
         if n > cap:
-            loop, values, n = loop[-cap:], values[-cap:], cap
+            ticks, values, n = ticks[-cap:], values[-cap:], cap
         done = 0
         while done < n:
             i = self._head
             k = min(n - done, cap - i)  # up to the wrap point
             for base in (i, i + cap):
-                self._loop[base : base + k] = loop[done : done + k]
+                self._ticks[base : base + k] = ticks[done : done + k]
                 self._mat[base : base + k] = values[done : done + k]
             self._head = (i + k) % cap
             done += k
         self._count = min(self._count + n, cap)
 
     def _reset_locked(self) -> None:
+        self._time.reset()
         self._head = 0
         self._count = 0
         self._version += 1
@@ -259,12 +294,12 @@ class StreamStores:
         self._capacity = max(int(capacity), 1)
         self._stores: dict[str, SampleStore] = {}
 
-    def configure(self, streams: dict[str, SignalsConfig]) -> None:
-        """`streams` maps stream key -> that stream's signals config."""
+    def configure(self, streams: dict[str, StreamConfig]) -> None:
+        """One store per stream key, with the stream's signals and time base."""
         stores = {}
-        for key, signals in streams.items():
+        for key, cfg in streams.items():
             store = SampleStore(self._capacity)
-            store.configure(signals)
+            store.configure(cfg.get("signals", {}), time_base_config(cfg))
             stores[key] = store
         with self._lock:
             self._stores = stores

@@ -58,10 +58,23 @@ class StreamFrameConfig(TypedDict, total=False):
     fields: list[StreamFrameField]
 
 
+class StreamTimeConfig(TypedDict, total=False):
+    field: str
+    scale_s: float
+    step: float
+
+
+class StreamSimConfig(TypedDict, total=False):
+    model: str
+    fields: dict[str, dict[str, float | str]]
+
+
 class StreamConfig(TypedDict, total=False):
     name: str
     panel_type: str
     frame: StreamFrameConfig
+    time: StreamTimeConfig
+    sim: StreamSimConfig
     signals: SignalsConfig
 
 

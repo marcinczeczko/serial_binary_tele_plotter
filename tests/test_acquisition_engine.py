@@ -38,7 +38,7 @@ _CFG_B = {
 # Same ID and layout as A, different signal selection: decoded once, fed to both.
 _CFG_A_VIEW = {**_CFG_BYTES, "name": "A view", "signals": {"counter": {"field": "loop_cntr"}}}
 _CFG_IMU = {
-    "name": "IMU sim",  # "imu" in the name selects the IMU waveform in VirtualDevice
+    "name": "IMU sim",
     "frame": {
         "stream_id": 3,
         "fields": [{"name": "loop_cntr", "type": "u32"}, {"name": "acc_x", "type": "f32"}],
@@ -51,7 +51,7 @@ STREAMS = {"a": _CFG_BYTES, "b": _CFG_B, "a_view": _CFG_A_VIEW, "imu": _CFG_IMU}
 def _engine(transport=None):
     from core.acquisition.engine import TelemetryEngine
 
-    engine = TelemetryEngine(sample_period_ms=10.0, max_samples=500)
+    engine = TelemetryEngine(max_samples=500)
     if transport is not None:
         engine.transport_factory = lambda port, baud: transport
     return engine
@@ -86,21 +86,57 @@ def test_start_before_configuring_is_refused(pyqt_stub):
     assert engine.state.name == "IDLE"
 
 
-def test_virtual_device_feeds_the_selected_stream(pyqt_stub):
+def test_virtual_port_streams_simulated_bytes_through_the_parser(pyqt_stub):
     engine = _engine()
     engine.configure_streams(STREAMS)
     engine.select_stream("imu")
-    assert engine.virtual._stream_type == "imu"
+    msgs = []
+    engine.status_msg.connect(msgs.append)
 
-    with mock.patch.object(engine.virtual, "start") as vstart:
-        engine.start_working("VIRTUAL", 115200)
-    vstart.assert_called_once()
-    assert engine.state.name == "RUNNING"
+    engine.start_working("VIRTUAL", 115200)
+    try:
+        assert engine.state.name == "RUNNING"
+        assert msgs[-1] == "Connected to VIRTUAL"
+        imu = engine.stores.get("imu")
+        assert wait_for(lambda: len(imu) >= 5)
+        assert len(engine.stores.get("a")) == 0  # only the shown stream is simulated
+        stats = engine.parser.stats
+        assert stats.bytes_rx > 0 and stats.frames_decoded >= 5  # real frames, parsed
+        assert stats.errors == 0 and stats.counter_gaps == 0
 
-    engine.virtual._step()
-    engine.virtual._step()
-    assert len(engine.stores.get("imu")) == 2
-    assert len(engine.stores.get("a")) == 0
+        engine.select_stream("b")  # retargets the simulator; no restart
+        b = engine.stores.get("b")
+        assert wait_for(lambda: len(b) >= 5)
+        assert engine.state.name == "RUNNING"
+    finally:
+        engine.stop_working()
+    assert engine._sim is None and engine._reader is None
+
+
+def test_virtual_port_needs_a_valid_stream(pyqt_stub):
+    engine = _engine()
+    engine.configure_streams({})  # e.g. every stream in the file has errors
+    msgs = []
+    engine.status_msg.connect(msgs.append)
+    engine.start_working("VIRTUAL", 115200)
+    assert msgs == ["No valid stream to simulate"]
+    assert engine.state.name == "CONFIGURED"
+
+
+def test_commands_on_the_virtual_port_reach_the_simulator(pyqt_stub):
+    engine = _engine()
+    engine.configure_streams({"pid": {**_CFG_B, "sim": {"model": "pid_motor"}}})
+    msgs = []
+    engine.status_msg.connect(msgs.append)
+    engine.start_working("VIRTUAL", 115200)
+    try:
+        sim = engine._sim
+        engine.send_left_config(0, 0, 1.5, 0.5, 20.0, 2.0, 0.0, 1.0, 0.5, 2.0)
+        gains = sim.synth.model.gains("left")
+        assert (gains.kp, gains.rps, gains.use_pi) == (1.5, 2.0, False)
+        assert not any("not sent" in m for m in msgs)
+    finally:
+        engine.stop_working()
 
 
 def test_serial_open_failure_emits_error(pyqt_stub):
@@ -268,3 +304,36 @@ def test_command_without_connection_is_reported(pyqt_stub):
     engine.status_msg.connect(msgs.append)
     engine.send_left_config(1, 0, 0.1, 0.02, 1.0, 2.0, 3.0, 1.0, 0.2, 0.3)
     assert msgs == ["Not connected to a serial port: command not sent"]
+
+
+def test_counter_reset_is_reported_and_time_keeps_growing(pyqt_stub):
+    engine = _engine_with(FakeTransport())
+    msgs = []
+    engine.status_msg.connect(msgs.append)
+    engine._on_bytes(b"".join(_frame(1, bytes([i, 7])) for i in (10, 11, 12, 0, 1)))
+
+    engine._emit_link_stats()
+    engine._emit_link_stats()  # reported once, not on every stats tick
+
+    assert msgs == [
+        "Time counter went backwards in bytes, A view (device reset?); continuing on a new segment"
+    ]
+    snap = engine.stores.get("a").snapshot()
+    assert (snap.time[1:] > snap.time[:-1]).all()
+
+
+def test_set_time_scale_retimes_one_stream(pyqt_stub):
+    engine = _engine_with(FakeTransport())
+    engine._on_bytes(_frames(3))
+    engine.set_time_scale("a", 0.5)
+    assert engine.stores.get("a").snapshot().time.tolist() == [0.0, 0.5, 1.0]
+    assert engine.stores.get("a_view").time_scale_s == 0.005  # the other view keeps its own
+    engine.set_time_scale("missing", 1.0)  # ignored
+
+
+def test_set_capacity_resizes_every_store(pyqt_stub):
+    engine = _engine_with(FakeTransport())
+    engine._on_bytes(_frames(20))
+    engine.set_capacity(5)
+    assert len(engine.stores.get("a")) == 5 and len(engine.stores.get("b")) == 0
+    assert engine.stores.get("a").capacity == 5

@@ -1,6 +1,6 @@
 # ADR-0002: Target acquisition and rendering pipeline
 
-- Status: Accepted (2026-09-24, Phase 2 started with R2.1)
+- Status: Accepted (2026-09-24, Phase 2 started with R2.1). Rule 3 refined by [ADR-0003](0003-per-stream-time-base.md)
 - Date: 2026-09-24
 - Addresses: review findings A1, A2, A6, P2, P3, P5, C2, C5
   ([review](../reviews/2026-09-24-architecture-review.md))

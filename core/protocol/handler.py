@@ -16,6 +16,8 @@ from core.protocol.constants import (
     LOOP_CNTR_NAME,
     MAGIC_0,
     MAGIC_1,
+    PID_ALL_FORMAT,
+    PID_SINGLE_FORMAT,
     RTP_REQ_PID_ALL,
     RTP_REQ_PID_SINGLE,
 )
@@ -136,7 +138,7 @@ class ProtocolHandler:
 
         """
         payload = struct.pack(
-            "<BffffffffBB", motor_id, kp, ki, k1, k2, k3, k_aw, alpha, rps, use_ramp, use_pi
+            PID_SINGLE_FORMAT, motor_id, kp, ki, k1, k2, k3, k_aw, alpha, rps, use_ramp, use_pi
         )
 
         h_base = struct.pack("BBBB", MAGIC_0, MAGIC_1, RTP_REQ_PID_SINGLE, len(payload))
@@ -172,7 +174,7 @@ class ProtocolHandler:
         Constructs a binary packet for PID configuration to be sent to the MCU for both motors
         """
         payload = struct.pack(
-            "<ffffffffBBffffffffBB",
+            PID_ALL_FORMAT,
             l_kp,
             l_ki,
             l_k1,

@@ -16,6 +16,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.acquisition.engine import TelemetryEngine
 from core.acquisition.storage import StreamStores
+from core.acquisition.timebase import time_base_config
 from core.config import DEFAULT_CONFIG_PATH, StreamConfigLoader
 from core.protocol.stats import LinkReport, format_link_report
 from core.types import EngineState, StreamConfig
@@ -54,6 +55,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # threads).
         self.engine_state: EngineState = EngineState.IDLE
         self._shut_down = False
+        # Per-stream Period overrides for this session (seconds per tick), R2.5.
+        self._scale_overrides: dict[str, float] = {}
 
         # --- Window Setup ---
         self.setWindowTitle("Serial Binary Plotter")
@@ -105,18 +108,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # --- Engine & Thread Initialization ---
         # Retrieve initial settings via the Panel's public API
-        initial_period = self.panel.get_initial_sample_period()
         initial_samples = self.panel.get_initial_sample_count()
 
         # One store per stream, shared: the engine's reader thread writes them, and the GUI
         # pulls from the store of the stream it shows.
         self.stores = StreamStores(initial_samples)
-        self.engine: TelemetryEngine = TelemetryEngine(
-            initial_period, initial_samples, stores=self.stores
-        )
-        self.live_feed = LiveFeed(
-            None, self.plot, lambda: self.panel.time_panel.get_period() / 1000.0, parent=self
-        )
+        self.engine: TelemetryEngine = TelemetryEngine(initial_samples, stores=self.stores)
+        self.live_feed = LiveFeed(None, self.plot, parent=self)
 
         self.engine_thread: QtCore.QThread = QtCore.QThread(self)
         self.engine.moveToThread(self.engine_thread)
@@ -128,7 +126,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # 1. Configuration: Panel -> Engine
         self.panel.stream_changed.connect(self._on_stream_changed)
-        self.panel.time_config_changed.connect(self.engine.update_time_config)
+        self.panel.period_changed.connect(self._on_period_changed)
+        self.panel.samples_changed.connect(self.engine.set_capacity)
         self.panel.pid_left_sent.connect(self.engine.send_left_config)
         self.panel.pid_right_sent.connect(self.engine.send_right_config)
         self.panel.pid_all_sent.connect(self.engine.send_all_config)
@@ -140,7 +139,6 @@ class MainWindow(QtWidgets.QMainWindow):
         # 3. Visuals: Panel -> Plot
         self.panel.signal_visibility_changed.connect(self.plot.set_signal_visible)
         self.panel.signal_visibility_changed.connect(lambda *_: self.live_feed.invalidate())
-        self.panel.time_config_changed.connect(lambda *_: self.live_feed.invalidate())
 
         # 4. Engine -> UI (small signals only; plot data is pulled by LiveFeed)
         self.engine.status_msg.connect(self.lbl_status.setText)
@@ -188,6 +186,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _configure_engine_streams(self) -> None:
         """Tells the engine to decode every valid stream (A1); the GUI picks one to show."""
+        # Fresh stores use the (possibly just edited) streams.json time bases.
+        self._scale_overrides.clear()
+        self._show_period()
         QtCore.QMetaObject.invokeMethod(
             self.engine,
             "configure_streams",
@@ -213,6 +214,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         self.plot.configure_signals(stream_cfg["signals"])
         self._bind_live_feed()
+        self._show_period()
         key = self.panel.current_stream_key()
         if key is not None:
             QtCore.QMetaObject.invokeMethod(
@@ -221,6 +223,34 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtCore.Qt.ConnectionType.QueuedConnection,
                 QtCore.Q_ARG(str, key),
             )
+
+    def _show_period(self) -> None:
+        """Shows the shown stream's period: its session override, else streams.json."""
+        cfg = self.panel.get_current_stream_config()
+        key = self.panel.current_stream_key()
+        if cfg is None or key is None:
+            return
+        time_cfg = time_base_config(cfg)
+        scale_s = self._scale_overrides.get(key, time_cfg.scale_s)
+        self.panel.time_panel.show_period(
+            scale_s * time_cfg.step * 1000.0, time_cfg.period_s * 1000.0
+        )
+
+    def _on_period_changed(self, period_ms: float) -> None:
+        """The user overrode the shown stream's period: re-time that stream (all history)."""
+        cfg = self.panel.get_current_stream_config()
+        key = self.panel.current_stream_key()
+        if cfg is None or key is None or period_ms <= 0:
+            return
+        scale_s = period_ms / 1000.0 / time_base_config(cfg).step
+        self._scale_overrides[key] = scale_s
+        QtCore.QMetaObject.invokeMethod(
+            self.engine,
+            "set_time_scale",
+            QtCore.Qt.ConnectionType.QueuedConnection,
+            QtCore.Q_ARG(str, key),
+            QtCore.Q_ARG(float, scale_s),
+        )
 
     def _handle_connection(self, port: str, baud: int) -> None:
         """

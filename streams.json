@@ -150,6 +150,14 @@
                     }
                 ]
             },
+            "time": {
+                "field": "loop_cntr",
+                "scale_s": 0.005,
+                "step": 1
+            },
+            "sim": {
+                "model": "pid_motor"
+            },
             "signals": {
                 "left_target_setpoint": {
                     "label": "L: Target Setpoint",
@@ -643,6 +651,14 @@
                     }
                 ]
             },
+            "time": {
+                "field": "loop_cntr",
+                "scale_s": 0.005,
+                "step": 1
+            },
+            "sim": {
+                "model": "pid_motor"
+            },
             "signals": {
                 "left_target_setpoint": {
                     "label": "L: Target Setpoint",
@@ -857,6 +873,51 @@
                         "type": "f32"
                     }
                 ]
+            },
+            "time": {
+                "field": "loop_cntr",
+                "scale_s": 0.005,
+                "step": 1
+            },
+            "sim": {
+                "fields": {
+                    "motor": {
+                        "wave": "const",
+                        "offset": 0
+                    },
+                    "acc_x": {
+                        "wave": "sine",
+                        "amp": 0.5,
+                        "freq_hz": 0.3,
+                        "noise": 0.05
+                    },
+                    "acc_y": {
+                        "wave": "sine",
+                        "amp": 0.5,
+                        "freq_hz": 0.3,
+                        "phase_deg": 90,
+                        "noise": 0.05
+                    },
+                    "acc_z": {
+                        "wave": "const",
+                        "offset": 1.0,
+                        "noise": 0.03
+                    },
+                    "gyro_x": {
+                        "wave": "noise",
+                        "noise": 2.0
+                    },
+                    "gyro_y": {
+                        "wave": "noise",
+                        "noise": 2.0
+                    },
+                    "gyro_z": {
+                        "wave": "step",
+                        "amp": 45.0,
+                        "freq_hz": 0.2,
+                        "noise": 1.0
+                    }
+                }
             },
             "groups": {
                 "accel": {

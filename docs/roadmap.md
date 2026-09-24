@@ -142,21 +142,38 @@ PRs that each keep the app working. Measure with `tools/bench_pipeline.py` befor
   snapshot time as `loop_cntr × period`; that moves to write time with R2.5. X-range
   clipping of snapshots comes with zoomable lanes in Phase 3, because live view always
   shows the whole window. One store per stream comes with R2.2 (multi-stream).
-- [ ] **R2.5 Time base** (C2)
+- [x] **R2.5 Time base** (C2)
   Per-stream config `time: {field: "loop_cntr", scale_s: 0.001}` (or a µs timestamp field).
   u32 unwrap, reset detection (new segment + status message), and NaN gap insertion when
   Δcounter is more than k × nominal. The UI "Period" control becomes a per-stream override
   that is saved to config, not a global runtime knob.
+  *Done (ADR-0003):*
+  - `time: {field, scale_s, step}`, with k = 1.5.
+  - Wrap is unwrapped for any integer width. A reset starts a new segment after a NaN
+    marker, with one status message.
+  - Ticks are stored at write time; `scale_s` is applied at snapshot time, so a scale
+    correction re-times the history consistently.
+  - *Scope change:* the dashboard Period is a per-stream **session** override. It's saved
+    through the Configuration tab's new Time Base fields, not written to the file directly,
+    because the tab keeps its own unsaved copy of the document and two writers would race.
 - [x] **R2.6 GUI pull model** (P3)
   A `PlotController` `QTimer` at 30–60 FPS calls `store.snapshot(visible, since_version)`,
   which returns `None` if nothing changed. Nothing crosses threads except small control
   signals and stats, so the queued-packet backlog goes away entirely.
-- [ ] **R2.7 Byte-level simulator** (A6)
+- [x] **R2.7 Byte-level simulator** (A6)
   `SimTransport` generates *bytes* from any stream definition: per-field waveform spec
   (sine/step/noise/const/counter), plus an optional built-in DC-motor + PI plant for
   `pid` streams. Delete the name-substring logic.
   *Done when:* every stream in `streams.json` shows non-zero, plausible data on VIRTUAL,
   and the path exercises the parser end to end.
+  *Done (ADR-0004):*
+  - The `sim` block (per-field `wave` specs, `model: "pid_motor"`) is only ever a warning.
+  - VIRTUAL is a `SimTransport` on the normal `ReaderThread`. It's paced at the stream's
+    own period and applies PID commands to the model.
+  - A parametrised test decodes 10 s of every repo stream with no errors and checks each
+    signal is finite and varies. `*_aw_term` is exempt: it's zero until the output
+    saturates, which has its own test.
+  - `VirtualDevice` is deleted.
 
 ## Phase 3: visualisation for analysis (A4, P7)
 

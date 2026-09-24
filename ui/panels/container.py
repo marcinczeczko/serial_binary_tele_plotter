@@ -57,7 +57,8 @@ class MainControlPanel(QtWidgets.QWidget):
         float,
     )
 
-    time_config_changed = QtCore.pyqtSignal(float, int)
+    period_changed = QtCore.pyqtSignal(float)  # ms, for the shown stream
+    samples_changed = QtCore.pyqtSignal(int)
     stream_changed = QtCore.pyqtSignal(dict)
     signal_visibility_changed = QtCore.pyqtSignal(str, bool)
 
@@ -131,7 +132,8 @@ class MainControlPanel(QtWidgets.QWidget):
         # Global
         self.conn_panel.connection_requested.connect(self.connection_requested)
         self.conn_panel.pause_requested.connect(self.pause_requested)
-        self.time_panel.time_config_changed.connect(self.time_config_changed)
+        self.time_panel.period_changed.connect(self.period_changed)
+        self.time_panel.samples_changed.connect(self.samples_changed)
         self.sig_panel.signal_visibility_changed.connect(self.signal_visibility_changed)
 
         # PID Panel
@@ -164,9 +166,6 @@ class MainControlPanel(QtWidgets.QWidget):
         # Update Signal List & Notify Main Window
         self.sig_panel.rebuild_list(cfg)
         self.stream_changed.emit(cfg)
-
-    def get_initial_sample_period(self) -> float:
-        return self.time_panel.get_period()
 
     def get_initial_sample_count(self) -> int:
         return self.time_panel.get_samples()
