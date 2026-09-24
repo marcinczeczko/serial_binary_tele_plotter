@@ -1,32 +1,35 @@
 """
 Background engine module for telemetry data processing.
 
-This module handles the core logic of the application running in a separate thread.
-It acts as a Controller, orchestrating the flow of data between:
-1. Input Sources (Serial Hardware or Virtual Simulator)
-2. Protocol Logic (Parsing/Encoding)
-3. Data Storage (Buffering/Normalization)
-4. GUI Output (Signaling via Timer)
+The engine runs in its own QThread and orchestrates:
+1. Input: a `Transport` drained by a dedicated `ReaderThread` (blocking reads, P5), or
+   the virtual simulator.
+2. Protocol: parsing and decoding. This happens on the reader thread under `_data_lock`.
+3. Storage: numpy ring buffers.
+4. GUI output: periodic snapshots and link statistics.
+
+Threads: the reader thread writes the parser and storage under `_data_lock`, and the
+engine thread reads them under the same lock. Lock sections are short (one chunk's
+worth of frames, or one snapshot copy).
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from collections.abc import Callable
 
-import serial
 from PyQt6 import QtCore
 
 from core.acquisition.storage import SignalDataManager
 from core.acquisition.virtual import VirtualDevice
 from core.protocol.handler import ProtocolHandler
 from core.protocol.stats import LinkStats, make_link_report
-from core.types import EngineState, SignalsConfig, StreamConfig
+from core.transport import ReaderThread, SerialTransport, Transport, TransportError
+from core.types import DecodedFrame, EngineState, SignalsConfig, StreamConfig
 
 logger = logging.getLogger(__name__)
-
-# A device that stops draining its RX buffer must not block acquisition forever (C9).
-SERIAL_WRITE_TIMEOUT_S = 0.2
 
 
 class TelemetryEngine(QtCore.QObject):
@@ -43,6 +46,8 @@ class TelemetryEngine(QtCore.QObject):
     link_stats = QtCore.pyqtSignal(dict)  # LinkReport, ~1 Hz while running
     status_msg = QtCore.pyqtSignal(str)
     connection_failed = QtCore.pyqtSignal(str)
+    # Emitted from the reader thread; delivered to `_on_reader_failed` on the engine thread.
+    _reader_failed = QtCore.pyqtSignal(str)
 
     def __init__(self, sample_period_ms: float, max_samples: int) -> None:
         super().__init__()
@@ -54,10 +59,15 @@ class TelemetryEngine(QtCore.QObject):
         # 'parent=self' is crucial here! It ensures that when TelemetryEngine is moved
         # to a new QThread, the VirtualDevice (and its internal QTimer) moves with it.
         self.virtual = VirtualDevice(parent=self)
-        self.virtual.frame_generated.connect(self.data_mgr.store_frame)
+        self.virtual.frame_generated.connect(self._store_virtual_frame)
 
         # --- IO & State ---
-        self.serial_port: serial.Serial | None = None
+        # Creates the transport for a port name; tests swap in fakes.
+        self.transport_factory: Callable[[str, int], Transport] = SerialTransport
+        self._transport: Transport | None = None
+        self._reader: ReaderThread | None = None
+        self._data_lock = threading.Lock()
+        self._reader_failed.connect(self._on_reader_failed)
         self.state: EngineState = EngineState.IDLE
         # Last successfully opened connection; used to restart after a stream switch.
         self._port: str | None = None
@@ -67,12 +77,6 @@ class TelemetryEngine(QtCore.QObject):
         self.gui_update_timer: QtCore.QTimer = QtCore.QTimer(self)
         self.gui_update_timer.timeout.connect(self._emit_buffered_data)
         self.gui_update_timer.setInterval(100)  # ~10 FPS
-
-        self.serial_timer: QtCore.QTimer = QtCore.QTimer(self)
-        self.serial_timer.timeout.connect(self._serial_read_step)
-        # 10 ms: serial data arrives in bursts; in_waiting drains the full buffer each call,
-        # so reducing from 1 ms eliminates ~900 wasted syscall wakeups/sec with no latency loss.
-        self.serial_timer.setInterval(10)
 
         # --- Link statistics (C13) ---
         self.stats_timer: QtCore.QTimer = QtCore.QTimer(self)
@@ -93,39 +97,40 @@ class TelemetryEngine(QtCore.QObject):
             return
 
         # Clear buffers to prevent "time travel" artifacts
-        self.data_mgr.clear_all()
-        self.protocol.reset()
-        self._stats_prev = self.protocol.stats.snapshot()
-        self._stats_prev_samples = self.data_mgr.total_stored
+        with self._data_lock:
+            self.data_mgr.clear_all()
+            self.protocol.reset()
+            self._stats_prev = self.protocol.stats.snapshot()
+            self._stats_prev_samples = self.data_mgr.total_stored
         self._stats_prev_ts = time.monotonic()
 
         if port_name == "VIRTUAL":
             self.virtual.start(self.sample_period_s)
         else:
+            transport = self.transport_factory(port_name, baudrate)
             try:
-                self.serial_port = serial.Serial(
-                    port_name, baudrate, timeout=0.1, write_timeout=SERIAL_WRITE_TIMEOUT_S
-                )
-                self.serial_port.reset_input_buffer()
-            except (ValueError, serial.SerialException) as e:
+                transport.open()
+            except TransportError as e:
                 msg = f"Connection Error: {e}"
                 self.status_msg.emit(msg)
                 self.connection_failed.emit(msg)
                 return
-            self.serial_timer.start()
-            QtCore.QTimer.singleShot(0, self._serial_read_step)
+            self._transport = transport
 
         self._port, self._baud = port_name, baudrate
         self._set_state(EngineState.RUNNING)
         self.gui_update_timer.start()
         self.stats_timer.start()
         self.status_msg.emit(f"Connected to {port_name}")
+        # Start reading only once RUNNING, so an immediate failure is never ignored.
+        if self._transport is not None:
+            self._reader = ReaderThread(self._transport, self._on_bytes, self._reader_failed.emit)
+            self._reader.start()
 
     @QtCore.pyqtSlot()
     def stop_working(self) -> None:
         """Safely stops all operations."""
         self.gui_update_timer.stop()
-        self.serial_timer.stop()
         self.stats_timer.stop()
 
         if self.state != EngineState.RUNNING:
@@ -133,13 +138,15 @@ class TelemetryEngine(QtCore.QObject):
 
         self._set_state(EngineState.CONFIGURED)
         self.virtual.stop()
+        self._close_transport()
 
-        if self.serial_port and self.serial_port.is_open:
-            try:
-                self.serial_port.close()
-            except OSError, serial.SerialException:
-                pass
-            self.serial_port = None
+    def _close_transport(self) -> None:
+        reader, self._reader = self._reader, None
+        transport, self._transport = self._transport, None
+        if reader is not None:
+            reader.stop()
+        if transport is not None:
+            transport.close()
 
     @QtCore.pyqtSlot(dict)
     def select_stream(self, stream_cfg: StreamConfig) -> None:
@@ -162,44 +169,55 @@ class TelemetryEngine(QtCore.QObject):
             self.state = state
             self.state_changed.emit(state)
 
-    def _serial_read_step(self) -> None:
-        """Performs a single, non-blocking read operation from the serial port."""
-        if self.state != EngineState.RUNNING or not self.serial_port:
+    def _write(self, packet: bytes) -> None:
+        """Sends a command packet; a failure (incl. write timeout, C9) is reported, not fatal."""
+        transport = self._transport
+        if transport is None:
+            self.status_msg.emit("Not connected to a serial port: command not sent")
             return
-
         try:
-            if not self.serial_port.is_open:
-                raise serial.SerialException("Port closed unexpectedly")
+            transport.write(packet)
+        except TransportError as e:
+            logger.warning("Serial write error: %s", e)
+            self.status_msg.emit(f"Write Error: {e}")
 
-            n = self.serial_port.in_waiting
-            if n > 0:
-                data = self.serial_port.read(n)
-                if data:
-                    self.protocol.add_data(data)
-                    for frame in self.protocol.process_available_frames():
-                        self.data_mgr.store_frame(frame)
+    def _on_bytes(self, data: bytes) -> None:
+        """Reader-thread callback: parses one chunk and stores its frames."""
+        with self._data_lock:
+            self.protocol.add_data(data)
+            for frame in self.protocol.process_available_frames():
+                self.data_mgr.store_frame(frame)
 
-        except (serial.SerialException, OSError) as e:
-            msg = f"Serial error: {str(e)}"
-            self.status_msg.emit(msg)
-            self.connection_failed.emit(msg)
-            self.stop_working()
+    def _store_virtual_frame(self, frame: DecodedFrame) -> None:
+        with self._data_lock:
+            self.data_mgr.store_frame(frame)
+
+    @QtCore.pyqtSlot(str)
+    def _on_reader_failed(self, message: str) -> None:
+        """Engine-thread handler for a transport failure reported by the reader thread."""
+        if self.state != EngineState.RUNNING:
             return
+        msg = f"Serial error: {message}"
+        self.status_msg.emit(msg)
+        self.connection_failed.emit(msg)
+        self.stop_working()
 
     def _emit_buffered_data(self) -> None:
         """Periodic task (triggered by gui_update_timer)."""
         if self.state != EngineState.RUNNING:
             return
 
-        data = self.data_mgr.get_plot_data(self.sample_period_s)
+        with self._data_lock:
+            data = self.data_mgr.get_plot_data(self.sample_period_s)
         if data:
             self.data_ready.emit(data)
 
     def _emit_link_stats(self) -> None:
         """Periodic task (stats_timer): emits counters and rates since the previous report."""
         now = time.monotonic()
-        cur = self.protocol.stats.snapshot()
-        samples = self.data_mgr.total_stored
+        with self._data_lock:
+            cur = self.protocol.stats.snapshot()
+            samples = self.data_mgr.total_stored
         report = make_link_report(
             self._stats_prev, cur, samples - self._stats_prev_samples, now - self._stats_prev_ts
         )
@@ -210,13 +228,15 @@ class TelemetryEngine(QtCore.QObject):
     def update_time_config(self, period_ms: float, max_samples: int) -> None:
         """Updates sampling settings and resizes buffers."""
         self.sample_period_s = period_ms / 1000.0
-        self.data_mgr.update_max_samples(max_samples)
+        with self._data_lock:
+            self.data_mgr.update_max_samples(max_samples)
         self.virtual.update_params(self.sample_period_s)
 
     @QtCore.pyqtSlot(dict)
     def configure_signals(self, signals_cfg: SignalsConfig) -> None:
         """Configures the Data Manager with the signal definitions."""
-        self.data_mgr.configure(signals_cfg)
+        with self._data_lock:
+            self.data_mgr.configure(signals_cfg)
         # Never demote RUNNING here: that silently stalled acquisition with the port open (C5).
         if self.state == EngineState.IDLE:
             self._set_state(EngineState.CONFIGURED)
@@ -225,7 +245,8 @@ class TelemetryEngine(QtCore.QObject):
     def configure_frame(self, stream_cfg: StreamConfig) -> None:
         """Configures the Protocol Handler with the binary frame structure."""
         try:
-            self.protocol.configure(stream_cfg)
+            with self._data_lock:
+                self.protocol.configure(stream_cfg)
             name = stream_cfg.get("name", "Unknown")
             self.virtual.configure_stream(name)
         except ValueError as e:
@@ -278,17 +299,10 @@ class TelemetryEngine(QtCore.QObject):
         rps: float,
     ) -> None:
         """Constructs and sends a PID configuration packet to the MCU."""
-        if not self.serial_port or not self.serial_port.is_open:
-            return
-
         packet = self.protocol.create_pid_packet(
             motor_id, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps
         )
-        try:
-            self.serial_port.write(packet)
-        except (serial.SerialTimeoutException, serial.SerialException) as e:
-            logger.warning("Serial write error: %s", e)
-            self.status_msg.emit(f"Write Error: {e}")
+        self._write(packet)
 
     @QtCore.pyqtSlot(
         int,
@@ -335,9 +349,6 @@ class TelemetryEngine(QtCore.QObject):
         r_alpha: float,
         r_rps: float,
     ) -> None:
-        if not self.serial_port or not self.serial_port.is_open:
-            return
-
         packet = self.protocol.create_pid_packet_all_motors(
             l_use_ramp,
             l_use_pi,
@@ -360,8 +371,4 @@ class TelemetryEngine(QtCore.QObject):
             r_alpha,
             r_rps,
         )
-        try:
-            self.serial_port.write(packet)
-        except (serial.SerialTimeoutException, serial.SerialException) as e:
-            logger.warning("Serial write error: %s", e)
-            self.status_msg.emit(f"Write Error: {e}")
+        self._write(packet)

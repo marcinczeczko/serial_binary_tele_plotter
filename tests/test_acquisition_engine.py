@@ -3,6 +3,8 @@ from unittest import mock
 
 import serial
 
+from tests.fakes import FakeTransport, wait_for
+
 
 def test_configure_and_start_virtual(pyqt_stub):
     from core.acquisition.engine import TelemetryEngine
@@ -95,22 +97,101 @@ def _running_virtual_engine():
     return engine, states
 
 
-def test_serial_open_uses_write_timeout(pyqt_stub):
-    from core.acquisition.engine import SERIAL_WRITE_TIMEOUT_S, TelemetryEngine
+def _frames(n):
+    from core.protocol.crc import calculate_crc8
 
-    engine = TelemetryEngine(sample_period_ms=10.0, max_samples=100)
-    engine.select_stream(_CFG_A)
+    header = bytes([0xAA, 0x55, 1, 2])
+    out = b""
+    for i in range(n):
+        payload = bytes([i % 256, 7])
+        out += header + bytes([calculate_crc8(header)]) + payload + bytes([calculate_crc8(payload)])
+    return out
+
+
+_CFG_BYTES = {
+    "name": "bytes",
+    "frame": {
+        "stream_id": 1,
+        "fields": [{"name": "loop_cntr", "type": "u8"}, {"name": "v", "type": "u8"}],
+    },
+    "signals": {"v": {"field": "v"}},
+}
+
+
+def _engine_with(transport):
+    from core.acquisition.engine import TelemetryEngine
+
+    engine = TelemetryEngine(sample_period_ms=10.0, max_samples=500)
+    engine.transport_factory = lambda port, baud: transport
+    engine.select_stream(_CFG_BYTES)
+    return engine
+
+
+def test_serial_data_is_read_on_reader_thread_and_stored(pyqt_stub):
+    blob = _frames(200)
+    chunks = [blob[i : i + 97] for i in range(0, len(blob), 97)]  # frames split across reads
+    transport = FakeTransport(chunks)
+    engine = _engine_with(transport)
     msgs = []
     engine.status_msg.connect(msgs.append)
-    port = mock.MagicMock(in_waiting=0, is_open=True)
-    with mock.patch("serial.Serial", return_value=port) as serial_cls:
-        engine.start_working("COM7", 230400)
 
-    serial_cls.assert_called_once_with(
-        "COM7", 230400, timeout=0.1, write_timeout=SERIAL_WRITE_TIMEOUT_S
-    )
-    assert engine.state.name == "RUNNING"
-    assert msgs[-1] == "Connected to COM7"
+    engine.start_working("COM7", 115200)
+    try:
+        assert engine.state.name == "RUNNING"
+        assert msgs[-1] == "Connected to COM7"
+        assert wait_for(lambda: engine.data_mgr.total_stored == 200)
+        assert engine.protocol.stats.bytes_rx == len(blob)
+    finally:
+        engine.stop_working()
+    assert transport.closed
+    assert engine._reader is None
+
+
+def test_transport_failure_stops_engine_and_reports(pyqt_stub):
+    transport = FakeTransport([_frames(5)], fail_when_drained=True)
+    engine = _engine_with(transport)
+    failures = []
+    engine.connection_failed.connect(failures.append)
+
+    engine.start_working("COM7", 115200)
+
+    assert wait_for(lambda: engine.state.name == "CONFIGURED")
+    assert failures == ["Serial error: device disconnected"]
+    assert transport.closed
+
+
+def test_commands_are_written_to_the_transport(pyqt_stub):
+    transport = FakeTransport()
+    engine = _engine_with(transport)
+    engine.start_working("COM7", 115200)
+    try:
+        engine.send_left_config(1, 0, 0.1, 0.02, 1.0, 2.0, 3.0, 1.0, 0.2, -0.3)
+        assert len(transport.written) == 1
+        assert transport.written[0][:3] == bytes([0xAA, 0x55, 0x10])
+    finally:
+        engine.stop_working()
+
+
+def test_write_failure_is_reported_not_fatal(pyqt_stub):
+    transport = FakeTransport(fail_writes=True)
+    engine = _engine_with(transport)
+    msgs = []
+    engine.status_msg.connect(msgs.append)
+    engine.start_working("COM7", 115200)
+    try:
+        engine.send_left_config(1, 0, 0.1, 0.02, 1.0, 2.0, 3.0, 1.0, 0.2, 0.3)
+        assert msgs[-1] == "Write Error: write timeout"
+        assert engine.state.name == "RUNNING"
+    finally:
+        engine.stop_working()
+
+
+def test_command_without_connection_is_reported(pyqt_stub):
+    engine = _engine_with(FakeTransport())
+    msgs = []
+    engine.status_msg.connect(msgs.append)
+    engine.send_left_config(1, 0, 0.1, 0.02, 1.0, 2.0, 3.0, 1.0, 0.2, 0.3)
+    assert msgs == ["Not connected to a serial port: command not sent"]
 
 
 def test_select_stream_while_running_restarts_on_same_port(pyqt_stub):

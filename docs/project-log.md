@@ -6,6 +6,38 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-24 — Phase 2 starts: Transport + reader thread (R2.1)
+
+- ADR-0002 is now **Accepted**.
+- New `core/transport/` (no Qt):
+  - `Transport` protocol (open/close/read(timeout)/write).
+  - `SerialTransport`: pyserial; `read` blocks for the first byte, then drains
+    `in_waiting`; 0.2 s write timeout.
+  - `ReaderThread`: a blocking read loop; reports a failure once and never on a requested
+    stop.
+- Engine:
+  - The 10 ms `QTimer` polling is gone (P5). The reader thread parses and stores under
+    `_data_lock`; snapshots, stats and reconfiguration take the same lock on the engine
+    thread.
+  - Reader failures go back to the engine thread through a queued signal.
+  - The engine enters RUNNING *before* the reader starts, so an instant failure is never
+    ignored.
+  - Commands go through `Transport.write`. "Not connected" is now reported instead of
+    silently ignored.
+  - `transport_factory` lets tests inject a `FakeTransport` (`tests/fakes.py`).
+- Tests (+13, 107 total):
+  - `ReaderThread` order, stop, failure, handler crash and self-stop.
+  - `SerialTransport` via mocks, plus **end to end over a real pty**: a 14 kB burst, then
+    unplug (EIO → `TransportError`).
+  - Engine read, store, disconnect and commands in the stub lane, and in a real `QThread`.
+  - `wait_for` pumps Qt events when real Qt is loaded (queued signals need it).
+- Measured end to end over a pty (pyserial → reader thread → parse → store, `pid` 146 B
+  frames): **52–54k frames/s, 7.6–8.0 MB/s**, 0 CRC errors. That's about 80× what
+  921600 baud can deliver. `tools/bench_pipeline.py` numbers are unchanged (same parser
+  and storage).
+
+---
+
 ## 2026-09-24 — Phase 1, part 3: dead features, config path (R1.9–R1.10). Phase 1 complete
 
 - R1.9 (C7, C8):

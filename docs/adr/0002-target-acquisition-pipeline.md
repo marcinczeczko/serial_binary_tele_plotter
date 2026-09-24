@@ -1,6 +1,6 @@
 # ADR-0002: Target acquisition and rendering pipeline
 
-- Status: Proposed. It becomes Accepted when roadmap Phase 2 starts.
+- Status: Accepted (2026-09-24, Phase 2 started with R2.1)
 - Date: 2026-09-24
 - Addresses: review findings A1, A2, A6, P2, P3, P5, C2, C5
   ([review](../reviews/2026-09-24-architecture-review.md))
