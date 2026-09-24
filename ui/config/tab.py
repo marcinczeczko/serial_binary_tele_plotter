@@ -1,6 +1,10 @@
 """
 Configuration Tab Module.
 Manages the list of streams, file I/O operations, and integrates the Stream Editor.
+
+Edits are committed to the in-memory document whenever the selection moves to another
+stream, so nothing is lost before saving (C4a). Saving validates the whole document first
+and refuses to write a file the app couldn't load.
 """
 
 from __future__ import annotations
@@ -11,6 +15,7 @@ import shutil
 
 from PyQt6 import QtCore, QtWidgets
 
+from core.config import validate_config
 from core.types import StreamConfig
 from ui.config.stream_editor import StreamEditor
 
@@ -54,7 +59,7 @@ class ConfiguratorTab(QtWidgets.QWidget):
             }
         """
         )
-        self.stream_list.currentRowChanged.connect(self.on_stream_selected)
+        self.stream_list.currentItemChanged.connect(self._on_current_item_changed)
 
         # Action Buttons
         hbox = QtWidgets.QHBoxLayout()
@@ -101,21 +106,45 @@ class ConfiguratorTab(QtWidgets.QWidget):
         self.refresh_list()
 
     def refresh_list(self) -> None:
+        self.stream_list.blockSignals(True)
         self.stream_list.clear()
+        self.editor.current_stream_key = None
         for k in self.data.keys():
             self.stream_list.addItem(k)
+        self.stream_list.blockSignals(False)
         if self.stream_list.count() > 0:
-            self.stream_list.setCurrentRow(0)
+            self.stream_list.setCurrentRow(0)  # emits currentItemChanged -> loads it
 
-    def on_stream_selected(self, row: int) -> None:
-        if row < 0:
-            return
-        item = self.stream_list.item(row)
-        if item is None:
-            return
-        key = item.text()
-        if key in self.data:
-            self.editor.load_data(key, self.data[key])
+    def _on_current_item_changed(
+        self, current: QtWidgets.QListWidgetItem | None, previous: QtWidgets.QListWidgetItem | None
+    ) -> None:
+        if previous is not None:
+            self._commit(previous)
+        self._load_item(current)
+
+    def _load_item(self, item: QtWidgets.QListWidgetItem | None) -> None:
+        if item is not None and item.text() in self.data:
+            self.editor.load_data(item.text(), self.data[item.text()])
+        else:
+            self.editor.current_stream_key = None
+
+    def _commit(self, item: QtWidgets.QListWidgetItem) -> None:
+        """Writes the editor's content back into `self.data` for the stream shown by `item`."""
+        old_k = item.text()
+        if self.editor.current_stream_key != old_k or old_k not in self.data:
+            return  # nothing loaded for this item (e.g. it was just deleted)
+        new_k, content = self.editor.get_data()
+        new_k = new_k.strip() or old_k
+        if new_k != old_k and new_k in self.data:
+            QtWidgets.QMessageBox.warning(
+                self, "Duplicate key", f"A stream named '{new_k}' already exists; kept '{old_k}'."
+            )
+            new_k = old_k
+        # Rebuild to keep the stream at its position when renamed.
+        self.data = {(new_k if k == old_k else k): v for k, v in self.data.items()}
+        self.data[new_k] = content
+        item.setText(new_k)
+        self.editor.current_stream_key = new_k
 
     def create_stream(self) -> None:
         i = 1
@@ -126,7 +155,11 @@ class ConfiguratorTab(QtWidgets.QWidget):
         self.data[key] = {
             "name": "New Stream",
             "panel_type": "none",
-            "frame": {"stream_id": 0, "fields": []},
+            "frame": {
+                "stream_id": 0,
+                "endianness": "little",
+                "fields": [{"name": "loop_cntr", "type": "u32"}],
+            },
             "signals": {},
         }
         self.stream_list.addItem(key)
@@ -137,31 +170,36 @@ class ConfiguratorTab(QtWidgets.QWidget):
         item = self.stream_list.item(r)
         if item is None:
             return
-        del self.data[item.text()]
+        del self.data[item.text()]  # removed first, so the selection change won't re-commit it
+        self.editor.current_stream_key = None
         self.stream_list.takeItem(r)
 
     def save_current(self) -> None:
         current = self.stream_list.currentItem()
-        if current is None:
-            return
-        old_k = current.text()
-        new_k, content = self.editor.get_data()
-        if old_k != new_k:
-            if old_k in self.data:
-                del self.data[old_k]
-            current.setText(new_k)
-        self.data[new_k] = content
+        if current is not None:
+            self._commit(current)
 
     def save_to_file(self) -> None:
         self.save_current()
+        document = {"streams": self.data}
+        problems = validate_config(document)
+        errors = [str(p) for p in problems if p.severity == "error"]
+        if errors:
+            shown = "\n".join(errors[:15]) + ("\n..." if len(errors) > 15 else "")
+            QtWidgets.QMessageBox.critical(
+                self, "Not saved", f"Fix these problems before saving:\n\n{shown}"
+            )
+            return
         try:
             shutil.copy(self.filepath, self.filepath + ".bak")
         except OSError:
             logger.warning("Could not create backup file: %s.bak", self.filepath)
         try:
             with open(self.filepath, "w", encoding="utf-8") as f:
-                json.dump({"streams": self.data}, f, indent=4)
-            QtWidgets.QMessageBox.information(self, "Saved", "Configuration saved!")
+                json.dump(document, f, indent=4)
+            warnings = [str(p) for p in problems]
+            note = ("\n\nWarnings:\n" + "\n".join(warnings)) if warnings else ""
+            QtWidgets.QMessageBox.information(self, "Saved", "Configuration saved!" + note)
             self.config_saved.emit()
         except OSError as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Save failed: {e}")

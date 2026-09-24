@@ -42,8 +42,10 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
 
         # --- State Tracking ---
-        self.active_port: str | None = None
-        self.active_baud: int = 115200
+        # Mirror of the engine's state, updated only from `state_changed` (never read across
+        # threads).
+        self.engine_state: EngineState = EngineState.IDLE
+        self._shut_down = False
 
         # --- Window Setup ---
         self.setWindowTitle("Serial Binary Plotter")
@@ -126,6 +128,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.engine.data_ready.connect(self.plot.on_data_ready)
         self.engine.status_msg.connect(self.lbl_status.setText)
         self.engine.connection_failed.connect(self._handle_connection_failed)
+        self.engine.state_changed.connect(self._on_engine_state_changed)
         self.engine.link_stats.connect(self._on_link_stats)
 
         # 6. Interactivity: Plot -> UI
@@ -133,98 +136,60 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # --- Final Setup ---
         self._initial_stream_setup()
+        self._report_config_problems()
 
     def _reload_configuration(self) -> None:
-        """
-        Called when streams.json is modified via the Configurator tab.
-        We need to reload the StreamConfigLoader in the panel and refresh lists.
-        """
-        self.panel.stream_loader.load()
-        self.panel.payload_combo.blockSignals(True)
-        self.panel.payload_combo.clear()
-        for sid, s in self.panel.stream_loader.list_streams().items():
-            self.panel.payload_combo.addItem(s["name"], sid)
-        self.panel.payload_combo.blockSignals(False)
-
-        if self.panel.payload_combo.count() > 0:
-            self.panel.payload_combo.setCurrentIndex(0)
+        """Re-reads streams.json after the Configuration tab saved it, keeping the selection."""
+        try:
             self.panel.reload_streams()
-
+        except ValueError as e:
+            self.lbl_status.setText(f"Could not reload streams.json: {e}")
+            self.lbl_status.setStyleSheet("color: #F44336; font-weight: bold;")
+            return
         self.lbl_status.setText("Configuration reloaded from disk.")
+        self.lbl_status.setToolTip("")
+        self.lbl_status.setStyleSheet("")
+        self._report_config_problems()
+
+    def _report_config_problems(self) -> None:
+        """Surfaces streams.json problems in the status bar (no modal dialog at startup)."""
+        problems = self.panel.stream_loader.problems
+        for problem in problems:
+            logger.warning("streams.json: %s", problem)
+        if not problems:
+            return
+        errors = sum(p.severity == "error" for p in problems)
+        summary = f"streams.json: {len(problems)} problem(s)"
+        if errors:
+            summary += f", {errors} stream(s) not loaded"
+        self.lbl_status.setText(summary + " (hover for details)")
+        self.lbl_status.setToolTip("\n".join(str(p) for p in problems))
+        self.lbl_status.setStyleSheet("color: #FFB74D; font-weight: bold;")
 
     def _initial_stream_setup(self) -> None:
-        """
-        Loads configuration for the currently selected stream in the panel.
-        """
-        # Fetch config from the Panel Facade
+        """Applies the stream currently selected in the panel to the plot and the engine."""
         cfg = self.panel.get_current_stream_config()
-        if not cfg:
-            return
-
-        # Apply configuration to components
-        self.plot.configure_signals(cfg["signals"])
-        self.engine.configure_signals(cfg["signals"])
-        self.engine.configure_frame(cfg)
+        if cfg:
+            self._on_stream_changed(cfg)
 
     def _on_stream_changed(self, stream_cfg: StreamConfig) -> None:
         """
-        Handles the event when the user selects a different stream type in the panel.
-        It safely restarts the engine if it was running.
+        Applies a newly selected stream. The plot updates immediately; the engine switches
+        (and restarts if it was running) on its own thread via `select_stream`.
         """
-        was_running = self.engine.state == EngineState.RUNNING
-
-        # 1. Update Plot (Main Thread UI - Immediate)
         self.plot.configure_signals(stream_cfg["signals"])
-
-        # 2. Queue Stop Command (Worker Thread)
-        if was_running:
-            QtCore.QMetaObject.invokeMethod(
-                self.engine,
-                "stop_working",
-                QtCore.Qt.ConnectionType.QueuedConnection,
-            )
-
-        # 3. Queue Configuration Commands (Worker Thread)
-        # We use invokeMethod to ensure these happen AFTER 'stop_working' in the queue.
-        # Direct calls would race with the stop command.
         QtCore.QMetaObject.invokeMethod(
             self.engine,
-            "configure_signals",
-            QtCore.Qt.ConnectionType.QueuedConnection,
-            QtCore.Q_ARG(dict, stream_cfg["signals"]),
-        )
-        QtCore.QMetaObject.invokeMethod(
-            self.engine,
-            "configure_frame",
+            "select_stream",
             QtCore.Qt.ConnectionType.QueuedConnection,
             QtCore.Q_ARG(dict, stream_cfg),
         )
-
-        # 4. Queue Restart Command (Worker Thread)
-        # Only if it was running previously
-        if was_running and self.active_port:
-            self.lbl_status.setText(f"Switching stream... ({self.active_port})")
-
-            QtCore.QMetaObject.invokeMethod(
-                self.engine,
-                "start_working",
-                QtCore.Qt.ConnectionType.QueuedConnection,
-                QtCore.Q_ARG(str, self.active_port),
-                QtCore.Q_ARG(int, self.active_baud),
-            )
-        else:
-            self.lbl_status.setText("Stream configuration loaded.")
 
     def _handle_connection(self, port: str, baud: int) -> None:
         """
         Handles connection requests triggered by the Control Panel.
         """
         if port != "STOP":
-            # Store connection details for auto-reconnect logic
-            self.active_port = port
-            self.active_baud = baud
-
-            # Start the Engine
             QtCore.QMetaObject.invokeMethod(
                 self.engine,
                 "start_working",
@@ -232,13 +197,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtCore.Q_ARG(str, port),
                 QtCore.Q_ARG(int, baud),
             )
-            self.lbl_status.setText(f"Connected to {port}")
-            self.lbl_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
+            # "Connected" is shown only once the engine reports RUNNING (C12).
+            self.lbl_status.setText(f"Connecting to {port}...")
+            self.lbl_status.setStyleSheet("")
         else:
-            # Clear active port but keep baud preference maybe?
-            self.active_port = None
-
-            # Stop the Engine
             QtCore.QMetaObject.invokeMethod(
                 self.engine, "stop_working", QtCore.Qt.ConnectionType.QueuedConnection
             )
@@ -246,11 +208,15 @@ class MainWindow(QtWidgets.QMainWindow):
             self.lbl_status.setText("Disconnected")
             self.lbl_status.setStyleSheet("color: #F44336; font-weight: bold;")
 
+    def _on_engine_state_changed(self, state: EngineState) -> None:
+        self.engine_state = state
+        if state == EngineState.RUNNING:
+            self.lbl_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
+
     def _handle_connection_failed(self, message: str) -> None:
         """
         Syncs UI state after a connection failure from the worker.
         """
-        self.active_port = None
         self.panel.conn_panel.set_connected(False)
         self._set_pause_state(False, update_status=False)
         self.lbl_status.setText(message)
@@ -289,21 +255,22 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event: QtGui.QCloseEvent | None) -> None:
         """
-        Handles the application close event to ensure clean thread termination.
+        Stops the engine and its thread before the window goes away (C6).
+
+        The stop runs as a *blocking* queued call, so the serial port is closed on the engine
+        thread before its event loop is asked to quit. The thread is never terminated.
         """
-        # 1. Stop the worker logic
-        QtCore.QMetaObject.invokeMethod(
-            self.engine, "stop_working", QtCore.Qt.ConnectionType.QueuedConnection
-        )
-
-        # 2. Quit the thread loop
-        self.engine_thread.quit()
-
-        # 3. Wait for cleanup (with timeout to prevent freezing the app on close)
-        if not self.engine_thread.wait(2000):
-            logger.warning("Engine thread hung, forcing termination...")
-            self.engine_thread.terminate()
-            self.engine_thread.wait()
+        if not self._shut_down:
+            self._shut_down = True
+            if self.engine_thread.isRunning():
+                QtCore.QMetaObject.invokeMethod(
+                    self.engine,
+                    "stop_working",
+                    QtCore.Qt.ConnectionType.BlockingQueuedConnection,
+                )
+                self.engine_thread.quit()
+                if not self.engine_thread.wait(2000):
+                    logger.error("Engine thread did not finish within 2 s of quit()")
 
         if event is not None:
             event.accept()

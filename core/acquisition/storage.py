@@ -5,6 +5,9 @@ Uses numpy arrays directly for buffers (no deque → array conversion).
 
 from __future__ import annotations
 
+import math
+import warnings
+
 import numpy as np
 
 from core.protocol.constants import LOOP_CNTR_NAME
@@ -77,7 +80,8 @@ class SignalDataManager:
         idx = self._write_index
         self._loop_arr[idx] = loop_cntr
         for sig_id, field in self._field_map.items():
-            val = decoded_frame.get(field, 0.0)
+            # A missing field is "no data" (NaN, drawn as a gap), never a fake 0 (C3).
+            val = decoded_frame.get(field, math.nan)
             self._signal_arrays[sig_id][idx] = float(val)
         self._write_index = (idx + 1) % self.max_samples
         self._count = min(self._count + 1, self.max_samples)
@@ -97,12 +101,17 @@ class SignalDataManager:
         time_axis: np.ndarray = self._loop_arr[idx] * sample_period_s
         snapshot_raw: dict[str, np.ndarray] = {}
         signal_bounds: dict[str, tuple[float, float]] = {}
-        for sid, arr in self._signal_arrays.items():
-            data = arr[idx]  # fancy index → new array, no extra copy needed
-            snapshot_raw[sid] = data
-            # Compute per-signal bounds here on the worker thread so the UI thread only
-            # needs an O(num_signals) visibility filter instead of O(n * num_signals) scans.
-            signal_bounds[sid] = (float(np.nanmin(data)), float(np.nanmax(data)))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN signals
+            for sid, arr in self._signal_arrays.items():
+                data = arr[idx]  # fancy index → new array, no extra copy needed
+                snapshot_raw[sid] = data
+                # Compute per-signal bounds here on the worker thread so the UI thread only
+                # needs an O(num_signals) visibility filter instead of O(n * num_signals)
+                # scans. Signals with no finite data get no bounds.
+                lo, hi = float(np.nanmin(data)), float(np.nanmax(data))
+                if math.isfinite(lo) and math.isfinite(hi):
+                    signal_bounds[sid] = (lo, hi)
         return {
             "time": time_axis,
             "signals": snapshot_raw,

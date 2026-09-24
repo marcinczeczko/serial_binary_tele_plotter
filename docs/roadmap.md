@@ -69,30 +69,32 @@ No architectural change. Each item is a focused PR.
   size mismatches, unknown IDs, discarded bytes, loop_cntr gaps. The engine emits a stats
   snapshot about once per second, and the status bar shows rates and error counters.
   *Done when:* feeding a corrupted fixture shows non-zero counters in a unit test.
-- [ ] **R1.5 Config validation** (C3, C11)
+- [x] **R1.5 Config validation** (C3, C11)
   A single `validate(config) -> list[Problem]` used by the loader and by the editor before
   saving. Checks: known types, unique field names and signal keys, `signal.field` present
   in the frame, time field present, payload ≤ 255 B, `stream_id` 0–255, known
   `panel_type`. Missing values are stored as `NaN`, not `0.0`.
   Either add `u64/i64/f64` to `STRUCT_TYPE_MAP` or remove them from the README.
-- [ ] **R1.6 Config editor data-safety** (C4)
+- [x] **R1.6 Config editor data-safety** (C4)
   Commit the current stream on selection change. Round-trip every key the editor doesn't
   own (endianness, packed, width, unknown keys). Generate a unique signal key that doesn't
   depend on the field. Refresh the field combos when frame fields change. After save, keep
   the currently active stream selected. Add a round-trip test: load → save without edits
   → byte-identical JSON (modulo formatting).
-- [ ] **R1.7 Engine owns stream switching and lifecycle** (C5, C6, C12)
+- [x] **R1.7 Engine owns stream switching and lifecycle** (C5, C6, C12)
   Add an engine slot `select_stream(cfg)` that does stop → configure → restart-if-running
   on the worker thread. The GUI stops reading `engine.state` and mirrors state from a new
   `state_changed(EngineState)` signal. "Connected" is shown only after the port actually
   opens. Shutdown uses `BlockingQueuedConnection` stop, then `quit()`/`wait()`, and
   `terminate()` is removed. Time-config input is debounced (`editingFinished`).
-- [ ] **R1.8 Serial write timeout** (C9)
+- [x] **R1.8 Serial write timeout** (C9)
   Set `write_timeout=0.2`. On timeout, report it and keep acquiring.
 - [ ] **R1.9 Wire or hide dead features** (C7, C8)
   Either wire the IMU commands to a real packet or hide the panel. Add a `control` panel
   entry or remove it from `PANEL_TYPES`. Allow negative PID values with a configurable
   range and precision. Drop the unused `raw` packet key and `_render_busy`.
+  *Partly done in R1.5:* `PANEL_TYPES` now lives in `core/config.py` as `none/pid/imu`.
+  The editor no longer offers `control`, and validation warns about unknown panel types.
 - [ ] **R1.10 Config path** (C10)
   Resolve `streams.json` via a `--config` CLI arg, then `QSettings`-remembered path, then
   the bundled default. One loader instance is shared by the panel and the configurator.

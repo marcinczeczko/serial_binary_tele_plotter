@@ -138,7 +138,6 @@ def test_stream_editor_round_trip_keeps_line_width(qtbot: Any) -> None:
     assert widths == {k: v["line"]["width"] for k, v in original["signals"].items()}
 
 
-@pytest.mark.xfail(strict=True, reason="C4: editor drops keys it doesn't own, e.g. 'group' (R1.6)")
 def test_stream_editor_round_trip_keeps_unknown_signal_keys(qtbot: Any) -> None:
     from ui.config.stream_editor import StreamEditor
 
@@ -193,3 +192,210 @@ def test_plot_downsampling_is_enabled_and_pens_default_to_1px(qtbot: Any) -> Non
     assert curve_a.opts["clipToView"] is True
     assert curve_a.opts["pen"].width() == 1
     assert plot.signal_views["b"]["curve"].opts["pen"].width() == 3
+
+
+def test_main_window_switches_stream_while_running(qtbot: Any, monkeypatch: Any) -> None:
+    from ui.main_window import MainWindow
+
+    monkeypatch.chdir(REPO_ROOT)
+    win = MainWindow()
+    qtbot.addWidget(win)
+    conn = win.panel.conn_panel
+    conn.port_combo.setCurrentIndex(conn.port_combo.findText("VIRTUAL"))
+
+    conn.connect_btn.click()
+    qtbot.waitUntil(lambda: win.engine_state == EngineState.RUNNING, timeout=5000)
+    assert win.lbl_status.text() == "Connected to VIRTUAL"
+
+    imu_index = win.panel.payload_combo.findData("imu_6axis")
+    win.panel.payload_combo.setCurrentIndex(imu_index)
+    imu_signals = set(_load_stream("imu_6axis")["signals"])
+
+    def receiving_imu() -> bool:
+        packet = win.plot.last_packet
+        return packet is not None and set(packet["signals"]) == imu_signals
+
+    qtbot.waitUntil(receiving_imu, timeout=5000)
+    assert win.engine_state == EngineState.RUNNING
+
+    win.close()
+    assert win.engine_thread.isFinished()
+    assert win.engine.state == EngineState.CONFIGURED  # safe: its thread has finished
+
+
+# --- Config editor data safety (C4 / R1.6) ---
+
+
+@pytest.fixture
+def message_boxes(monkeypatch: Any) -> list[tuple[str, str]]:
+    """Records QMessageBox calls as (kind, text) instead of opening modal dialogs."""
+    from PyQt6 import QtWidgets
+
+    calls: list[tuple[str, str]] = []
+
+    def recorder(kind: str) -> Any:
+        def record(*args: Any, **_kw: Any) -> int:
+            calls.append((kind, str(args[2])))
+            return 0
+
+        return staticmethod(record)
+
+    for kind in ("information", "warning", "critical"):
+        monkeypatch.setattr(QtWidgets.QMessageBox, kind, recorder(kind))
+    return calls
+
+
+@pytest.fixture
+def config_copy(tmp_path: Path, monkeypatch: Any, message_boxes: Any) -> Path:
+    """A private copy of streams.json in a temp CWD, so tests never touch the repo's file."""
+    path = tmp_path / "streams.json"
+    path.write_bytes((REPO_ROOT / "streams.json").read_bytes())
+    monkeypatch.chdir(tmp_path)
+    return path
+
+
+def _select(tab: Any, key: str) -> None:
+    (item,) = tab.stream_list.findItems(key, QtCore.Qt.MatchFlag.MatchExactly)
+    tab.stream_list.setCurrentItem(item)
+
+
+def _tab(qtbot: Any, path: Path) -> Any:
+    from ui.config.tab import ConfiguratorTab
+
+    tab = ConfiguratorTab(str(path))
+    qtbot.addWidget(tab)
+    return tab
+
+
+def test_config_save_without_edits_is_byte_identical(qtbot: Any, config_copy: Path) -> None:
+    original = config_copy.read_bytes()
+    tab = _tab(qtbot, config_copy)
+    for row in range(tab.stream_list.count()):  # visit every stream: commits on each switch
+        tab.stream_list.setCurrentRow(row)
+    tab.stream_list.setCurrentRow(0)
+
+    tab.save_to_file()
+
+    assert config_copy.read_bytes() == original
+    assert (config_copy.parent / "streams.json.bak").read_bytes() == original
+
+
+def test_config_edits_survive_switching_streams(qtbot: Any, config_copy: Path) -> None:
+    tab = _tab(qtbot, config_copy)
+    tab.stream_list.setCurrentRow(0)
+    tab.editor.name_edit.setText("Renamed PID")
+    tab.stream_list.setCurrentRow(1)
+    tab.stream_list.setCurrentRow(0)
+    assert tab.editor.name_edit.text() == "Renamed PID"
+
+    tab.save_to_file()
+
+    saved = json.loads(config_copy.read_text(encoding="utf-8"))
+    assert saved["streams"]["pid"]["name"] == "Renamed PID"
+
+
+def test_config_signals_sharing_a_field_get_distinct_keys(qtbot: Any, config_copy: Path) -> None:
+    tab = _tab(qtbot, config_copy)
+    _select(tab, "imu_6axis")
+    editor = tab.editor
+    editor.add_signal_row(
+        {
+            "label": "Acc X copy",
+            "field": "acc_x",
+            "color": "#fff",
+            "visible": True,
+            "style": "solid",
+            "width": 1,
+        }
+    )
+
+    _, data = editor.get_data()
+
+    assert "acc_x" in data["signals"]
+    assert data["signals"]["acc_x_2"]["field"] == "acc_x"
+    assert data["signals"]["acc_x_2"]["label"] == "Acc X copy"
+
+
+def test_config_field_choices_follow_frame_edits(qtbot: Any, config_copy: Path) -> None:
+    from PyQt6 import QtWidgets
+
+    tab = _tab(qtbot, config_copy)
+    editor = tab.editor
+    editor.add_frame_row("brand_new", "f32")
+    root = editor.sig_tree.invisibleRootItem()
+    assert root is not None and root.childCount() > 0
+    combo = editor.sig_tree.itemWidget(root.child(0), 1)
+    assert isinstance(combo, QtWidgets.QComboBox)
+    choices = [combo.itemText(i) for i in range(combo.count())]
+    assert "brand_new" in choices
+
+
+def test_config_save_refuses_invalid_document(
+    qtbot: Any, config_copy: Path, message_boxes: list[tuple[str, str]]
+) -> None:
+    original = config_copy.read_bytes()
+    tab = _tab(qtbot, config_copy)
+    tab.stream_list.setCurrentRow(0)
+    editor = tab.editor
+    editor.add_signal_row(
+        {
+            "label": "Ghost",
+            "field": "does_not_exist",
+            "color": "#fff",
+            "visible": True,
+            "style": "solid",
+            "width": 1,
+        }
+    )
+
+    tab.save_to_file()
+
+    assert config_copy.read_bytes() == original
+    ((kind, text),) = message_boxes
+    assert kind == "critical"
+    assert "'does_not_exist'" in text
+
+
+def test_main_window_keeps_selected_stream_after_config_save(qtbot: Any, config_copy: Path) -> None:
+    from ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    imu_index = win.panel.payload_combo.findData("imu_6axis")
+    win.panel.payload_combo.setCurrentIndex(imu_index)
+
+    win.configurator.save_to_file()
+
+    assert win.panel.payload_combo.currentData() == "imu_6axis"
+    assert set(win.plot.signal_views) == set(_load_stream("imu_6axis")["signals"])
+    win.close()
+
+
+def test_plot_handles_signals_without_data(qtbot: Any) -> None:
+    import numpy as np
+
+    from ui.charts.telemetry_plot import TelemetryPlot
+
+    plot = TelemetryPlot()
+    qtbot.addWidget(plot)
+    plot.configure_signals(
+        {
+            "real": {"label": "Real", "field": "a", "color": "#fff"},
+            "ghost": {"label": "Ghost", "field": "b", "color": "#f00"},
+        }
+    )
+    t = np.arange(10, dtype=float)
+    plot._last_render_ts = -1.0
+    plot.on_data_ready(
+        {
+            "time": t,
+            "signals": {"real": np.linspace(-2.0, 3.0, 10), "ghost": np.full(10, np.nan)},
+            "signal_bounds": {"real": (-2.0, 3.0)},
+        }
+    )
+    lo, hi = plot.plot.getViewBox().viewRange()[1]
+    assert np.isfinite([lo, hi]).all()
+    assert lo <= -2.0 and hi >= 3.0
+
+    plot.update_tooltip(4.5, plot.last_packet)  # type: ignore[arg-type]
+    assert "Ghost: n/a" in plot.label.textItem.toPlainText()

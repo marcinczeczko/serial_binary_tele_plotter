@@ -58,7 +58,9 @@ class SignalListPanel(QtWidgets.QWidget):
         # 2. Create Signal Controls (Flat List)
         signals = cfg.get("signals", {})
         for sid, sdata in signals.items():
-            w = YAxisControlWidget(sdata["label"], sdata["color"], sdata["visible"])
+            w = YAxisControlWidget(
+                sdata.get("label", sid), sdata.get("color", "#FFFFFF"), sdata.get("visible", True)
+            )
 
             w.enable_checkbox.toggled.connect(
                 lambda checked, captured_sid=sid: self.signal_visibility_changed.emit(

@@ -33,3 +33,17 @@ def test_update_max_samples_keeps_recent():
     packet = mgr.get_plot_data(sample_period_s=1.0)
     assert packet is not None
     assert np.allclose(packet["signals"]["sig_a"], np.array([2, 3, 4]))
+
+
+def test_missing_field_is_nan_not_zero():
+    mgr = SignalDataManager(max_samples=5)
+    mgr.configure({"sig_a": {"field": "a"}, "ghost": {"field": "not_in_frame"}})
+    for i in range(3):
+        mgr.store_frame({LOOP_CNTR_NAME: i, "a": 1.0})
+
+    packet = mgr.get_plot_data(sample_period_s=1.0)
+
+    assert packet is not None
+    assert np.isnan(packet["signals"]["ghost"]).all()
+    assert "ghost" not in packet["signal_bounds"]
+    assert packet["signal_bounds"]["sig_a"] == (1.0, 1.0)

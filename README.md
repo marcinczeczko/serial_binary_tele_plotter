@@ -161,11 +161,25 @@ Each stream entry:
 | `frame.stream_id` | Packet type byte — must match the `TYPE` field sent by the MCU |
 | `frame.endianness` | `"little"` or `"big"` — must match the MCU's byte order |
 | `frame.fields` | Ordered list of `{name, type}` matching the C struct field order |
-| `signals` | Map of signal IDs to display config (label, color, visibility, line style) |
+| `signals` | Map of signal IDs to display config (label, color, visibility, line style and width). Keys you add yourself are kept when the in-app editor saves |
 
 **`loop_cntr` is mandatory** in every frame — it is the loop counter used as the X-axis
-(`loop_cntr × sample_period_s = time in seconds`). It must be a `u32` and must be the first
-field.
+(`loop_cntr × sample_period_s = time in seconds`). It should be a `u32` and the first field.
+
+**Validation.** `streams.json` is checked when it's loaded and before the editor saves it:
+- Errors leave a stream out of the stream list, and the status bar reports them (hover for
+  details). Errors are:
+  - an unknown field type or a duplicate field name
+  - no `loop_cntr` field
+  - a payload over 255 B
+  - `stream_id` outside 0–255
+  - a signal whose `field` isn't in the frame
+- Warnings don't block loading: an unknown `panel_type`, or a `loop_cntr` that isn't `u32` or
+  isn't first.
+
+The editor refuses to save a file with errors. A signal with no data (a field the source
+doesn't send) is drawn as a gap and reads `n/a` in the cursor readout. It is never plotted
+as zero.
 
 **Supported field types:** `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`, `f32`, `f64`
 

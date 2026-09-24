@@ -1,24 +1,55 @@
 """
 Stream Editor Module.
-Simplified Version: Flat signal list (no groups), removed Lock/Scale features.
+
+Edits one stream definition. The editor is lossless (C4): it only overwrites the keys it
+shows (name, panel type, stream ID, endianness, field names and types, signal label, field,
+color, visibility, line style and width). Every other key in the stream, frame, field,
+signal or line object is carried through unchanged, in its original order.
 """
 
 from __future__ import annotations
 
+import copy
 import re
 from typing import Any
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 # Core Imports
+from core.config import ENDIANNESS, PANEL_TYPES
 from core.protocol.constants import STRUCT_TYPE_MAP
-from core.types import SignalsConfig, StreamConfig, StreamFrameField
+from core.types import StreamConfig, StreamFrameField
 
 # Common UI Imports
 from ui.charts.telemetry_plot import DEFAULT_LINE_WIDTH
 from ui.common.color_button import ColorButton
 
-PANEL_TYPES = ["none", "pid", "imu", "control"]
+# Per-row storage of the original objects, so get_data() can round-trip unknown keys.
+ROLE_ORIGINAL = QtCore.Qt.ItemDataRole.UserRole
+ROLE_KEY = QtCore.Qt.ItemDataRole.UserRole + 1
+
+
+class _Original:
+    """
+    Opaque holder for a row's original dict.
+
+    Storing a plain dict as item data converts it to a QVariantMap, which sorts the keys.
+    That breaks the byte-identical round trip.
+    """
+
+    def __init__(self, data: dict[str, Any] | None) -> None:
+        self.data = data or {}
+
+
+def _original_of(value: Any) -> dict[str, Any]:
+    return copy.deepcopy(value.data) if isinstance(value, _Original) else {}
+
+
+def _select_or_add(combo: QtWidgets.QComboBox, text: str) -> None:
+    """Selects `text`, adding it first if the combo doesn't offer it (never silently swap)."""
+    if combo.findText(text) < 0:
+        combo.addItem(text)
+    combo.setCurrentText(text)
 
 
 def _as_widget[W: QtWidgets.QWidget](widget: QtWidgets.QWidget | None, cls: type[W]) -> W:
@@ -37,6 +68,7 @@ class StreamEditor(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.current_stream_key: str | None = None
+        self._original: dict[str, Any] = {}
         self.init_ui()
         self.apply_styles()
 
@@ -86,10 +118,13 @@ class StreamEditor(QtWidgets.QWidget):
         self.id_spin.setRange(0, 255)
         self.panel_combo = QtWidgets.QComboBox()
         self.panel_combo.addItems(PANEL_TYPES)
+        self.endian_combo = QtWidgets.QComboBox()
+        self.endian_combo.addItems(ENDIANNESS)
 
         form.addRow("JSON Key:", self.key_edit)
         form.addRow("Display Name:", self.name_edit)
         form.addRow("Stream ID:", self.id_spin)
+        form.addRow("Endianness:", self.endian_combo)
         form.addRow("Panel Type:", self.panel_combo)
         layout.addWidget(grp_info)
 
@@ -121,9 +156,11 @@ class StreamEditor(QtWidgets.QWidget):
 
         btns = QtWidgets.QHBoxLayout()
         b_add = QtWidgets.QPushButton("+ Add")
-        b_add.clicked.connect(self.add_frame_row)
+        b_add.clicked.connect(lambda: self.add_frame_row())
         b_del = QtWidgets.QPushButton("- Del")
         b_del.clicked.connect(lambda: self.remove_table_row(self.frame_table))
+        # Keep the signals' "Field Map" choices in sync with the frame's field names.
+        self.frame_table.itemChanged.connect(lambda _item: self._refresh_field_combos())
         btns.addWidget(b_add)
         btns.addWidget(b_del)
         btns.addStretch()
@@ -150,7 +187,7 @@ class StreamEditor(QtWidgets.QWidget):
 
         btns = QtWidgets.QHBoxLayout()
         b_sig = QtWidgets.QPushButton("📈 Add Signal")
-        b_sig.clicked.connect(self.add_signal_item)
+        b_sig.clicked.connect(lambda: self.add_signal_item())
         b_rem = QtWidgets.QPushButton("❌ Remove")
         b_rem.clicked.connect(self.remove_tree_item)
         btns.addWidget(b_sig)
@@ -161,97 +198,143 @@ class StreamEditor(QtWidgets.QWidget):
 
     def load_data(self, key: str, data: StreamConfig) -> None:
         self.current_stream_key = key
+        self._original = copy.deepcopy(dict(data))
+        frame = data.get("frame", {})
+
         self.key_edit.setText(key)
         self.name_edit.setText(data.get("name", ""))
-
-        idx = self.panel_combo.findText(data.get("panel_type", "none"))
-        if idx >= 0:
-            self.panel_combo.setCurrentIndex(idx)
-
-        self.id_spin.setValue(data.get("frame", {}).get("stream_id", 0))
+        _select_or_add(self.panel_combo, data.get("panel_type", "none"))
+        _select_or_add(self.endian_combo, frame.get("endianness", "little"))
+        self.id_spin.setValue(frame.get("stream_id", 0))
 
         # Frame
+        self.frame_table.blockSignals(True)
         self.frame_table.setRowCount(0)
-        for f in data.get("frame", {}).get("fields", []):
-            self.add_frame_row(f.get("name"), f.get("type"))
+        for f in frame.get("fields", []):
+            self.add_frame_row(f.get("name", ""), f.get("type", "f32"), original=dict(f))
+        self.frame_table.blockSignals(False)
 
-        # Signals (Flattened)
+        # Signals (flat list)
         self.sig_tree.clear()
-
-        signals_data = data.get("signals", {})
-        for skey, sdata in signals_data.items():
+        for skey, sdata in data.get("signals", {}).items():
+            line = sdata.get("line", {})
             row = {
                 "label": sdata.get("label", skey),
                 "field": sdata.get("field", ""),
                 "color": sdata.get("color", "#FFFFFF"),
                 "visible": sdata.get("visible", True),
-                "style": sdata.get("line", {}).get("style", "solid"),
-                "width": sdata.get("line", {}).get("width", DEFAULT_LINE_WIDTH),
+                "style": line.get("style", "solid"),
+                "width": line.get("width", DEFAULT_LINE_WIDTH),
             }
-            self.add_signal_row(row)
+            self.add_signal_row(row, key=skey, original=dict(sdata))
 
     def get_data(self) -> tuple[str, StreamConfig]:
-        # Frame
+        """Returns (key, stream): the loaded stream with the edited values overlaid."""
+        data: dict[str, Any] = copy.deepcopy(self._original)
+        data["name"] = self.name_edit.text()
+        data["panel_type"] = self.panel_combo.currentText()
+
+        frame = data["frame"] if isinstance(data.get("frame"), dict) else {}
+        frame["stream_id"] = self.id_spin.value()
+        frame["endianness"] = self.endian_combo.currentText()
         fields: list[StreamFrameField] = []
         for r in range(self.frame_table.rowCount()):
             name = self._frame_name(r)
-            if name:
-                type_combo = _as_widget(self.frame_table.cellWidget(r, 1), QtWidgets.QComboBox)
-                fields.append({"name": name, "type": type_combo.currentData()})
+            if not name:
+                continue
+            name_item = self.frame_table.item(r, 0)
+            field = _original_of(name_item.data(ROLE_ORIGINAL) if name_item else None)
+            type_combo = _as_widget(self.frame_table.cellWidget(r, 1), QtWidgets.QComboBox)
+            field["name"] = name
+            field["type"] = type_combo.currentData() or type_combo.currentText()
+            fields.append(field)  # type: ignore[arg-type]
+        frame["fields"] = fields
+        data["frame"] = frame
 
-        # Signals (Flat Structure)
-        signals: SignalsConfig = {}
+        signals: dict[str, dict[str, Any]] = {}
         root = self.sig_tree.invisibleRootItem()
         assert root is not None
         for i in range(root.childCount()):
             item = root.child(i)
             assert item is not None
+            sig = _original_of(item.data(0, ROLE_ORIGINAL))
 
             label = item.text(0)
             fld = _as_widget(self.sig_tree.itemWidget(item, 1), QtWidgets.QComboBox).currentText()
-            col = _as_widget(self.sig_tree.itemWidget(item, 2), ColorButton).text()
             vis_box = _as_widget(self.sig_tree.itemWidget(item, 3), QtWidgets.QWidget)
             vis = _as_widget(vis_box.findChild(QtWidgets.QCheckBox), QtWidgets.QCheckBox)
-            style = _as_widget(self.sig_tree.itemWidget(item, 4), QtWidgets.QComboBox).currentText()
-            width = _as_widget(self.sig_tree.itemWidget(item, 5), QtWidgets.QSpinBox).value()
+            sig["label"] = label
+            sig["field"] = fld
+            sig["color"] = _as_widget(self.sig_tree.itemWidget(item, 2), ColorButton).text()
+            sig["visible"] = vis.isChecked()
+            line = sig["line"] if isinstance(sig.get("line"), dict) else {}
+            line["style"] = _as_widget(
+                self.sig_tree.itemWidget(item, 4), QtWidgets.QComboBox
+            ).currentText()
+            line["width"] = _as_widget(
+                self.sig_tree.itemWidget(item, 5), QtWidgets.QSpinBox
+            ).value()
+            sig["line"] = line
 
-            skey = fld if fld else re.sub(r"[^a-zA-Z0-9]", "", label)
+            key = item.data(0, ROLE_KEY)
+            if not isinstance(key, str) or not key or key in signals:
+                key = self._unique_signal_key(fld or label, signals)
+                item.setData(0, ROLE_KEY, key)
+            signals[key] = sig
+        data["signals"] = signals
+        return self.key_edit.text(), data  # type: ignore[return-value]
 
-            signals[skey] = {
-                "label": label,
-                "field": fld,
-                "color": col,
-                "visible": vis.isChecked(),
-                "line": {"style": style, "width": width},
-            }
-
-        data: StreamConfig = {
-            "name": self.name_edit.text(),
-            "panel_type": self.panel_combo.currentText(),
-            "frame": {
-                "stream_id": self.id_spin.value(),
-                "endianness": "little",
-                "packed": True,
-                "fields": fields,
-            },
-            "signals": signals,
-        }
-        return self.key_edit.text(), data
+    @staticmethod
+    def _unique_signal_key(base: str, taken: dict[str, Any]) -> str:
+        """Signal keys identify signals, so two signals on one field must not collide (C4d)."""
+        stem = re.sub(r"[^a-zA-Z0-9_]", "", base) or "signal"
+        key, n = stem, 2
+        while key in taken:
+            key, n = f"{stem}_{n}", n + 1
+        return key
 
     # --- Helpers ---
-    def add_frame_row(self, name: str = "", ftype: str = "f32") -> None:
+    def add_frame_row(
+        self, name: str = "", ftype: str = "f32", original: dict[str, Any] | None = None
+    ) -> None:
         r = self.frame_table.rowCount()
         self.frame_table.insertRow(r)
-        self.frame_table.setItem(r, 0, QtWidgets.QTableWidgetItem(name))
+        item = QtWidgets.QTableWidgetItem(name)
+        item.setData(ROLE_ORIGINAL, _Original(original))
+        self.frame_table.setItem(r, 0, item)
         combo = QtWidgets.QComboBox()
         for k, v in STRUCT_TYPE_MAP.items():
             combo.addItem(v[2], k)
-        combo.setCurrentIndex(combo.findData(ftype) if combo.findData(ftype) >= 0 else 0)
+        if combo.findData(ftype) < 0:
+            combo.addItem(ftype, ftype)  # keep unknown types visible; validation reports them
+        combo.setCurrentIndex(combo.findData(ftype))
         self.frame_table.setCellWidget(r, 1, combo)
+        self._refresh_field_combos()
 
     def remove_table_row(self, t: QtWidgets.QTableWidget) -> None:
         if t.currentRow() >= 0:
             t.removeRow(t.currentRow())
+            self._refresh_field_combos()
+
+    def _refresh_field_combos(self) -> None:
+        """Re-lists frame fields in every signal's "Field Map", keeping each selection."""
+        fields = self.get_fields()
+        root = self.sig_tree.invisibleRootItem()
+        if root is None:
+            return
+        for i in range(root.childCount()):
+            item = root.child(i)
+            combo = self.sig_tree.itemWidget(item, 1) if item is not None else None
+            if not isinstance(combo, QtWidgets.QComboBox):
+                continue
+            current = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(fields)
+            if current and current not in fields:
+                combo.addItem(current)  # stale mapping stays visible; validation flags it
+            combo.setCurrentText(current)
+            combo.blockSignals(False)
 
     def _frame_name(self, row: int) -> str:
         item = self.frame_table.item(row, 0)
@@ -268,7 +351,12 @@ class StreamEditor(QtWidgets.QWidget):
         # Adds directly to root (flat list)
         self.add_signal_row()
 
-    def add_signal_row(self, d: dict[str, Any] | None = None) -> None:
+    def add_signal_row(
+        self,
+        d: dict[str, Any] | None = None,
+        key: str | None = None,
+        original: dict[str, Any] | None = None,
+    ) -> None:
         if not d:
             d = {
                 "label": "New Signal",
@@ -281,6 +369,8 @@ class StreamEditor(QtWidgets.QWidget):
 
         item = QtWidgets.QTreeWidgetItem(self.sig_tree)
         item.setText(0, d["label"])
+        item.setData(0, ROLE_KEY, key)
+        item.setData(0, ROLE_ORIGINAL, _Original(original))
         item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsEditable)
 
         # Style row
