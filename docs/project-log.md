@@ -6,6 +6,43 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-24 — Phase 1, part 2: validation, lossless editor, engine lifecycle (R1.5–R1.8)
+
+- R1.5 (C3, C11):
+  - `core/config.validate_config()` checks types, duplicate fields, `loop_cntr`, payload
+    ≤ 255 B, `stream_id` range, endianness, and that each signal's field exists. It also
+    warns about an unknown panel type and a `loop_cntr` that isn't u32 or isn't first.
+  - The loader leaves streams with errors out and keeps `problems`; the main window reports
+    them in the status bar (no modal at startup).
+  - The editor refuses to save a document with errors.
+  - Missing fields are stored as NaN, drawn as gaps (pyqtgraph `connect="auto"`; dropped
+    `skipFiniteCheck=True`) and read "n/a" in the cursor readout. Bounds skip all-NaN
+    signals.
+  - Added u64/i64/f64, so the README's type list is now true.
+- R1.6 (C4): the editor is lossless.
+  - Each row keeps its original dict in an opaque holder (a plain dict becomes a
+    `QVariantMap`, which sorts keys), so unknown keys and their order survive.
+  - Endianness is editable. Unknown types and panel types stay visible instead of being
+    replaced.
+  - New signals get unique keys (`acc_x_2`), and field choices follow frame edits.
+  - Edits are committed when switching streams. Rename collisions are refused.
+  - Saving keeps the dashboard's selected stream.
+  - Loading and saving `streams.json` unchanged is **byte-identical** (test).
+- R1.7 (C5, C6, C12):
+  - `TelemetryEngine.select_stream()` does stop → configure → restart on the engine thread.
+    `state_changed` feeds the GUI's `engine_state` mirror, and the GUI no longer reads
+    engine attributes.
+  - `configure_signals` no longer demotes RUNNING (that was the stall race).
+  - "Connected" appears only once the engine is RUNNING.
+  - Close uses a blocking queued stop, then `quit()`/`wait()`. `terminate()` is removed.
+  - Time spinboxes have keyboard tracking off, so typing doesn't reallocate buffers on
+    every keystroke.
+- R1.8 (C9): `write_timeout=0.2 s` on the serial port.
+- Bench: unchanged (parse 60–67k frames/s; snapshot 0.9 / 5–6 / 24–26 ms). Tests: 91
+  passed with Qt, 77 passed + 14 skipped without; no xfails remain.
+
+---
+
 ## 2026-09-24 — Phase 1, part 1: RX data loss, render speed, link stats (R1.1–R1.4)
 
 - R1.1 (C1): removed the pre-parse "clear if > 4 KiB" guard. The parser already bounds the

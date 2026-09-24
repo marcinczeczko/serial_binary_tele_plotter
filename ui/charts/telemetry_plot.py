@@ -6,6 +6,7 @@ What comes in packet['signals'] is displayed exactly on the Y-axis.
 
 from __future__ import annotations
 
+import math
 import time
 from typing import Any, TypedDict
 
@@ -126,7 +127,8 @@ class TelemetryPlot(QtWidgets.QWidget):
             c = pg.PlotDataItem(
                 pen=pg.mkPen(color=color, width=width, style=pen_style),
                 name=sig.get("label", sid),
-                skipFiniteCheck=True,
+                # Default connect="auto": NaN (missing data) breaks the line instead of
+                # being drawn. Don't set skipFiniteCheck, which assumes no NaN.
             )
 
             # Visibility
@@ -158,11 +160,11 @@ class TelemetryPlot(QtWidgets.QWidget):
                 s_min, s_max = signal_bounds[sid]
             else:
                 # Fallback path (e.g. during tests that don't provide signal_bounds)
-                arr = signals[sid]
-                if not len(arr):
+                finite = signals[sid][np.isfinite(signals[sid])]
+                if not len(finite):
                     continue
-                s_min = float(np.nanmin(arr))
-                s_max = float(np.nanmax(arr))
+                s_min = float(finite.min())
+                s_max = float(finite.max())
             lo = min(lo, s_min)
             hi = max(hi, s_max)
 
@@ -339,9 +341,12 @@ class TelemetryPlot(QtWidgets.QWidget):
             # Linear interpolation reusing the pre-computed index and fraction
             v0, v1 = float(vals[right_idx - 1]), float(vals[right_idx])
             v = v0 + frac * (v1 - v0)
-            color = view_data["config"]["color"]
+            color = view_data["config"].get("color", "#FFFFFF")
             label = view_data["config"].get("label", sid)
 
+            if not math.isfinite(v):
+                html += f'<span style="color: {color};">{label}: <b>n/a</b></span><br>'
+                continue
             row = f'<span style="color: {color};">{label}: <b>{v:+.3f}</b>'
             if self.anchor_time is not None and sid in self.anchor_values:
                 d_val = v - self.anchor_values[sid]

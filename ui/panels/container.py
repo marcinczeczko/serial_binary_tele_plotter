@@ -184,24 +184,21 @@ class MainControlPanel(QtWidgets.QWidget):
 
     def reload_streams(self) -> None:
         """
-        Reloads configuration from disk and refreshes the UI list.
-        This allows external controllers to force a refresh safely.
+        Reloads configuration from disk and refreshes the stream list, keeping the current
+        stream selected if it still exists. The selection is always re-applied, so the plot
+        and engine pick up edits to the current stream.
         """
-        # 1. Reload JSON data (using the new public method)
+        current = self.payload_combo.currentData()
         self.stream_loader.load()
 
-        # 2. Refresh Combo Box content
         self.payload_combo.blockSignals(True)
         self.payload_combo.clear()
-
         for sid, s in self.stream_loader.list_streams().items():
             self.payload_combo.addItem(s["name"], sid)
-
+        idx = max(self.payload_combo.findData(current), 0)
+        if self.payload_combo.count() > 0:
+            self.payload_combo.setCurrentIndex(idx)
         self.payload_combo.blockSignals(False)
 
-        # 3. Force selection of the first item
         if self.payload_combo.count() > 0:
-            self.payload_combo.setCurrentIndex(0)
-            # Explicitly call the handler to ensure the app state syncs up
-            # (Calling internal method from within the class is allowed)
-            self._on_stream_selection(0)
+            self._on_stream_selection(idx)

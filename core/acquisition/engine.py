@@ -25,13 +25,21 @@ from core.types import EngineState, SignalsConfig, StreamConfig
 
 logger = logging.getLogger(__name__)
 
+# A device that stops draining its RX buffer must not block acquisition forever (C9).
+SERIAL_WRITE_TIMEOUT_S = 0.2
+
 
 class TelemetryEngine(QtCore.QObject):
     """
     The main controller class for the background thread.
+
+    The engine owns its lifecycle state machine (IDLE -> CONFIGURED <-> RUNNING). All
+    decisions that depend on the current state, such as whether to restart after a stream
+    switch, are made here on the engine thread. The GUI only mirrors `state_changed`.
     """
 
     data_ready = QtCore.pyqtSignal(dict)
+    state_changed = QtCore.pyqtSignal(object)  # EngineState
     link_stats = QtCore.pyqtSignal(dict)  # LinkReport, ~1 Hz while running
     status_msg = QtCore.pyqtSignal(str)
     connection_failed = QtCore.pyqtSignal(str)
@@ -51,6 +59,9 @@ class TelemetryEngine(QtCore.QObject):
         # --- IO & State ---
         self.serial_port: serial.Serial | None = None
         self.state: EngineState = EngineState.IDLE
+        # Last successfully opened connection; used to restart after a stream switch.
+        self._port: str | None = None
+        self._baud: int = 0
 
         # --- GUI Update Timer ---
         self.gui_update_timer: QtCore.QTimer = QtCore.QTimer(self)
@@ -74,8 +85,11 @@ class TelemetryEngine(QtCore.QObject):
     @QtCore.pyqtSlot(str, int)
     def start_working(self, port_name: str, baudrate: int) -> None:
         """Initiates the data acquisition process."""
+        if self.state == EngineState.RUNNING:
+            self.status_msg.emit("Already running")
+            return
         if self.state != EngineState.CONFIGURED:
-            self.status_msg.emit("Worker not configured yet")
+            self.status_msg.emit("No stream configured yet")
             return
 
         # Clear buffers to prevent "time travel" artifacts
@@ -84,25 +98,28 @@ class TelemetryEngine(QtCore.QObject):
         self._stats_prev = self.protocol.stats.snapshot()
         self._stats_prev_samples = self.data_mgr.total_stored
         self._stats_prev_ts = time.monotonic()
-        self.state = EngineState.RUNNING
 
         if port_name == "VIRTUAL":
             self.virtual.start(self.sample_period_s)
         else:
             try:
-                self.serial_port = serial.Serial(port_name, baudrate, timeout=0.1)
+                self.serial_port = serial.Serial(
+                    port_name, baudrate, timeout=0.1, write_timeout=SERIAL_WRITE_TIMEOUT_S
+                )
                 self.serial_port.reset_input_buffer()
-                self.serial_timer.start()
-                QtCore.QTimer.singleShot(0, self._serial_read_step)
             except (ValueError, serial.SerialException) as e:
                 msg = f"Connection Error: {e}"
                 self.status_msg.emit(msg)
                 self.connection_failed.emit(msg)
-                self.state = EngineState.CONFIGURED
                 return
+            self.serial_timer.start()
+            QtCore.QTimer.singleShot(0, self._serial_read_step)
 
+        self._port, self._baud = port_name, baudrate
+        self._set_state(EngineState.RUNNING)
         self.gui_update_timer.start()
         self.stats_timer.start()
+        self.status_msg.emit(f"Connected to {port_name}")
 
     @QtCore.pyqtSlot()
     def stop_working(self) -> None:
@@ -114,7 +131,7 @@ class TelemetryEngine(QtCore.QObject):
         if self.state != EngineState.RUNNING:
             return
 
-        self.state = EngineState.CONFIGURED
+        self._set_state(EngineState.CONFIGURED)
         self.virtual.stop()
 
         if self.serial_port and self.serial_port.is_open:
@@ -123,6 +140,27 @@ class TelemetryEngine(QtCore.QObject):
             except OSError, serial.SerialException:
                 pass
             self.serial_port = None
+
+    @QtCore.pyqtSlot(dict)
+    def select_stream(self, stream_cfg: StreamConfig) -> None:
+        """
+        Switches to another stream definition atomically on the engine thread.
+
+        If acquisition is running it is stopped, reconfigured and restarted on the same
+        port, so a stream switch never leaves the engine half-configured (C5).
+        """
+        was_running = self.state == EngineState.RUNNING
+        if was_running:
+            self.stop_working()
+        self.configure_signals(stream_cfg.get("signals", {}))
+        self.configure_frame(stream_cfg)
+        if was_running and self._port is not None:
+            self.start_working(self._port, self._baud)
+
+    def _set_state(self, state: EngineState) -> None:
+        if state != self.state:
+            self.state = state
+            self.state_changed.emit(state)
 
     @QtCore.pyqtSlot(int)
     def send_imu_command(self, cmd_id: int) -> None:
@@ -183,7 +221,9 @@ class TelemetryEngine(QtCore.QObject):
     def configure_signals(self, signals_cfg: SignalsConfig) -> None:
         """Configures the Data Manager with the signal definitions."""
         self.data_mgr.configure(signals_cfg)
-        self.state = EngineState.CONFIGURED
+        # Never demote RUNNING here: that silently stalled acquisition with the port open (C5).
+        if self.state == EngineState.IDLE:
+            self._set_state(EngineState.CONFIGURED)
 
     @QtCore.pyqtSlot(dict)
     def configure_frame(self, stream_cfg: StreamConfig) -> None:

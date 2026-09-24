@@ -55,7 +55,7 @@ main.py                 QApplication bootstrap, SIGINT handling
 styles.py               global dark theme (QSS)
 streams.json            stream/frame/signal definitions (single source of truth)
 core/types.py           TypedDict config shapes, PlotMode, EngineState
-core/config.py          StreamConfigLoader (load + minimal validation)
+core/config.py          validate_config (single source of truth) + StreamConfigLoader
 core/protocol/          wire format: constants, crc (CRC-8 poly 0x07), decoder (struct), handler (sync/CRC/encode), stats (link counters)
 core/acquisition/       engine (QThread controller), storage (numpy ring), virtual (simulator)
 ui/main_window.py       composition, thread setup, signal wiring
@@ -81,7 +81,8 @@ Changing any of this is a firmware-visible change. Call it out explicitly.
 
 - **Threading.** `TelemetryEngine` lives in its own `QThread`. The GUI talks to it only
   through signals or `QMetaObject.invokeMethod(..., QueuedConnection)`. Never call engine
-  methods or read engine attributes from GUI code. Existing violations are tracked as C5.
+  methods or read engine attributes from GUI code. The engine owns its state machine
+  (`select_stream`, `start_working`, `stop_working`), and the GUI mirrors `state_changed`.
 - **Bulk data doesn't belong in the Qt event queue.** Today the engine pushes snapshots
   (P2/P3). The target design (ADR-0002) has the GUI pull from a versioned store. New code
   should move in that direction, not add more push paths.

@@ -23,6 +23,9 @@ STRUCT_TYPE_MAP = {
     "u32": ("I", 4, "uint32"),
     "i32": ("i", 4, "int32"),
     "f32": ("f", 4, "float32"),
+    "u64": ("Q", 8, "uint64"),
+    "i64": ("q", 8, "int64"),
+    "f64": ("d", 8, "float64"),
 }
 
 LOOP_CNTR_NAME = "loop_cntr"

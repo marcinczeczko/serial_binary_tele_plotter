@@ -55,7 +55,11 @@ class TimeConfigPanel(QtWidgets.QGroupBox):
         )
 
         # --- Signal Wiring ---
-        # Emit signal immediately on change to update Engine/Plot in real-time
+        # Without keyboard tracking, typed values are applied on Enter or focus-out, not on
+        # every keystroke (typing "100000" used to reallocate the buffers six times, C12).
+        # Arrow and wheel steps still apply immediately.
+        self.period_sb.setKeyboardTracking(False)
+        self.samples_sb.setKeyboardTracking(False)
         self.period_sb.valueChanged.connect(self._emit_config)
         self.samples_sb.valueChanged.connect(self._emit_config)
 

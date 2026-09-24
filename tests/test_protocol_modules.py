@@ -114,3 +114,17 @@ def test_bad_payload_crc_dropped():
     handler.add_data(frame)
     frames = list(handler.process_available_frames())
     assert frames == []
+
+
+def test_decoder_64bit_types():
+    dec = FrameDecoder(
+        "little",
+        [
+            {"name": "u", "type": "u64"},
+            {"name": "i", "type": "i64"},
+            {"name": "d", "type": "f64"},
+        ],
+    )
+    assert dec.size == 24
+    payload = struct.pack("<Qqd", 2**40, -(2**40), 0.1)
+    assert dec.decode(payload) == {"u": 2**40, "i": -(2**40), "d": 0.1}
