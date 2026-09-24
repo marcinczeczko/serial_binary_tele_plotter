@@ -108,7 +108,7 @@ No architectural change. Each item is a focused PR.
 This implements [ADR-0002](adr/0002-target-acquisition-pipeline.md). Do it as a sequence of
 PRs that each keep the app working. Measure with `tools/bench_pipeline.py` before and after.
 
-- [ ] **R2.1 `Transport` interface**
+- [x] **R2.1 `Transport` interface**
   `open/close/read(timeout)->bytes/write(bytes)`, implemented by `SerialTransport`
   (pyserial, write timeout) and later by `ReplayTransport` and `SimTransport`. Reads run on
   a dedicated reader thread doing blocking reads (P5). No `QTimer` polling.

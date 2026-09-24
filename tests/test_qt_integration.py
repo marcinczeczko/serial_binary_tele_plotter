@@ -410,3 +410,39 @@ def test_main_parse_args_keeps_qt_options() -> None:
     assert rest == ["-platform", "offscreen"]
     args, rest = parse_args([])
     assert args.config is None and rest == []
+
+
+def test_engine_thread_reads_transport_and_handles_disconnect(qtbot: Any) -> None:
+    from tests.fakes import FakeTransport
+    from tests.test_acquisition_engine import _CFG_BYTES, _frames
+
+    blob = _frames(300)
+    transport = FakeTransport(
+        [blob[i : i + 64] for i in range(0, len(blob), 64)], fail_when_drained=True
+    )
+    engine = TelemetryEngine(sample_period_ms=5.0, max_samples=1000)
+    engine.transport_factory = lambda port, baud: transport
+    thread = QtCore.QThread()
+    engine.moveToThread(thread)
+    receiver = _Receiver()
+    engine.data_ready.connect(receiver.on_data)
+    failures: list[str] = []
+    engine.connection_failed.connect(failures.append)
+    thread.start()
+    queued = QtCore.Qt.ConnectionType.QueuedConnection
+    try:
+        QtCore.QMetaObject.invokeMethod(
+            engine, "select_stream", queued, QtCore.Q_ARG(dict, _CFG_BYTES)
+        )
+        QtCore.QMetaObject.invokeMethod(
+            engine, "start_working", queued, QtCore.Q_ARG(str, "COM9"), QtCore.Q_ARG(int, 1)
+        )
+        qtbot.waitUntil(lambda: bool(failures), timeout=5000)
+    finally:
+        thread.quit()
+        assert thread.wait(2000)
+
+    assert failures == ["Serial error: device disconnected"]
+    assert engine.state == EngineState.CONFIGURED
+    assert transport.closed
+    assert engine.protocol.stats.frames_decoded == 300
