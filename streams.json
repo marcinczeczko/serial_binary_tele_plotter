@@ -158,6 +158,24 @@
             "sim": {
                 "model": "pid_motor"
             },
+            "groups": {
+                "speed": {
+                    "label": "Speed [rps]",
+                    "order": 1
+                },
+                "error": {
+                    "label": "Error / integral",
+                    "order": 2
+                },
+                "control": {
+                    "label": "Control [%]",
+                    "order": 3
+                },
+                "pwm": {
+                    "label": "PWM / ticks",
+                    "order": 4
+                }
+            },
             "signals": {
                 "left_target_setpoint": {
                     "label": "L: Target Setpoint",
@@ -167,7 +185,8 @@
                     "line": {
                         "style": "dotted",
                         "width": 1
-                    }
+                    },
+                    "group": "speed"
                 },
                 "left_delta_ticks": {
                     "label": "L: Delta Ticks",
@@ -177,7 +196,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "pwm"
                 },
                 "left_setpoint": {
                     "label": "L: Setpoint",
@@ -187,7 +207,8 @@
                     "line": {
                         "style": "dashed",
                         "width": 1
-                    }
+                    },
+                    "group": "speed"
                 },
                 "left_measurement": {
                     "label": "L: Measurement",
@@ -197,7 +218,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "speed"
                 },
                 "left_measurementRaw": {
                     "label": "L: Meas Raw",
@@ -207,7 +229,8 @@
                     "line": {
                         "style": "dotted",
                         "width": 1
-                    }
+                    },
+                    "group": "speed"
                 },
                 "left_error": {
                     "label": "L: Error",
@@ -217,7 +240,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "error"
                 },
                 "left_integral": {
                     "label": "L: Integral",
@@ -227,7 +251,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "error"
                 },
                 "left_u_ff": {
                     "label": "L: U_FF",
@@ -237,7 +262,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "left_u_pi": {
                     "label": "L: U_PI",
@@ -247,7 +273,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "left_u_virtual": {
                     "label": "L: U_VIRTUAL",
@@ -257,7 +284,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "left_u_sat": {
                     "label": "L: U_SAT",
@@ -267,7 +295,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "left_pTerm": {
                     "label": "L: P Term",
@@ -277,7 +306,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "left_iTerm": {
                     "label": "L: I Term",
@@ -287,7 +317,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "left_aw_term": {
                     "label": "L: AW Term",
@@ -297,7 +328,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "left_outputRaw": {
                     "label": "L: Output Raw",
@@ -307,7 +339,8 @@
                     "line": {
                         "style": "dotted",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "left_output": {
                     "label": "L: Output",
@@ -317,7 +350,8 @@
                     "line": {
                         "style": "dotted",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "left_pwm_cmd": {
                     "label": "L: PWM cmd",
@@ -327,7 +361,8 @@
                     "line": {
                         "style": "dotted",
                         "width": 1
-                    }
+                    },
+                    "group": "pwm"
                 },
                 "right_target_setpoint": {
                     "label": "R: Target Setpoint",
@@ -337,7 +372,8 @@
                     "line": {
                         "style": "dotted",
                         "width": 1
-                    }
+                    },
+                    "group": "speed"
                 },
                 "right_delta_ticks": {
                     "label": "R: Delta Ticks",
@@ -347,7 +383,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "pwm"
                 },
                 "right_setpoint": {
                     "label": "R: Setpoint",
@@ -357,7 +394,8 @@
                     "line": {
                         "style": "dashed",
                         "width": 1
-                    }
+                    },
+                    "group": "speed"
                 },
                 "right_measurement": {
                     "label": "R: Measurement",
@@ -367,7 +405,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "speed"
                 },
                 "right_measurementRaw": {
                     "label": "R: Meas Raw",
@@ -377,7 +416,8 @@
                     "line": {
                         "style": "dotted",
                         "width": 1
-                    }
+                    },
+                    "group": "speed"
                 },
                 "right_error": {
                     "label": "R: Error",
@@ -387,7 +427,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "error"
                 },
                 "right_integral": {
                     "label": "R: Integral",
@@ -397,7 +438,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "error"
                 },
                 "right_u_ff": {
                     "label": "R: U_FF",
@@ -407,7 +449,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "right_u_pi": {
                     "label": "R: U_PI",
@@ -417,7 +460,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "right_u_virtual": {
                     "label": "R: U_VIRTUAL",
@@ -427,7 +471,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "right_u_sat": {
                     "label": "R: U_SAT",
@@ -437,7 +482,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "right_iTerm": {
                     "label": "R: I Term",
@@ -447,7 +493,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "right_pTerm": {
                     "label": "R: P Term",
@@ -457,7 +504,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "right_aw_term": {
                     "label": "R: AW Term",
@@ -467,7 +515,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "right_outputRaw": {
                     "label": "R: Output Raw",
@@ -477,7 +526,8 @@
                     "line": {
                         "style": "dotted",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "right_output": {
                     "label": "R: Output",
@@ -487,7 +537,8 @@
                     "line": {
                         "style": "dotted",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "right_pwm_cmd": {
                     "label": "R: PWM cmd",
@@ -497,7 +548,8 @@
                     "line": {
                         "style": "dotted",
                         "width": 1
-                    }
+                    },
+                    "group": "pwm"
                 }
             }
         },
@@ -659,6 +711,24 @@
             "sim": {
                 "model": "pid_motor"
             },
+            "groups": {
+                "speed": {
+                    "label": "Speed [rps]",
+                    "order": 1
+                },
+                "error": {
+                    "label": "Error / integral",
+                    "order": 2
+                },
+                "control": {
+                    "label": "Control [%]",
+                    "order": 3
+                },
+                "pwm": {
+                    "label": "PWM / ticks",
+                    "order": 4
+                }
+            },
             "signals": {
                 "left_target_setpoint": {
                     "label": "L: Target Setpoint",
@@ -668,7 +738,8 @@
                     "line": {
                         "style": "dotted",
                         "width": 1
-                    }
+                    },
+                    "group": "speed"
                 },
                 "left_setpoint": {
                     "label": "L: Setpoint",
@@ -678,7 +749,8 @@
                     "line": {
                         "style": "dashed",
                         "width": 1
-                    }
+                    },
+                    "group": "speed"
                 },
                 "left_measurement": {
                     "label": "L: Measurement",
@@ -688,7 +760,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "speed"
                 },
                 "left_integral": {
                     "label": "L: Integral",
@@ -698,7 +771,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "error"
                 },
                 "left_u_ff": {
                     "label": "L: U_FF",
@@ -708,7 +782,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "left_u_pi": {
                     "label": "L: U_PI",
@@ -718,7 +793,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "left_u_virtual": {
                     "label": "L: U_VIRTUAL",
@@ -728,7 +804,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "left_u_sat": {
                     "label": "L: U_SAT",
@@ -738,7 +815,8 @@
                     "line": {
                         "style": "dashed",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "right_target_setpoint": {
                     "label": "R: Target Setpoint",
@@ -748,7 +826,8 @@
                     "line": {
                         "style": "dotted",
                         "width": 1
-                    }
+                    },
+                    "group": "speed"
                 },
                 "right_setpoint": {
                     "label": "R: Setpoint",
@@ -758,7 +837,8 @@
                     "line": {
                         "style": "dashed",
                         "width": 1
-                    }
+                    },
+                    "group": "speed"
                 },
                 "right_measurement": {
                     "label": "R: Measurement",
@@ -768,7 +848,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "speed"
                 },
                 "right_integral": {
                     "label": "R: Integral",
@@ -778,7 +859,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "error"
                 },
                 "right_u_ff": {
                     "label": "R: U_FF",
@@ -788,7 +870,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "right_u_pi": {
                     "label": "R: U_PI",
@@ -798,7 +881,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "right_u_virtual": {
                     "label": "R: U_VIRTUAL",
@@ -808,7 +892,8 @@
                     "line": {
                         "style": "solid",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "right_u_sat": {
                     "label": "R: U_SAT",
@@ -818,7 +903,8 @@
                     "line": {
                         "style": "dashed",
                         "width": 1
-                    }
+                    },
+                    "group": "control"
                 },
                 "left_pwm_cmd": {
                     "label": "L: PWM_CMD",
@@ -828,7 +914,8 @@
                     "line": {
                         "style": "dashed",
                         "width": 1
-                    }
+                    },
+                    "group": "pwm"
                 }
             }
         },

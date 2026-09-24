@@ -14,7 +14,10 @@ Primary use cases:
 
 ## Features
 
-- Live multi-signal plotting via pyqtgraph — auto-ranging, cursor readout, and analysis pause mode.
+- Live multi-signal plotting via pyqtgraph, in **lanes**: stacked plots on one time axis,
+  each with its own Y axis. Each lane's Y range can be auto, auto-grow or manual. There's a
+  per-lane cursor readout and an analysis (pause) mode. 34 signals × 100k samples stay at
+  30 FPS.
 - Serial connection management with port scanning and baud rate selection.
 - Analysis mode: pause the plot, scrub with the cursor, click to set an anchor for delta (Δ)
   readouts across all signals.
@@ -111,9 +114,22 @@ CI (`.github/workflows/ci.yml`) runs lint, format check, mypy and the tests on e
 2. Select a **stream** from the sidebar (populated from `streams.json`).
 3. Pick a **serial port** and **baud rate**, then click `Connect`. Use `VIRTUAL` for the
    built-in simulator.
-4. Click `Pause` to enter analysis mode — the cursor shows interpolated values for all visible
-   signals. Click on the plot to set an anchor point for delta (Δ) readouts.
-5. Toggle individual signal visibility in the **Signals Visibility** panel.
+4. Hover the plot for a readout of every visible signal, per lane, at the cursor time.
+   Click `Pause` to enter analysis mode:
+   - You can zoom and pan freely, and Auto lanes fit what's in view.
+   - A click drops a Δ anchor (drag it to move it), and the readout shows Δt and Δ per
+     signal.
+   - Next to a gap (lost frames), a value reads `n/a` rather than being interpolated
+     across the gap.
+5. Toggle individual signal visibility in the **Signals Visibility** panel. The selector at
+   the end of each row moves a signal to another lane ("New lane" adds one) for this
+   session. To keep it, set the Lane column in the Configuration tab.
+   - Signals are drawn in lanes (see `groups` below), and a lane appears while one of its
+     signals is visible.
+   - Live, time follows the newest data and the mouse zooms or pans a lane's Y. That lane
+     then holds its range.
+   - Right-click a lane → **Lane Y range** to choose Auto (fit the data in view),
+     Auto-grow (only widens) or Manual, and whether zero is always included.
 6. **Period** shows the time between two frames of the shown stream, from its `time` block
    in `streams.json`. Changing it re-times that stream's whole history, for this session
    only; it turns orange while it differs from the file. Set it in the **Configuration**
@@ -182,7 +198,8 @@ Each stream entry:
 | `frame.fields` | Ordered list of `{name, type}` matching the C struct field order |
 | `time` | Optional time base: `field` (default `loop_cntr`), `scale_s` (seconds per tick of that field, default `0.005`), `step` (its increase per frame, default `1`) |
 | `sim` | Optional: what the `VIRTUAL` port generates for this stream (see [Simulator](#simulator-virtual-port)) |
-| `signals` | Map of signal IDs to display config (label, color, visibility, line style and width). Keys you add yourself are kept when the in-app editor saves |
+| `groups` | Optional lanes: `{id: {label, order, y_range}}`. `label` is the lane's Y axis title. `y_range` is `{mode: auto\|auto-grow\|manual, min, max, include_zero}` |
+| `signals` | Map of signal IDs to display config: label, color, visibility, line style and width, `group` (its lane; default: the main lane) and `y_range` (used as a manual lane's bounds when its group sets none). Keys you add yourself are kept when the in-app editor saves |
 
 **`loop_cntr` is mandatory** in every frame. It's the loop counter used to detect lost
 frames, and by default it's also the X axis. It should be a `u32` and the first field.
@@ -213,7 +230,7 @@ frames, and by default it's also the X axis. It should be a `u32` and the first 
   - a `loop_cntr` that isn't `u32` or isn't first
   - a `time.field` other than `loop_cntr` without a `time.step`
   - unknown `time` keys
-  - anything wrong in a `sim` block
+  - anything wrong in a `sim` block, or in `groups`, a signal's `group` or `y_range`
 
 The editor refuses to save a file with errors. A signal with no data (a field the source
 doesn't send) is drawn as a gap and reads `n/a` in the cursor readout. It is never plotted
@@ -270,10 +287,15 @@ Example — a minimal stream definition:
         ]
       },
       "time": {"field": "loop_cntr", "scale_s": 0.01, "step": 1},
+      "groups": {
+        "temp": {"label": "Temperature [°C]", "order": 1},
+        "press": {"label": "Pressure [hPa]", "order": 2, "y_range": {"mode": "auto-grow"}}
+      },
       "signals": {
         "temperature": {
           "label": "Temperature (°C)",
           "field": "temperature",
+          "group": "temp",
           "color": "#FF5733",
           "visible": true,
           "line": {"style": "solid", "width": 2}
@@ -281,6 +303,7 @@ Example — a minimal stream definition:
         "pressure": {
           "label": "Pressure (hPa)",
           "field": "pressure",
+          "group": "press",
           "color": "#4FC3F7",
           "visible": true,
           "line": {"style": "dashed", "width": 1}
@@ -308,14 +331,16 @@ serial_binary_tele_plotter/
 │   └── acquisition/
 │       ├── engine.py          # TelemetryEngine: lifecycle state machine (QThread)
 │       ├── storage.py         # SampleStore: versioned ring buffer per stream
+│       ├── lod.py             # Incremental min/max level of detail for live drawing
 │       └── timebase.py        # Per-stream time: unwrap, resets, gap markers
 ├── ui/
 │   ├── main_window.py         # Composition, engine thread, signal wiring
-│   ├── charts/                # TelemetryPlot (pyqtgraph), LiveFeed (pulls snapshots)
+│   ├── charts/                # TelemetryPlot (lanes), LiveFeed (pulls the store's overview),
+│   │                          #   lanes/series (Qt-free layout, range and decimation logic)
 │   ├── panels/                # Connection, PID, IMU, signals, time window panels
 │   └── config/                # Stream configuration editor tab
 ├── tests/                     # pytest; `qt`-marked tests use real Qt
-├── tools/bench_pipeline.py    # Parser/storage benchmark
+├── tools/                     # bench_pipeline.py (parser/storage), bench_render.py (GUI FPS)
 └── docs/                      # Roadmap, project log, reviews, ADRs
 ```
 
@@ -329,9 +354,11 @@ serial_binary_tele_plotter/
   ring buffer shared between threads). `LiveFeed` then pulls snapshots of the
   visible signals into `TelemetryPlot` at up to 30 FPS, only when there's new data, and
   backs off when frames are expensive. See `docs/adr/0002-target-acquisition-pipeline.md`.
-- **Performance:** hidden signals are never copied or drawn. Pausing freezes one full
-  snapshot, so signals shown while paused still have data. The tooltip reuses a single
-  `searchsorted` result across all signals per mouse event.
+- **Performance:** hidden signals are never copied or drawn. The store keeps an incremental
+  min/max summary of its buffer, so a live frame reads ~1000 points per signal whatever the
+  buffer size. The live cursor readout still asks the store for exact values. Pausing
+  freezes every sample, so you can zoom into full resolution. `tools/bench_render.py`
+  checks the budget: 34 signals × 100k samples at 1 kHz, ≥ 30 FPS, nothing lost.
 
 ## Troubleshooting
 

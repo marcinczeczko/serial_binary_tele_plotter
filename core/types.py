@@ -35,12 +35,27 @@ class SignalLineConfig(TypedDict, total=False):
     width: int
 
 
+class YRangeConfig(TypedDict, total=False):
+    mode: str  # auto | auto-grow | manual
+    min: float
+    max: float
+    include_zero: bool
+
+
 class StreamSignalConfig(TypedDict, total=False):
     label: str
     field: str
     color: str
     visible: bool
     line: SignalLineConfig
+    group: str  # the lane the signal is drawn in
+    y_range: YRangeConfig
+
+
+class GroupConfig(TypedDict, total=False):
+    label: str
+    order: float
+    y_range: YRangeConfig
 
 
 SignalsConfig = dict[str, StreamSignalConfig]
@@ -75,6 +90,7 @@ class StreamConfig(TypedDict, total=False):
     frame: StreamFrameConfig
     time: StreamTimeConfig
     sim: StreamSimConfig
+    groups: dict[str, GroupConfig]
     signals: SignalsConfig
 
 

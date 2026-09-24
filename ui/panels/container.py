@@ -61,6 +61,7 @@ class MainControlPanel(QtWidgets.QWidget):
     samples_changed = QtCore.pyqtSignal(int)
     stream_changed = QtCore.pyqtSignal(dict)
     signal_visibility_changed = QtCore.pyqtSignal(str, bool)
+    signal_lane_changed = QtCore.pyqtSignal(str, str, str)  # signal id, lane key, lane label
 
     def __init__(self, stream_loader: StreamConfigLoader) -> None:
         super().__init__()
@@ -135,6 +136,7 @@ class MainControlPanel(QtWidgets.QWidget):
         self.time_panel.period_changed.connect(self.period_changed)
         self.time_panel.samples_changed.connect(self.samples_changed)
         self.sig_panel.signal_visibility_changed.connect(self.signal_visibility_changed)
+        self.sig_panel.signal_lane_changed.connect(self.signal_lane_changed)
 
         # PID Panel
         self.pid_panel.pid_left_sent.connect(self.pid_left_sent)

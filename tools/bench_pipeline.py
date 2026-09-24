@@ -7,8 +7,9 @@ Measures the Qt-free hot paths so performance work can be compared before/after:
      dict path (ProtocolHandler -> SampleStore.append) for comparison
   2. decode ratio for large reads (regression guard for review finding C1)
   3. CRC-8 cost per frame
-  4. GUI snapshot cost (SampleStore.snapshot) for several buffer sizes: all signals, only
-     the visible ones (what the live feed asks for), and an idle tick (nothing new)
+  4. GUI pull cost for several buffer sizes, all signals or only the visible ones:
+     a full-resolution snapshot (pause/analysis), the live overview (min/max level of
+     detail, after one frame's worth of new samples, R3.4), and an idle tick
 
 Usage (from the repository root):
     uv run python tools/bench_pipeline.py [--config streams.json] [--stream pid]
@@ -105,10 +106,10 @@ def parse_and_store_dicts(cfg: StreamConfig, blob: bytes, chunk: int) -> tuple[i
 
 def bench_snapshot(
     cfg: StreamConfig, max_samples: int, visible: int | None
-) -> tuple[float, float, float]:
+) -> tuple[float, float, float, float]:
     """
-    Returns (ms per snapshot, MB per snapshot, us per idle tick) for a full, wrapped buffer.
-    `visible` limits the copy to the first N signals (None = all).
+    Returns (ms per snapshot, MB per snapshot, ms per live overview, us per idle tick) for
+    a full, wrapped buffer. `visible` limits the copy to the first N signals (None = all).
     """
     store = SampleStore(max_samples)
     signals = cfg.get("signals", {})
@@ -128,11 +129,21 @@ def bench_snapshot(
     elapsed = (time.perf_counter() - t0) / SNAPSHOT_REPEATS
     assert snap is not None
     mb = (snap.time.nbytes + sum(a.nbytes for a in snap.signals.values())) / 1e6
+    # Live frames: 33 new samples (1 kHz at 30 FPS), then the overview the GUI pulls.
+    store.overview(ids)  # the first call summarises the whole window once
+    new = [dict(frame, loop_cntr=float(max_samples + 17 + i)) for i in range(33 * 10)]
+    overview_s = 0.0
+    for r in range(10):
+        store.append(new[r * 33 : (r + 1) * 33])
+        t0 = time.perf_counter()
+        store.overview(ids)
+        overview_s += time.perf_counter() - t0
+    version = store.version
     t0 = time.perf_counter()
     for _ in range(1000):
-        store.snapshot(ids, snap.version)  # nothing changed -> None
+        store.overview(ids, version)  # nothing changed -> None
     idle_us = (time.perf_counter() - t0) / 1000 * 1e6
-    return elapsed * 1e3, mb, idle_us
+    return elapsed * 1e3, mb, overview_s / 10 * 1e3, idle_us
 
 
 def main() -> int:
@@ -167,10 +178,10 @@ def main() -> int:
 
     for size in SNAPSHOT_SIZES:
         for visible, label in ((None, f"all {n_signals}"), (VISIBLE_SIGNALS, "visible 6")):
-            ms, mb, idle_us = bench_snapshot(cfg, size, visible)
+            ms, mb, live_ms, idle_us = bench_snapshot(cfg, size, visible)
             print(
                 f"snapshot {label:>9} @ {size:>7,} samples: {ms:7.2f} ms  {mb:6.1f} MB"
-                f"   idle tick {idle_us:5.1f} us"
+                f"   live overview {live_ms:5.2f} ms   idle tick {idle_us:5.1f} us"
             )
     return 0
 

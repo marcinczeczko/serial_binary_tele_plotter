@@ -48,3 +48,7 @@ jobs:
 
       - name: Pipeline benchmark (informational)
         run: uv run python tools/bench_pipeline.py
+
+      - name: Render benchmark (informational; FPS depends on the runner)
+        continue-on-error: true
+        run: uv run python tools/bench_render.py --seconds 5
