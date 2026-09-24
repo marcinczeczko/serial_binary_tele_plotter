@@ -160,12 +160,20 @@ PRs that each keep the app working. Measure with `tools/bench_pipeline.py` befor
   A `PlotController` `QTimer` at 30–60 FPS calls `store.snapshot(visible, since_version)`,
   which returns `None` if nothing changed. Nothing crosses threads except small control
   signals and stats, so the queued-packet backlog goes away entirely.
-- [ ] **R2.7 Byte-level simulator** (A6)
+- [x] **R2.7 Byte-level simulator** (A6)
   `SimTransport` generates *bytes* from any stream definition: per-field waveform spec
   (sine/step/noise/const/counter), plus an optional built-in DC-motor + PI plant for
   `pid` streams. Delete the name-substring logic.
   *Done when:* every stream in `streams.json` shows non-zero, plausible data on VIRTUAL,
   and the path exercises the parser end to end.
+  *Done (ADR-0004):*
+  - The `sim` block (per-field `wave` specs, `model: "pid_motor"`) is only ever a warning.
+  - VIRTUAL is a `SimTransport` on the normal `ReaderThread`. It's paced at the stream's
+    own period and applies PID commands to the model.
+  - A parametrised test decodes 10 s of every repo stream with no errors and checks each
+    signal is finite and varies. `*_aw_term` is exempt: it's zero until the output
+    saturates, which has its own test.
+  - `VirtualDevice` is deleted.
 
 ## Phase 3: visualisation for analysis (A4, P7)
 

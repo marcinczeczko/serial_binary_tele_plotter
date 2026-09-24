@@ -6,6 +6,35 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-24 — Byte-level simulator (R2.7, A6)
+
+- `VIRTUAL` is now `core/transport/sim_transport.SimTransport`, read by the normal
+  `ReaderThread`: simulated bytes go through the parser, router, time base and link
+  statistics.
+  - It's paced at the stream's own period, handing out bytes at most every 10 ms.
+  - It skips frames past a 2000-frame lag, and the time base shows the gap.
+  - `select_stream` retargets it without a restart.
+- `core/simulation/`:
+  - `synth.FrameSynth` packs real frames from the stream definition. An optional `sim`
+    block in streams.json gives per-field waves (`sine|step|noise|const|counter`) and a
+    model. Fields without a spec get distinct default sines. Bad specs only warn.
+  - `pid_motor.PidMotorModel`: FF + PI with anti-windup on a first-order motor. PID
+    commands written on VIRTUAL change its gains. The command layouts are now shared
+    constants (`PID_SINGLE_FORMAT`, `PID_ALL_FORMAT`); the wire format is unchanged.
+- Deleted `core/acquisition/virtual.py` (the name-substring waveform choice). The bundled
+  streams.json has `sim` blocks: `pid_motor` for both PID streams, and IMU waves at 1 g on Z.
+- Cost: 19–44 µs per `pid` frame, under 1% of a core at 200 Hz. The parse path is
+  unchanged, so bench numbers are the same as R2.5.
+- Tests (+14; 165 with Qt, 144 + 21 skipped without):
+  - every repo stream decodes 10 s of simulated frames cleanly, with varying signals
+  - counters wrap (u8, i16 timestamps)
+  - wave shapes, integer clipping, and warnings with fallback for bad specs
+  - the PID model tracks within 15%, and commands and saturation engage anti-windup
+  - pacing, lag skip and retargeting with a fake clock
+  - the engine's VIRTUAL path, including commands and the no-valid-stream guard
+
+---
+
 ## 2026-09-24 — Per-stream time base (R2.5, C2)
 
 - New `core/acquisition/timebase.py`, and an optional `time: {field, scale_s, step}` per

@@ -27,9 +27,17 @@ pytestmark = pytest.mark.qt
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 IMU_STREAM: StreamConfig = {
-    "name": "IMU test",  # "imu" in the name selects the IMU waveform in VirtualDevice
+    "name": "IMU test",
     "panel_type": "none",
-    "frame": {"stream_id": 3, "endianness": "little", "fields": []},
+    "frame": {
+        "stream_id": 3,
+        "endianness": "little",
+        "fields": [
+            {"name": "loop_cntr", "type": "u32"},
+            {"name": "acc_x", "type": "f32"},
+            {"name": "gyro_z", "type": "f32"},
+        ],
+    },
     "signals": {
         "ax": {"label": "Acc X", "field": "acc_x", "color": "#fff", "visible": True},
         "gz": {"label": "Gyro Z", "field": "gyro_z", "color": "#fff", "visible": True},

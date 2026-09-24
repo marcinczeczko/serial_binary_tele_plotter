@@ -2,8 +2,8 @@
 Background engine module for telemetry data processing.
 
 The engine runs in its own QThread and orchestrates:
-1. Input: a `Transport` drained by a dedicated `ReaderThread` (blocking reads, P5), or
-   the virtual simulator.
+1. Input: a `Transport` drained by a dedicated `ReaderThread` (blocking reads, P5). The
+   `VIRTUAL` port is a `SimTransport`: simulated protocol bytes through the same path (R2.7).
 2. Protocol: parsing and decoding. This happens on the reader thread under `_data_lock`.
    Every configured stream is decoded (`FrameParser` + `StreamRouter`, R2.2/R2.3); which one
    the GUI shows is a view choice and never restarts acquisition.
@@ -26,14 +26,19 @@ from collections.abc import Callable
 from PyQt6 import QtCore
 
 from core.acquisition.storage import StreamStores
-from core.acquisition.timebase import DEFAULT_SCALE_S, time_base_config
-from core.acquisition.virtual import VirtualDevice
 from core.protocol.frame_parser import FrameParser
 from core.protocol.handler import ProtocolHandler
 from core.protocol.router import StreamRouter
 from core.protocol.stats import LinkStats, make_link_report
-from core.transport import ReaderThread, SerialTransport, Transport, TransportError
-from core.types import DecodedFrame, EngineState, StreamConfig
+from core.transport import (
+    SIM_PORT_NAME,
+    ReaderThread,
+    SerialTransport,
+    SimTransport,
+    Transport,
+    TransportError,
+)
+from core.types import EngineState, StreamConfig
 
 logger = logging.getLogger(__name__)
 
@@ -66,16 +71,13 @@ class TelemetryEngine(QtCore.QObject):
         self.router = StreamRouter(self.parser.stats)
         self._encoder = ProtocolHandler()  # command packets only
         self._streams: dict[str, StreamConfig] = {}
-        self._active_key: str | None = None  # the stream the virtual device simulates
-
-        # 'parent=self' is crucial here! It ensures that when TelemetryEngine is moved
-        # to a new QThread, the VirtualDevice (and its internal QTimer) moves with it.
-        self.virtual = VirtualDevice(parent=self)
-        self.virtual.frame_generated.connect(self._store_virtual_frame)
+        self._active_key: str | None = None  # the stream the simulator produces
 
         # --- IO & State ---
         # Creates the transport for a port name; tests swap in fakes.
         self.transport_factory: Callable[[str, int], Transport] = SerialTransport
+        self.sim_factory: Callable[[StreamConfig], SimTransport] = SimTransport
+        self._sim: SimTransport | None = None
         self._transport: Transport | None = None
         self._reader: ReaderThread | None = None
         self._data_lock = threading.Lock()
@@ -100,6 +102,9 @@ class TelemetryEngine(QtCore.QObject):
         if self.state != EngineState.CONFIGURED:
             self.status_msg.emit("No stream configured yet")
             return
+        if port_name == SIM_PORT_NAME and not self._streams:
+            self.status_msg.emit("No valid stream to simulate")
+            return
 
         # Clear buffers to prevent "time travel" artifacts
         self.stores.clear()
@@ -112,27 +117,27 @@ class TelemetryEngine(QtCore.QObject):
         self._stats_prev_ts = time.monotonic()
         self._time_resets_seen = {}
 
-        if port_name == "VIRTUAL":
-            cfg = self._streams.get(self._active_key or "")
-            self.virtual.start(time_base_config(cfg).period_s if cfg else DEFAULT_SCALE_S)
+        transport: Transport
+        if port_name == SIM_PORT_NAME:
+            transport = self._sim = self.sim_factory(self._sim_stream())
         else:
             transport = self.transport_factory(port_name, baudrate)
-            try:
-                transport.open()
-            except TransportError as e:
-                msg = f"Connection Error: {e}"
-                self.status_msg.emit(msg)
-                self.connection_failed.emit(msg)
-                return
-            self._transport = transport
+        try:
+            transport.open()
+        except TransportError as e:
+            self._sim = None
+            msg = f"Connection Error: {e}"
+            self.status_msg.emit(msg)
+            self.connection_failed.emit(msg)
+            return
+        self._transport = transport
 
         self._set_state(EngineState.RUNNING)
         self.stats_timer.start()
         self.status_msg.emit(f"Connected to {port_name}")
         # Start reading only once RUNNING, so an immediate failure is never ignored.
-        if self._transport is not None:
-            self._reader = ReaderThread(self._transport, self._on_bytes, self._reader_failed.emit)
-            self._reader.start()
+        self._reader = ReaderThread(transport, self._on_bytes, self._reader_failed.emit)
+        self._reader.start()
 
     @QtCore.pyqtSlot()
     def stop_working(self) -> None:
@@ -143,10 +148,10 @@ class TelemetryEngine(QtCore.QObject):
             return
 
         self._set_state(EngineState.CONFIGURED)
-        self.virtual.stop()
         self._close_transport()
 
     def _close_transport(self) -> None:
+        self._sim = None
         reader, self._reader = self._reader, None
         transport, self._transport = self._transport, None
         if reader is not None:
@@ -179,15 +184,19 @@ class TelemetryEngine(QtCore.QObject):
     def select_stream(self, key: str) -> None:
         """
         Marks the stream the GUI shows. Serial acquisition decodes every stream anyway, so
-        this only retargets the virtual device, and never restarts anything.
+        this only retargets the simulator, and never restarts anything.
         """
         self._active_key = key  # may precede configure_streams() on a config reload
         self._apply_active_stream()
 
+    def _sim_stream(self) -> StreamConfig:
+        """The stream the simulator produces: the shown one, else the first configured."""
+        key = self._active_key if self._active_key in self._streams else None
+        return self._streams[key or next(iter(self._streams))]
+
     def _apply_active_stream(self) -> None:
-        cfg = self._streams.get(self._active_key) if self._active_key is not None else None
-        if cfg is not None:
-            self.virtual.configure_stream(cfg.get("name", self._active_key or ""))
+        if self._sim is not None and self._streams:
+            self._sim.set_stream(self._sim_stream())
 
     def _set_state(self, state: EngineState) -> None:
         if state != self.state:
@@ -214,11 +223,6 @@ class TelemetryEngine(QtCore.QObject):
             store = self.stores.get(key)
             if store is not None:
                 store.append_records(records)
-
-    def _store_virtual_frame(self, frame: DecodedFrame) -> None:
-        store = self.stores.get(self._active_key)
-        if store is not None:
-            store.append((frame,))
 
     @QtCore.pyqtSlot(str)
     def _on_reader_failed(self, message: str) -> None:

@@ -16,6 +16,7 @@ from typing import Any, Literal, cast
 
 from core.acquisition.timebase import TIME_KEYS
 from core.protocol.constants import LOOP_CNTR_NAME, STRUCT_TYPE_MAP
+from core.simulation.synth import SIM_KEYS, SIM_MODELS, WAVE_KEYS, WAVES
 from core.types import StreamConfig
 
 # The streams.json shipped next to the application code (not the current working directory).
@@ -165,6 +166,7 @@ def validate_stream(key: str, stream: Any) -> list[ConfigProblem]:
             warning(f"'{LOOP_CNTR_NAME}' should be u32, got {cntr.get('type')!r}")
 
     problems.extend(_time_problems(key, stream.get("time"), names))
+    problems.extend(_sim_problems(key, stream.get("sim"), names))
 
     signals = stream.get("signals", {})
     if not isinstance(signals, dict):
@@ -222,6 +224,49 @@ def _time_problems(key: str, time_cfg: Any, names: list[str]) -> list[ConfigProb
                 f"unknown time key(s) {', '.join(unknown)} (known: {', '.join(TIME_KEYS)})",
             )
         )
+    return problems
+
+
+def _sim_problems(key: str, sim: Any, names: list[str]) -> list[ConfigProblem]:
+    """
+    Checks the optional `sim` block (R2.7). It only affects the VIRTUAL port, so problems
+    are warnings: a stream is never excluded because of its simulation settings.
+    """
+    if sim is None:
+        return []
+
+    def warning(msg: str) -> ConfigProblem:
+        return ConfigProblem("warning", key, f"sim: {msg}")
+
+    if not isinstance(sim, dict):
+        return [warning("must be an object; ignored")]
+    problems: list[ConfigProblem] = []
+    unknown = sorted(set(sim) - set(SIM_KEYS))
+    if unknown:
+        problems.append(warning(f"unknown key(s) {', '.join(unknown)}"))
+    model = sim.get("model")
+    if model is not None and model not in SIM_MODELS:
+        problems.append(warning(f"unknown model {model!r} (known: {', '.join(SIM_MODELS)})"))
+    fields = sim.get("fields", {})
+    if not isinstance(fields, dict):
+        return [*problems, warning("'fields' must be an object; ignored")]
+    for name, spec in fields.items():
+        if name not in names:
+            problems.append(warning(f"field {name!r} is not in the frame"))
+        if not isinstance(spec, dict):
+            problems.append(warning(f"fields.{name} must be an object"))
+            continue
+        if spec.get("wave", "sine") not in WAVES:
+            problems.append(
+                warning(f"fields.{name}: unknown wave {spec['wave']!r} (known: {', '.join(WAVES)})")
+            )
+        for param, value in spec.items():
+            if param not in WAVE_KEYS:
+                problems.append(warning(f"fields.{name}: unknown key {param!r}"))
+            elif param != "wave" and (
+                not isinstance(value, int | float) or isinstance(value, bool)
+            ):
+                problems.append(warning(f"fields.{name}.{param} must be a number"))
     return problems
 
 

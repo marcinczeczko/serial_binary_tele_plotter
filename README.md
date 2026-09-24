@@ -28,7 +28,10 @@ Primary use cases:
   Values may be negative (e.g. a reverse `Rps` setpoint).
 - IMU calibration panel (placeholder: its buttons are disabled until the protocol defines an
   IMU command packet).
-- Virtual device simulator (`VIRTUAL` port) for UI development without hardware.
+- Device simulator (`VIRTUAL` port). It generates real protocol frames for the shown
+  stream, from its definition, so everything downstream is exercised as with hardware.
+  Per-field waveforms and a PID motor model are configurable, and PID gains sent from the
+  panel change the simulated response.
 - A time axis per stream, from a frame field and the stream's configured period. Counter
   wraps are unwrapped. A device reset starts a new segment, so time never runs backwards.
   Lost frames are drawn as gaps, never bridged by a line.
@@ -178,6 +181,7 @@ Each stream entry:
 | `frame.endianness` | `"little"` or `"big"` — must match the MCU's byte order |
 | `frame.fields` | Ordered list of `{name, type}` matching the C struct field order |
 | `time` | Optional time base: `field` (default `loop_cntr`), `scale_s` (seconds per tick of that field, default `0.005`), `step` (its increase per frame, default `1`) |
+| `sim` | Optional: what the `VIRTUAL` port generates for this stream (see [Simulator](#simulator-virtual-port)) |
 | `signals` | Map of signal IDs to display config (label, color, visibility, line style and width). Keys you add yourself are kept when the in-app editor saves |
 
 **`loop_cntr` is mandatory** in every frame. It's the loop counter used to detect lost
@@ -209,10 +213,38 @@ frames, and by default it's also the X axis. It should be a `u32` and the first 
   - a `loop_cntr` that isn't `u32` or isn't first
   - a `time.field` other than `loop_cntr` without a `time.step`
   - unknown `time` keys
+  - anything wrong in a `sim` block
 
 The editor refuses to save a file with errors. A signal with no data (a field the source
 doesn't send) is drawn as a gap and reads `n/a` in the cursor readout. It is never plotted
 as zero.
+
+### Simulator (`VIRTUAL` port)
+
+`VIRTUAL` streams real frames for the shown stream at its configured period. The frames
+have the same header, CRC and packed payload the MCU would send, so the parser, time axis
+and link statistics all work as they do with hardware. What each field carries:
+
+- The time field and `loop_cntr` count frames and wrap like the MCU's integers.
+- Fields listed in `sim.fields` follow their spec:
+  - `wave`: `sine`, `step` (a square wave), `noise`, `const` or `counter`
+  - parameters: `amp`, `freq_hz`, `offset`, `phase_deg`, `noise` (standard deviation)
+- `"model": "pid_motor"` fills `left_*`/`right_*` PID fields from a simulated
+  feedforward + PI loop on a DC motor. PID gains sent from the panel change it: `Kp`,
+  `Ki`, `Kaw`, `Alpha` (measurement filter), `Rps` (target amplitude), `useRamp` and
+  `usePI`. `K1` is the feedforward gain and `K2` the friction offset; `K3` is ignored.
+- Any other field gets a default sine, distinct per field.
+
+```json
+"sim": {
+  "fields": {
+    "acc_z": {"wave": "const", "offset": 1.0, "noise": 0.03},
+    "gyro_z": {"wave": "step", "amp": 45, "freq_hz": 0.2}
+  }
+}
+```
+
+Problems in `sim` are only warnings: they affect `VIRTUAL`, never real data.
 
 **Supported field types:** `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`, `f32`, `f64`
 
@@ -262,28 +294,29 @@ Example — a minimal stream definition:
 ## Project Structure
 
 ```
-serial_bin_plotter/
-├── main.py                    # Entry point, QApplication setup
+serial_binary_tele_plotter/
+├── main.py                    # Entry point, QApplication setup, --config
 ├── streams.json               # Stream and signal definitions (source of truth)
 ├── styles.py                  # Global dark theme
-├── core/
+├── core/                      # protocol/, transport/, simulation/ are Qt-free
 │   ├── types.py               # Shared TypedDicts and Enums
-│   ├── config.py              # streams.json loader
-│   ├── protocol/
-│   │   ├── handler.py         # Frame sync, CRC validation, encode/decode
-│   │   ├── decoder.py         # struct unpacking → Python dict
-│   │   ├── crc.py             # CRC-8 (lookup-table implementation)
-│   │   └── constants.py       # Magic bytes, type IDs, field names
+│   ├── config.py              # streams.json validation and loader
+│   ├── protocol/              # Wire format: CRC-8, FrameParser, RecordDecoder (numpy),
+│   │                          #   StreamRouter (multi-stream), stats, command encoding
+│   ├── transport/             # Transport interface, SerialTransport, SimTransport, ReaderThread
+│   ├── simulation/            # Frame synthesis from `sim` config, PID motor model
 │   └── acquisition/
-│       ├── engine.py          # TelemetryEngine — worker QThread controller
-│       ├── storage.py         # SignalDataManager — numpy ring buffers
-│       └── virtual.py         # VirtualDevice — hardware-free simulator
-└── ui/
-    ├── main_window.py         # MainWindow — thread coordinator
-    ├── charts/
-    │   └── telemetry_plot.py  # Live pyqtgraph plot widget
-    ├── panels/                # Connection, PID, IMU, signals, timing panels
-    └── config/                # Stream configuration editor tab
+│       ├── engine.py          # TelemetryEngine: lifecycle state machine (QThread)
+│       ├── storage.py         # SampleStore: versioned ring buffer per stream
+│       └── timebase.py        # Per-stream time: unwrap, resets, gap markers
+├── ui/
+│   ├── main_window.py         # Composition, engine thread, signal wiring
+│   ├── charts/                # TelemetryPlot (pyqtgraph), LiveFeed (pulls snapshots)
+│   ├── panels/                # Connection, PID, IMU, signals, time window panels
+│   └── config/                # Stream configuration editor tab
+├── tests/                     # pytest; `qt`-marked tests use real Qt
+├── tools/bench_pipeline.py    # Parser/storage benchmark
+└── docs/                      # Roadmap, project log, reviews, ADRs
 ```
 
 ## Architecture Notes
@@ -291,7 +324,7 @@ serial_bin_plotter/
 - **Threading:** a dedicated reader thread does blocking serial reads and parses them, so
   the OS buffer is drained however busy the GUI is. `TelemetryEngine` runs in its own
   `QThread`. The GUI talks to it only through Qt signals and queued calls.
-- **Data flow:** `SerialTransport` → `ReaderThread` → `FrameParser` (sync, CRC, all IDs) →
+- **Data flow:** `SerialTransport` or `SimTransport` → `ReaderThread` → `FrameParser` (sync, CRC, all IDs) →
   `StreamRouter` (numpy batch decode per layout) → one `SampleStore` per stream (a versioned
   ring buffer shared between threads). `LiveFeed` then pulls snapshots of the
   visible signals into `TelemetryPlot` at up to 30 FPS, only when there's new data, and

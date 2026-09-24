@@ -58,9 +58,10 @@ core/types.py           TypedDict config shapes, PlotMode, EngineState
 core/config.py          validate_config (single source of truth) + StreamConfigLoader
 core/protocol/          wire format: constants, crc (CRC-8), frame_parser (sync/CRC, all IDs), record_decoder (numpy dtype),
                         router (multi-stream dispatch), handler (single-stream API + command encoding), stats
-core/transport/         Transport protocol, SerialTransport, ReaderThread (blocking reads, no Qt)
+core/transport/         Transport protocol, SerialTransport, SimTransport (the VIRTUAL port), ReaderThread (no Qt)
+core/simulation/        synth (frames from a stream's `sim` config), pid_motor (FF + PI motor model); no Qt
 core/acquisition/       engine (QThread controller), storage (SampleStore, StreamStores), timebase (per-stream time:
-                        wrap/reset/gap -> monotonic ticks; seconds applied at snapshot), virtual (simulator)
+                        wrap/reset/gap -> monotonic ticks; seconds applied at snapshot)
 ui/main_window.py       composition, thread setup, signal wiring
 ui/charts/              TelemetryPlot (pyqtgraph), LiveFeed (pulls store snapshots)
 ui/panels/              connection, stream select, PID, IMU, timing, signal visibility
@@ -78,7 +79,7 @@ CRC-8 uses poly 0x07 and init 0x00. The payload is the packed struct of `frame.f
 in order, with the configured endianness. `LEN` ≤ 255. A stream's X axis is its
 `time.field` (default `loop_cntr`), unwrapped, times `time.scale_s` (ADR-0003). The MCU's
 loop period is config, not a UI knob. Host → MCU PID commands use IDs `0x10` (single motor) and
-`0x11` (both), with layouts hard-coded in `core/protocol/handler.py`.
+`0x11` (both), with layouts in `core/protocol/constants.py` (the simulator parses them too).
 Changing any of this is a firmware-visible change. Call it out explicitly.
 
 ## Architecture rules
@@ -88,7 +89,7 @@ Changing any of this is a firmware-visible change. Call it out explicitly.
   methods or read engine attributes from GUI code. The engine owns its state machine
   (`configure_streams`, `select_stream`, `start_working`, `stop_working`), and the GUI
   mirrors `state_changed`. Every configured stream is decoded all the time, so
-  `select_stream(key)` is a view choice: it only retargets the virtual device. The GUI
+  `select_stream(key)` is a view choice: it only retargets the simulator (`SimTransport`). The GUI
   re-looks-up stores after `streams_configured`.
   Bytes are read and parsed on a `ReaderThread`; parser and storage state are shared with
   the engine thread only under `TelemetryEngine._data_lock`. Keep those sections short.
