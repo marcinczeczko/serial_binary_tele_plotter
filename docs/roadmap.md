@@ -34,7 +34,7 @@ These let every later change be checked and measured.
   `QT_QPA_PLATFORM=offscreen`. Pure-logic tests keep running without Qt. Document
   `-p no:pytest-qt` for machines without `libEGL`.
   *Done when:* one real `QThread` + queued-signal engine test passes in CI.
-- [ ] **R0.4 CI** (T3). Workflow added; tick once it's green on `main`
+- [x] **R0.4 CI** (T3)
   GitHub Actions on ubuntu: `uv sync`, `ruff check`, `ruff format --check`, `mypy`,
   `pytest` (with `libegl1 libxkbcommon0 libfontconfig1 libdbus-1-3` installed).
   *Done when:* CI is green on `main`.
@@ -51,18 +51,20 @@ These let every later change be checked and measured.
 
 No architectural change. Each item is a focused PR.
 
-- [ ] **R1.1 Fix the RX overflow guard** (C1)
+- [x] **R1.1 Fix the RX overflow guard** (C1)
   Parse first. Then trim only unsynchronised garbage, capping the buffer at
   `max(64 KiB, 4 × max_frame)` and keeping the tail that could still start a frame. Count
   every discarded byte.
+  *Scope note:* no explicit cap was needed. The parser already guarantees the buffer holds
+  less than one max-size frame (261 B) after each pass, and a test asserts that.
   *Done when:* the R0.1 xfail test passes (xfail removed). 5000 B chunks decode 20000/20000.
-- [ ] **R1.2 Enable downsampling for real** (P1)
+- [x] **R1.2 Enable downsampling for real** (P1)
   `setDownsampling(auto=True, mode="peak")`. Add a Qt-lane test asserting
   `plot.downsampleMode() == (…, True, "peak")`.
-- [ ] **R1.3 1 px pens by default** (P4)
+- [x] **R1.3 1 px pens by default** (P4)
   Default `width=1`. The editor keeps the width from the file instead of forcing 2 (C4c).
   Expose width in the editor.
-- [ ] **R1.4 Link statistics** (C13)
+- [x] **R1.4 Link statistics** (C13)
   `ProtocolHandler.stats`: bytes, frames per stream ID, header-CRC fails, payload-CRC fails,
   size mismatches, unknown IDs, discarded bytes, loop_cntr gaps. The engine emits a stats
   snapshot about once per second, and the status bar shows rates and error counters.

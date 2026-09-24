@@ -26,6 +26,8 @@ class SignalDataManager:
         # Circular buffer state
         self._write_index: int = 0
         self._count: int = 0
+        # Monotonic count of stored samples (never reset); used for rate reporting.
+        self.total_stored: int = 0
 
     def configure(self, signals_cfg: SignalsConfig) -> None:
         """Initializes buffers based on configuration."""
@@ -79,6 +81,7 @@ class SignalDataManager:
             self._signal_arrays[sig_id][idx] = float(val)
         self._write_index = (idx + 1) % self.max_samples
         self._count = min(self._count + 1, self.max_samples)
+        self.total_stored += 1
 
     def _logical_indices(self) -> np.ndarray:
         """Indices for valid samples in chronological order (oldest to newest)."""

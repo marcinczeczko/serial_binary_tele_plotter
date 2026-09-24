@@ -12,6 +12,7 @@ It acts as a Controller, orchestrating the flow of data between:
 from __future__ import annotations
 
 import logging
+import time
 
 import serial
 from PyQt6 import QtCore
@@ -19,6 +20,7 @@ from PyQt6 import QtCore
 from core.acquisition.storage import SignalDataManager
 from core.acquisition.virtual import VirtualDevice
 from core.protocol.handler import ProtocolHandler
+from core.protocol.stats import LinkStats, make_link_report
 from core.types import EngineState, SignalsConfig, StreamConfig
 
 logger = logging.getLogger(__name__)
@@ -30,6 +32,7 @@ class TelemetryEngine(QtCore.QObject):
     """
 
     data_ready = QtCore.pyqtSignal(dict)
+    link_stats = QtCore.pyqtSignal(dict)  # LinkReport, ~1 Hz while running
     status_msg = QtCore.pyqtSignal(str)
     connection_failed = QtCore.pyqtSignal(str)
 
@@ -60,6 +63,14 @@ class TelemetryEngine(QtCore.QObject):
         # so reducing from 1 ms eliminates ~900 wasted syscall wakeups/sec with no latency loss.
         self.serial_timer.setInterval(10)
 
+        # --- Link statistics (C13) ---
+        self.stats_timer: QtCore.QTimer = QtCore.QTimer(self)
+        self.stats_timer.timeout.connect(self._emit_link_stats)
+        self.stats_timer.setInterval(1000)
+        self._stats_prev: LinkStats = LinkStats()
+        self._stats_prev_samples: int = 0
+        self._stats_prev_ts: float = 0.0
+
     @QtCore.pyqtSlot(str, int)
     def start_working(self, port_name: str, baudrate: int) -> None:
         """Initiates the data acquisition process."""
@@ -69,6 +80,10 @@ class TelemetryEngine(QtCore.QObject):
 
         # Clear buffers to prevent "time travel" artifacts
         self.data_mgr.clear_all()
+        self.protocol.reset()
+        self._stats_prev = self.protocol.stats.snapshot()
+        self._stats_prev_samples = self.data_mgr.total_stored
+        self._stats_prev_ts = time.monotonic()
         self.state = EngineState.RUNNING
 
         if port_name == "VIRTUAL":
@@ -87,12 +102,14 @@ class TelemetryEngine(QtCore.QObject):
                 return
 
         self.gui_update_timer.start()
+        self.stats_timer.start()
 
     @QtCore.pyqtSlot()
     def stop_working(self) -> None:
         """Safely stops all operations."""
         self.gui_update_timer.stop()
         self.serial_timer.stop()
+        self.stats_timer.stop()
 
         if self.state != EngineState.RUNNING:
             return
@@ -143,6 +160,17 @@ class TelemetryEngine(QtCore.QObject):
         data = self.data_mgr.get_plot_data(self.sample_period_s)
         if data:
             self.data_ready.emit(data)
+
+    def _emit_link_stats(self) -> None:
+        """Periodic task (stats_timer): emits counters and rates since the previous report."""
+        now = time.monotonic()
+        cur = self.protocol.stats.snapshot()
+        samples = self.data_mgr.total_stored
+        report = make_link_report(
+            self._stats_prev, cur, samples - self._stats_prev_samples, now - self._stats_prev_ts
+        )
+        self._stats_prev, self._stats_prev_samples, self._stats_prev_ts = cur, samples, now
+        self.link_stats.emit(report)
 
     @QtCore.pyqtSlot(float, int)
     def update_time_config(self, period_ms: float, max_samples: int) -> None:

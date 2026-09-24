@@ -14,6 +14,7 @@ import logging
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.acquisition.engine import TelemetryEngine
+from core.protocol.stats import LinkReport, format_link_report
 from core.types import EngineState, StreamConfig
 from ui.charts.telemetry_plot import TelemetryPlot
 from ui.config.tab import ConfiguratorTab
@@ -86,8 +87,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.lbl_status = QtWidgets.QLabel("Ready")
         self.lbl_cursor = QtWidgets.QLabel("")
+        self.lbl_link = QtWidgets.QLabel("")
 
         self.status_bar.addWidget(self.lbl_status)
+        self.status_bar.addPermanentWidget(self.lbl_link)
         self.status_bar.addPermanentWidget(self.lbl_cursor)
 
         # --- Engine & Thread Initialization ---
@@ -123,6 +126,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.engine.data_ready.connect(self.plot.on_data_ready)
         self.engine.status_msg.connect(self.lbl_status.setText)
         self.engine.connection_failed.connect(self._handle_connection_failed)
+        self.engine.link_stats.connect(self._on_link_stats)
 
         # 6. Interactivity: Plot -> UI
         self.plot.cursor_moved.connect(self.lbl_cursor.setText)
@@ -251,6 +255,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_pause_state(False, update_status=False)
         self.lbl_status.setText(message)
         self.lbl_status.setStyleSheet("color: #F44336; font-weight: bold;")
+
+    def _on_link_stats(self, report: LinkReport) -> None:
+        text, tooltip, has_problems = format_link_report(report)
+        self.lbl_link.setText(text)
+        self.lbl_link.setToolTip(tooltip)
+        self.lbl_link.setStyleSheet("color: #FFB74D;" if has_problems else "")
 
     def _handle_pause(self, paused: bool) -> None:
         """

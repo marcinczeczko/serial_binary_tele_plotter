@@ -158,7 +158,7 @@
                     "visible": true,
                     "line": {
                         "style": "dotted",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_delta_ticks": {
@@ -168,7 +168,7 @@
                     "visible": false,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_setpoint": {
@@ -178,7 +178,7 @@
                     "visible": true,
                     "line": {
                         "style": "dashed",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_measurement": {
@@ -188,7 +188,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_measurementRaw": {
@@ -198,7 +198,7 @@
                     "visible": false,
                     "line": {
                         "style": "dotted",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_error": {
@@ -208,7 +208,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_integral": {
@@ -218,7 +218,7 @@
                     "visible": false,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_u_ff": {
@@ -228,7 +228,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_u_pi": {
@@ -238,7 +238,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_u_virtual": {
@@ -248,7 +248,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_u_sat": {
@@ -258,7 +258,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_pTerm": {
@@ -268,7 +268,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_iTerm": {
@@ -278,7 +278,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_aw_term": {
@@ -288,7 +288,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_outputRaw": {
@@ -298,7 +298,7 @@
                     "visible": false,
                     "line": {
                         "style": "dotted",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_output": {
@@ -308,7 +308,7 @@
                     "visible": true,
                     "line": {
                         "style": "dotted",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_pwm_cmd": {
@@ -318,7 +318,7 @@
                     "visible": true,
                     "line": {
                         "style": "dotted",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_target_setpoint": {
@@ -328,7 +328,7 @@
                     "visible": true,
                     "line": {
                         "style": "dotted",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_delta_ticks": {
@@ -338,7 +338,7 @@
                     "visible": false,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_setpoint": {
@@ -348,7 +348,7 @@
                     "visible": true,
                     "line": {
                         "style": "dashed",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_measurement": {
@@ -358,7 +358,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_measurementRaw": {
@@ -368,7 +368,7 @@
                     "visible": false,
                     "line": {
                         "style": "dotted",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_error": {
@@ -378,7 +378,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_integral": {
@@ -388,7 +388,7 @@
                     "visible": false,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_u_ff": {
@@ -398,7 +398,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_u_pi": {
@@ -408,7 +408,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_u_virtual": {
@@ -418,7 +418,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_u_sat": {
@@ -428,7 +428,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_iTerm": {
@@ -438,7 +438,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_pTerm": {
@@ -448,7 +448,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_aw_term": {
@@ -458,7 +458,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_outputRaw": {
@@ -468,7 +468,7 @@
                     "visible": false,
                     "line": {
                         "style": "dotted",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_output": {
@@ -478,7 +478,7 @@
                     "visible": true,
                     "line": {
                         "style": "dotted",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_pwm_cmd": {
@@ -488,7 +488,7 @@
                     "visible": true,
                     "line": {
                         "style": "dotted",
-                        "width": 2
+                        "width": 1
                     }
                 }
             }
@@ -651,7 +651,7 @@
                     "visible": true,
                     "line": {
                         "style": "dotted",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_setpoint": {
@@ -661,7 +661,7 @@
                     "visible": true,
                     "line": {
                         "style": "dashed",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_measurement": {
@@ -671,7 +671,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_integral": {
@@ -681,7 +681,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_u_ff": {
@@ -691,7 +691,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_u_pi": {
@@ -701,7 +701,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_u_virtual": {
@@ -711,7 +711,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_u_sat": {
@@ -721,7 +721,7 @@
                     "visible": true,
                     "line": {
                         "style": "dashed",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_target_setpoint": {
@@ -731,7 +731,7 @@
                     "visible": true,
                     "line": {
                         "style": "dotted",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_setpoint": {
@@ -741,7 +741,7 @@
                     "visible": true,
                     "line": {
                         "style": "dashed",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_measurement": {
@@ -751,7 +751,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_integral": {
@@ -761,7 +761,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_u_ff": {
@@ -771,7 +771,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_u_pi": {
@@ -781,7 +781,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_u_virtual": {
@@ -791,7 +791,7 @@
                     "visible": true,
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "right_u_sat": {
@@ -801,7 +801,7 @@
                     "visible": true,
                     "line": {
                         "style": "dashed",
-                        "width": 2
+                        "width": 1
                     }
                 },
                 "left_pwm_cmd": {
@@ -811,7 +811,7 @@
                     "visible": true,
                     "line": {
                         "style": "dashed",
-                        "width": 2
+                        "width": 1
                     }
                 }
             }
@@ -876,7 +876,7 @@
                     "color": "#EF5350",
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     },
                     "y_range": {
                         "min": -2.0,
@@ -891,7 +891,7 @@
                     "color": "#66BB6A",
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     },
                     "y_range": {
                         "min": -2.0,
@@ -906,7 +906,7 @@
                     "color": "#42A5F5",
                     "line": {
                         "style": "solid",
-                        "width": 2
+                        "width": 1
                     },
                     "y_range": {
                         "min": -2.0,

@@ -16,7 +16,7 @@ import pytest
 
 from core.protocol.constants import MAGIC_0, MAGIC_1
 from core.protocol.crc import calculate_crc8
-from core.protocol.handler import ProtocolHandler
+from core.protocol.handler import MAX_FRAME_LEN, ProtocolHandler
 from core.types import StreamConfig, StreamFrameField
 
 STREAM_ID = 7
@@ -92,10 +92,6 @@ def test_byte_by_byte_decodes_every_frame() -> None:
     assert feed(make_handler(), STREAM_BYTES, iter(lambda: 1, 0)) == ALL_EXPECTED
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="C1: reads larger than 4 KiB are discarded unparsed (fixed by roadmap R1.1)",
-)
 @pytest.mark.parametrize("seed", range(3))
 def test_large_chunks_decode_every_frame(seed: int) -> None:
     assert feed(make_handler(), STREAM_BYTES, random_sizes(seed, 4097, 16384)) == ALL_EXPECTED
@@ -196,3 +192,78 @@ def test_big_endian_stream() -> None:
     }
     frame = build_frame(STREAM_ID, struct.pack(">Ifh", 9, 4.5, -7))
     assert feed(make_handler(cfg), frame, [len(frame)]) == [{"loop_cntr": 9, "a": 4.5, "b": -7}]
+
+
+# --- Buffer bound (C1 / R1.1) ---
+
+
+def test_whole_stream_in_one_read() -> None:
+    handler = make_handler()
+    assert feed(handler, STREAM_BYTES, [len(STREAM_BYTES)]) == ALL_EXPECTED
+    assert handler.rx_buffer == bytearray()
+
+
+def test_buffer_stays_bounded_on_endless_garbage() -> None:
+    rng = random.Random(8)
+    handler = make_handler()
+    for _ in range(50):
+        handler.add_data(bytes(rng.randrange(256) for _ in range(4000)))
+        list(handler.process_available_frames())
+        assert len(handler.rx_buffer) < MAX_FRAME_LEN
+    # still in sync afterwards (a frame may be swallowed by a fake header straddling the edge)
+    tail = b"".join(data_frame(i) for i in range(10))
+    handler.add_data(tail)
+    assert list(handler.process_available_frames())[-5:] == ALL_EXPECTED[5:10]
+
+
+# --- Link statistics (C13 / R1.4) ---
+
+
+def test_stats_clean_stream() -> None:
+    handler = make_handler()
+    feed(handler, STREAM_BYTES, random_sizes(9, 1, 5000))
+    st = handler.stats
+    assert st.bytes_rx == len(STREAM_BYTES)
+    assert st.frames_decoded == N_FRAMES
+    assert st.frames_by_id == {STREAM_ID: N_FRAMES}
+    assert st.errors == 0
+    assert st.discarded_bytes == 0
+    assert (st.counter_gaps, st.counter_missing, st.counter_resets) == (0, 0, 0)
+
+
+def test_stats_count_every_failure_kind() -> None:
+    frames = [bytearray(data_frame(i)) for i in range(20)]
+    frames[3][4] ^= 0xFF  # header CRC
+    frames[7][-1] ^= 0xFF  # payload CRC
+    wrong_len = build_frame(STREAM_ID, b"\x00" * 3)
+    other = build_frame(OTHER_STREAM_ID, b"\x01\x02")
+    garbage = b"\x10\x20\x30"
+    data = garbage + b"".join(frames[:10]) + wrong_len + other + b"".join(frames[10:])
+    handler = make_handler()
+    decoded = feed(handler, data, [len(data)])
+    st = handler.stats
+
+    assert len(decoded) == 18
+    assert st.header_crc_errors >= 1
+    assert st.payload_crc_errors == 1
+    assert st.size_mismatches == 1
+    assert st.unknown_id_frames == 1
+    assert st.frames_by_id == {STREAM_ID: 19, OTHER_STREAM_ID: 1}
+    assert st.discarded_bytes >= len(garbage) + 1
+    # frames 3 and 7 are missing from the loop counter sequence
+    assert (st.counter_gaps, st.counter_missing, st.counter_resets) == (2, 2, 0)
+
+
+def test_stats_detect_counter_reset_and_reset_clears() -> None:
+    data = b"".join(data_frame(i) for i in (100, 101, 102, 0, 1))
+    handler = make_handler()
+    feed(handler, data, [len(data)])
+    assert handler.stats.counter_resets == 1
+    assert handler.stats.counter_gaps == 0
+
+    handler.add_data(data_frame(1)[:7])
+    handler.reset()
+    assert handler.rx_buffer == bytearray()
+    assert handler.stats.bytes_rx == 0
+    assert feed(handler, data_frame(5), [100]) == [expected(5)]
+    assert handler.stats.counter_resets == 0

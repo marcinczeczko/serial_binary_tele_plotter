@@ -6,6 +6,30 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-24 — Phase 1, part 1: RX data loss, render speed, link stats (R1.1–R1.4)
+
+- R1.1 (C1): removed the pre-parse "clear if > 4 KiB" guard. The parser already bounds the
+  buffer to under one max frame (261 B) after each pass; a test asserts it. Discarded
+  bytes are now counted. 5000 B reads: **20000/20000 decoded** (was 0). The C1 xfail is removed.
+- R1.4 (C13): `core/protocol/stats.py` (`LinkStats`) counts bytes, frames per ID, header
+  and payload CRC errors, size mismatches, other-ID frames, sync discards, and `loop_cntr`
+  gaps, missing values and resets. The engine emits a `LinkReport` at 1 Hz. The status
+  bar shows rates and errors (orange when there's a problem); the tooltip has the full
+  breakdown. `ProtocolHandler.reset()` runs on connect, so stale bytes from a previous
+  session are dropped.
+- R1.2 (P1): `setDownsampling(auto=True, mode="peak")`. A Qt test asserts auto-downsampling
+  and clip-to-view on curves.
+- R1.3 (P4, C4c): default pen width is 1 px. The editor has a Width column and keeps each
+  signal's width. `streams.json`: the 54 widths of 2 (written by the C4c bug) are now 1.
+  The width part of C4c is fixed. The remaining editor loss (unknown keys such as `group`)
+  stays pinned as a strict xfail for R1.6.
+- R0.4 ticked: CI is green on `main` (run 35976740493).
+- Bench: parse+store 60–67k frames/s vs 65–67k on `main` (same machine, alternating runs;
+  within noise). Snapshot cost is unchanged (P2 is Phase 2).
+- Tests: 63 passed, 1 xfailed with Qt; 58 passed, 6 skipped with `-p no:pytest-qt`.
+
+---
+
 ## 2026-09-24 — Phase 0: safety net (R0.1–R0.6)
 
 - R0.1: `tests/test_protocol_stream.py` covers random chunking, byte-by-byte feeds, garbage
