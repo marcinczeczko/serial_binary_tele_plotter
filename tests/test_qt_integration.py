@@ -20,7 +20,7 @@ from PyQt6 import QtCore  # noqa: E402
 
 from core.acquisition.engine import TelemetryEngine  # noqa: E402
 from core.protocol.stats import LinkReport  # noqa: E402
-from core.types import EngineState, PlotPacketWithBounds, StreamConfig  # noqa: E402
+from core.types import EngineState, StreamConfig  # noqa: E402
 
 pytestmark = pytest.mark.qt
 
@@ -42,28 +42,23 @@ class _Receiver(QtCore.QObject):
 
     def __init__(self) -> None:
         super().__init__()
-        self.packets: list[PlotPacketWithBounds] = []
         self.reports: list[LinkReport] = []
         self.delivery_threads: list[Any] = []
 
     @QtCore.pyqtSlot(dict)
-    def on_data(self, packet: PlotPacketWithBounds) -> None:
-        self.delivery_threads.append(QtCore.QThread.currentThread())
-        self.packets.append(packet)
-
-    @QtCore.pyqtSlot(dict)
     def on_stats(self, report: LinkReport) -> None:
+        self.delivery_threads.append(QtCore.QThread.currentThread())
         self.reports.append(report)
 
 
-def test_engine_in_worker_thread_delivers_packets_to_gui_thread(qtbot: Any) -> None:
+def test_engine_in_worker_thread_fills_shared_store(qtbot: Any) -> None:
     engine = TelemetryEngine(sample_period_ms=5.0, max_samples=500)
     engine.stats_timer.setInterval(100)
     thread = QtCore.QThread()
     engine.moveToThread(thread)
     receiver = _Receiver()
-    engine.data_ready.connect(receiver.on_data)  # auto -> queued (different threads)
-    engine.link_stats.connect(receiver.on_stats)
+    engine.link_stats.connect(receiver.on_stats)  # auto -> queued (different threads)
+    store = engine.store  # shared with the GUI; safe to read from this thread
     thread.start()
     queued = QtCore.Qt.ConnectionType.QueuedConnection
     try:
@@ -81,7 +76,7 @@ def test_engine_in_worker_thread_delivers_packets_to_gui_thread(qtbot: Any) -> N
             QtCore.Q_ARG(int, 115200),
         )
 
-        qtbot.waitUntil(lambda: len(receiver.packets) >= 2, timeout=5000)
+        qtbot.waitUntil(lambda: len(store) >= 10, timeout=5000)
         qtbot.waitUntil(lambda: any(r["samples_per_s"] > 0 for r in receiver.reports), timeout=5000)
 
         assert engine.thread() is thread
@@ -90,11 +85,11 @@ def test_engine_in_worker_thread_delivers_packets_to_gui_thread(qtbot: Any) -> N
         gui_thread = app.thread()
         assert all(t is gui_thread for t in receiver.delivery_threads)
 
-        packet = receiver.packets[-1]
-        assert set(packet["signals"]) == {"ax", "gz"}
-        assert len(packet["time"]) >= 2
-        assert len(packet["time"]) == len(packet["signals"]["ax"])
-        assert packet["time"][-1] > packet["time"][0]
+        snap = store.snapshot(["ax"], None, 0.005)
+        assert snap is not None
+        assert list(snap.signals) == ["ax"]
+        assert len(snap.time) == len(snap.signals["ax"]) >= 10
+        assert snap.time[-1] > snap.time[0]
     finally:
         QtCore.QMetaObject.invokeMethod(
             engine, "stop_working", QtCore.Qt.ConnectionType.BlockingQueuedConnection
@@ -209,7 +204,9 @@ def test_main_window_switches_stream_while_running(qtbot: Any, monkeypatch: Any)
 
     imu_index = win.panel.payload_combo.findData("imu_6axis")
     win.panel.payload_combo.setCurrentIndex(imu_index)
-    imu_signals = set(_load_stream("imu_6axis")["signals"])
+    imu_signals = {
+        k for k, v in _load_stream("imu_6axis")["signals"].items() if v.get("visible", True)
+    }
 
     def receiving_imu() -> bool:
         packet = win.plot.last_packet
@@ -386,8 +383,7 @@ def test_plot_handles_signals_without_data(qtbot: Any) -> None:
         }
     )
     t = np.arange(10, dtype=float)
-    plot._last_render_ts = -1.0
-    plot.on_data_ready(
+    plot.show_packet(
         {
             "time": t,
             "signals": {"real": np.linspace(-2.0, 3.0, 10), "ghost": np.full(10, np.nan)},
@@ -424,8 +420,6 @@ def test_engine_thread_reads_transport_and_handles_disconnect(qtbot: Any) -> Non
     engine.transport_factory = lambda port, baud: transport
     thread = QtCore.QThread()
     engine.moveToThread(thread)
-    receiver = _Receiver()
-    engine.data_ready.connect(receiver.on_data)
     failures: list[str] = []
     engine.connection_failed.connect(failures.append)
     thread.start()
@@ -446,3 +440,77 @@ def test_engine_thread_reads_transport_and_handles_disconnect(qtbot: Any) -> Non
     assert engine.state == EngineState.CONFIGURED
     assert transport.closed
     assert engine.protocol.stats.frames_decoded == 300
+
+
+# --- Live feed: GUI pulls from the store (R2.6) ---
+
+
+def _feed_setup(qtbot: Any) -> tuple[Any, Any, Any]:
+    from core.acquisition.storage import SampleStore
+    from ui.charts.live_feed import LiveFeed
+    from ui.charts.telemetry_plot import TelemetryPlot
+
+    signals: dict[str, Any] = {
+        "a": {"label": "A", "field": "a", "color": "#fff"},
+        "b": {"label": "B", "field": "b", "color": "#f00", "visible": False},
+    }
+    store = SampleStore(1000)
+    store.configure(signals)
+    plot = TelemetryPlot()
+    qtbot.addWidget(plot)
+    plot.configure_signals(signals)
+    feed = LiveFeed(store, plot, lambda: 0.01)
+    feed.timer.stop()  # drive ticks by hand
+    return store, plot, feed
+
+
+def _frames_ab(start: int, n: int) -> list[dict[str, float]]:
+    return [{"loop_cntr": i, "a": float(i), "b": -float(i)} for i in range(start, start + n)]
+
+
+def test_live_feed_pulls_only_visible_signals_and_only_when_changed(qtbot: Any) -> None:
+    store, plot, feed = _feed_setup(qtbot)
+    drawn: list[Any] = []
+    original = plot.show_packet
+
+    def recording_show(packet: Any) -> None:
+        drawn.append(packet)
+        original(packet)
+
+    plot.show_packet = recording_show
+
+    feed.tick()
+    assert drawn == []  # empty store
+    store.append(_frames_ab(0, 50))
+    feed.tick()
+    feed.tick()  # nothing new: no second draw
+    assert len(drawn) == 1
+    assert list(drawn[0]["signals"]) == ["a"]  # "b" is hidden: not copied
+
+    plot.set_signal_visible("b", True)
+    feed.invalidate()
+    feed.tick()
+    assert list(drawn[-1]["signals"]) == ["a", "b"]
+
+
+def test_pause_freezes_all_signals_while_acquisition_continues(qtbot: Any) -> None:
+    store, plot, feed = _feed_setup(qtbot)
+    store.append(_frames_ab(0, 20))
+    feed.tick()
+
+    plot.set_paused(True, feed.freeze())
+    store.append(_frames_ab(20, 30))
+    feed.tick()  # ignored while paused
+
+    frozen = plot.analysis_packet
+    assert frozen is not None
+    assert set(frozen["signals"]) == {"a", "b"}  # hidden "b" included for analysis
+    assert frozen["time"][-1] == 19 * 0.01
+    b_curve = plot.signal_views["b"]["curve"]
+    assert len(b_curve.yData) == 20  # hidden curve has data if it is shown while paused
+
+    plot.set_paused(False)
+    feed.invalidate()
+    feed.tick()
+    assert plot.last_packet is not None
+    assert plot.last_packet["time"][-1] == 49 * 0.01

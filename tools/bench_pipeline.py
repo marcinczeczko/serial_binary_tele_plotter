@@ -2,10 +2,11 @@
 Acquisition pipeline micro-benchmark.
 
 Measures the Qt-free hot paths so performance work can be compared before/after:
-  1. parse + store throughput (ProtocolHandler -> SignalDataManager) at a typical read size
+  1. parse + store throughput (ProtocolHandler -> SampleStore) at a typical read size
   2. decode ratio for large reads (regression guard for review finding C1)
   3. CRC-8 cost per frame
-  4. GUI snapshot cost (SignalDataManager.get_plot_data) for several buffer sizes
+  4. GUI snapshot cost (SampleStore.snapshot) for several buffer sizes: all signals, only
+     the visible ones (what the live feed asks for), and an idle tick (nothing new)
 
 Usage (from the repository root):
     uv run python tools/bench_pipeline.py [--config streams.json] [--stream pid]
@@ -23,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.acquisition.storage import SignalDataManager  # noqa: E402
+from core.acquisition.storage import SampleStore  # noqa: E402
 from core.config import StreamConfigLoader  # noqa: E402
 from core.protocol.constants import MAGIC_0, MAGIC_1, STRUCT_TYPE_MAP  # noqa: E402
 from core.protocol.crc import calculate_crc8  # noqa: E402
@@ -33,6 +34,7 @@ from core.types import StreamConfig  # noqa: E402
 N_FRAMES = 20_000
 SNAPSHOT_SIZES = (2_000, 20_000, 100_000)
 SNAPSHOT_REPEATS = 10
+VISIBLE_SIGNALS = 6  # a typical number of traces on screen at once
 
 
 def build_stream(cfg: StreamConfig, n: int) -> tuple[bytes, int]:
@@ -56,34 +58,46 @@ def build_stream(cfg: StreamConfig, n: int) -> tuple[bytes, int]:
 def parse_and_store(cfg: StreamConfig, blob: bytes, chunk: int) -> tuple[int, float]:
     handler = ProtocolHandler()
     handler.configure(cfg)
-    store = SignalDataManager(2_000)
+    store = SampleStore(2_000)
     store.configure(cfg.get("signals", {}))
     decoded = 0
     t0 = time.perf_counter()
     for off in range(0, len(blob), chunk):
         handler.add_data(blob[off : off + chunk])
-        for frame in handler.process_available_frames():
-            store.store_frame(frame)
-            decoded += 1
+        decoded += store.append(list(handler.process_available_frames()))
     return decoded, time.perf_counter() - t0
 
 
-def bench_snapshot(cfg: StreamConfig, max_samples: int) -> tuple[float, float]:
-    """Returns (ms per get_plot_data call, MB per packet) for a full buffer."""
-    store = SignalDataManager(max_samples)
-    store.configure(cfg.get("signals", {}))
+def bench_snapshot(
+    cfg: StreamConfig, max_samples: int, visible: int | None
+) -> tuple[float, float, float]:
+    """
+    Returns (ms per snapshot, MB per snapshot, us per idle tick) for a full, wrapped buffer.
+    `visible` limits the copy to the first N signals (None = all).
+    """
+    store = SampleStore(max_samples)
+    signals = cfg.get("signals", {})
+    store.configure(signals)
     frame = {f["name"]: 1.0 for f in cfg["frame"]["fields"]}
-    for i in range(max_samples + 17):  # wrap once so the logical start is not index 0
+    batch = []
+    for i in range(max_samples + 17):  # wrap once so the window is not at index 0
         frame["loop_cntr"] = float(i)
-        store.store_frame(frame)
+        batch.append(dict(frame))
+    store.append(batch)
+    del batch  # don't let the fill data skew the timed allocations
+    ids = list(signals)[:visible] if visible is not None else None
     t0 = time.perf_counter()
-    packet = None
+    snap = None
     for _ in range(SNAPSHOT_REPEATS):
-        packet = store.get_plot_data(0.001)
+        snap = store.snapshot(ids, None, 0.001)
     elapsed = (time.perf_counter() - t0) / SNAPSHOT_REPEATS
-    assert packet is not None
-    mb = (packet["time"].nbytes + sum(a.nbytes for a in packet["signals"].values())) / 1e6
-    return elapsed * 1e3, mb
+    assert snap is not None
+    mb = (snap.time.nbytes + sum(a.nbytes for a in snap.signals.values())) / 1e6
+    t0 = time.perf_counter()
+    for _ in range(1000):
+        store.snapshot(ids, snap.version, 0.001)  # nothing changed -> None
+    idle_us = (time.perf_counter() - t0) / 1000 * 1e6
+    return elapsed * 1e3, mb, idle_us
 
 
 def main() -> int:
@@ -113,8 +127,12 @@ def main() -> int:
     print(f"crc8 on {len(payload)} B payload:    {crc_us:6.2f} us")
 
     for size in SNAPSHOT_SIZES:
-        ms, mb = bench_snapshot(cfg, size)
-        print(f"get_plot_data @ {size:>7,} samples: {ms:7.2f} ms/tick  {mb:6.1f} MB/packet")
+        for visible, label in ((None, f"all {n_signals}"), (VISIBLE_SIGNALS, "visible 6")):
+            ms, mb, idle_us = bench_snapshot(cfg, size, visible)
+            print(
+                f"snapshot {label:>9} @ {size:>7,} samples: {ms:7.2f} ms  {mb:6.1f} MB"
+                f"   idle tick {idle_us:5.1f} us"
+            )
     return 0
 
 

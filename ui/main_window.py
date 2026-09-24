@@ -15,9 +15,11 @@ from pathlib import Path
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.acquisition.engine import TelemetryEngine
+from core.acquisition.storage import SampleStore
 from core.config import DEFAULT_CONFIG_PATH, StreamConfigLoader
 from core.protocol.stats import LinkReport, format_link_report
 from core.types import EngineState, StreamConfig
+from ui.charts.live_feed import LiveFeed
 from ui.charts.telemetry_plot import TelemetryPlot
 from ui.config.tab import ConfiguratorTab
 from ui.panels.container import MainControlPanel
@@ -106,7 +108,14 @@ class MainWindow(QtWidgets.QMainWindow):
         initial_period = self.panel.get_initial_sample_period()
         initial_samples = self.panel.get_initial_sample_count()
 
-        self.engine: TelemetryEngine = TelemetryEngine(initial_period, initial_samples)
+        # The store is shared: the engine's reader thread writes it, and the GUI pulls from it.
+        self.store = SampleStore(initial_samples)
+        self.engine: TelemetryEngine = TelemetryEngine(
+            initial_period, initial_samples, store=self.store
+        )
+        self.live_feed = LiveFeed(
+            self.store, self.plot, lambda: self.panel.time_panel.get_period() / 1000.0, parent=self
+        )
 
         self.engine_thread: QtCore.QThread = QtCore.QThread(self)
         self.engine.moveToThread(self.engine_thread)
@@ -129,9 +138,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # 3. Visuals: Panel -> Plot
         self.panel.signal_visibility_changed.connect(self.plot.set_signal_visible)
+        self.panel.signal_visibility_changed.connect(lambda *_: self.live_feed.invalidate())
+        self.panel.time_config_changed.connect(lambda *_: self.live_feed.invalidate())
 
-        # 4. Data Flow: Engine -> Plot/UI
-        self.engine.data_ready.connect(self.plot.on_data_ready)
+        # 4. Engine -> UI (small signals only; plot data is pulled by LiveFeed)
         self.engine.status_msg.connect(self.lbl_status.setText)
         self.engine.connection_failed.connect(self._handle_connection_failed)
         self.engine.state_changed.connect(self._on_engine_state_changed)
@@ -184,6 +194,7 @@ class MainWindow(QtWidgets.QMainWindow):
         (and restarts if it was running) on its own thread via `select_stream`.
         """
         self.plot.configure_signals(stream_cfg["signals"])
+        self.live_feed.invalidate()
         QtCore.QMetaObject.invokeMethod(
             self.engine,
             "select_stream",
@@ -241,23 +252,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_pause_state(paused, update_status=True)
 
     def _set_pause_state(self, paused: bool, update_status: bool) -> None:
-        if paused:
-            self._disconnect_data_ready()
-        else:
-            self._ensure_data_ready_connected()
-        self.plot.set_paused(paused)
+        # Pausing freezes a copy of *all* signals; acquisition keeps running underneath.
+        self.plot.set_paused(paused, self.live_feed.freeze() if paused else None)
+        if not paused:
+            self.live_feed.invalidate()
         if update_status:
             self.lbl_status.setText("PAUSED" if paused else "Connected")
-
-    def _disconnect_data_ready(self) -> None:
-        try:
-            self.engine.data_ready.disconnect(self.plot.on_data_ready)
-        except TypeError:
-            pass
-
-    def _ensure_data_ready_connected(self) -> None:
-        self._disconnect_data_ready()
-        self.engine.data_ready.connect(self.plot.on_data_ready)
 
     def closeEvent(self, event: QtGui.QCloseEvent | None) -> None:
         """

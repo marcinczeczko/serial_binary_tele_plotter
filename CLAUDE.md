@@ -58,9 +58,9 @@ core/types.py           TypedDict config shapes, PlotMode, EngineState
 core/config.py          validate_config (single source of truth) + StreamConfigLoader
 core/protocol/          wire format: constants, crc (CRC-8 poly 0x07), decoder (struct), handler (sync/CRC/encode), stats (link counters)
 core/transport/         Transport protocol, SerialTransport, ReaderThread (blocking reads, no Qt)
-core/acquisition/       engine (QThread controller), storage (numpy ring), virtual (simulator)
+core/acquisition/       engine (QThread controller), storage (SampleStore: versioned ring), virtual (simulator)
 ui/main_window.py       composition, thread setup, signal wiring
-ui/charts/              TelemetryPlot (pyqtgraph)
+ui/charts/              TelemetryPlot (pyqtgraph), LiveFeed (pulls store snapshots)
 ui/panels/              connection, stream select, PID, IMU, timing, signal visibility
 ui/config/              in-app streams.json editor
 tests/                  pytest: pure logic, stubbed-Qt legacy tests, `qt`-marked real-Qt tests
@@ -87,9 +87,10 @@ Changing any of this is a firmware-visible change. Call it out explicitly.
   Bytes are read and parsed on a `ReaderThread`; parser and storage state are shared with
   the engine thread only under `TelemetryEngine._data_lock`. Keep those sections short.
   Reader failures reach the engine thread through a queued signal, never a direct call.
-- **Bulk data doesn't belong in the Qt event queue.** Today the engine pushes snapshots
-  (P2/P3). The target design (ADR-0002) has the GUI pull from a versioned store. New code
-  should move in that direction, not add more push paths.
+- **Bulk data doesn't belong in the Qt event queue.** The reader thread appends to the
+  shared `SampleStore` (own lock, versioned). The GUI's `LiveFeed` pulls snapshots of the
+  *visible* signals at up to 30 FPS, and only when the version changed. Don't add signals
+  that carry sample arrays.
 - **The protocol and decoding layers (`core/protocol`) must not import Qt.** Keep them
   pure and unit-testable.
 - **Config-driven over hard-coded.** New stream or command shapes belong in
