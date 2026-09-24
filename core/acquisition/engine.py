@@ -5,12 +5,13 @@ The engine runs in its own QThread and orchestrates:
 1. Input: a `Transport` drained by a dedicated `ReaderThread` (blocking reads, P5), or
    the virtual simulator.
 2. Protocol: parsing and decoding. This happens on the reader thread under `_data_lock`.
-3. Storage: numpy ring buffers.
-4. GUI output: periodic snapshots and link statistics.
+3. Storage: a `SampleStore` (versioned ring buffer). The GUI pulls from it at its own
+   frame rate (ADR-0002, R2.6), so the engine never pushes bulk data through Qt.
+4. GUI output: state, status and link statistics (small signals only).
 
-Threads: the reader thread writes the parser and storage under `_data_lock`, and the
-engine thread reads them under the same lock. Lock sections are short (one chunk's
-worth of frames, or one snapshot copy).
+Threads: the reader thread uses the parser under `_data_lock`, and the engine thread
+takes the same lock for stats and reconfiguration. The store has its own lock and is
+safe to call from any thread.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from collections.abc import Callable
 
 from PyQt6 import QtCore
 
-from core.acquisition.storage import SignalDataManager
+from core.acquisition.storage import SampleStore
 from core.acquisition.virtual import VirtualDevice
 from core.protocol.handler import ProtocolHandler
 from core.protocol.stats import LinkStats, make_link_report
@@ -41,7 +42,6 @@ class TelemetryEngine(QtCore.QObject):
     switch, are made here on the engine thread. The GUI only mirrors `state_changed`.
     """
 
-    data_ready = QtCore.pyqtSignal(dict)
     state_changed = QtCore.pyqtSignal(object)  # EngineState
     link_stats = QtCore.pyqtSignal(dict)  # LinkReport, ~1 Hz while running
     status_msg = QtCore.pyqtSignal(str)
@@ -49,11 +49,14 @@ class TelemetryEngine(QtCore.QObject):
     # Emitted from the reader thread; delivered to `_on_reader_failed` on the engine thread.
     _reader_failed = QtCore.pyqtSignal(str)
 
-    def __init__(self, sample_period_ms: float, max_samples: int) -> None:
+    def __init__(
+        self, sample_period_ms: float, max_samples: int, store: SampleStore | None = None
+    ) -> None:
         super().__init__()
         self.sample_period_s: float = sample_period_ms / 1000.0
 
-        self.data_mgr: SignalDataManager = SignalDataManager(max_samples)
+        # Shared with the GUI, which reads snapshots from it directly (thread-safe).
+        self.store: SampleStore = store if store is not None else SampleStore(max_samples)
         self.protocol: ProtocolHandler = ProtocolHandler()
 
         # 'parent=self' is crucial here! It ensures that when TelemetryEngine is moved
@@ -72,11 +75,6 @@ class TelemetryEngine(QtCore.QObject):
         # Last successfully opened connection; used to restart after a stream switch.
         self._port: str | None = None
         self._baud: int = 0
-
-        # --- GUI Update Timer ---
-        self.gui_update_timer: QtCore.QTimer = QtCore.QTimer(self)
-        self.gui_update_timer.timeout.connect(self._emit_buffered_data)
-        self.gui_update_timer.setInterval(100)  # ~10 FPS
 
         # --- Link statistics (C13) ---
         self.stats_timer: QtCore.QTimer = QtCore.QTimer(self)
@@ -98,10 +96,10 @@ class TelemetryEngine(QtCore.QObject):
 
         # Clear buffers to prevent "time travel" artifacts
         with self._data_lock:
-            self.data_mgr.clear_all()
+            self.store.clear()
             self.protocol.reset()
             self._stats_prev = self.protocol.stats.snapshot()
-            self._stats_prev_samples = self.data_mgr.total_stored
+            self._stats_prev_samples = self.store.total_stored
         self._stats_prev_ts = time.monotonic()
 
         if port_name == "VIRTUAL":
@@ -119,7 +117,6 @@ class TelemetryEngine(QtCore.QObject):
 
         self._port, self._baud = port_name, baudrate
         self._set_state(EngineState.RUNNING)
-        self.gui_update_timer.start()
         self.stats_timer.start()
         self.status_msg.emit(f"Connected to {port_name}")
         # Start reading only once RUNNING, so an immediate failure is never ignored.
@@ -130,7 +127,6 @@ class TelemetryEngine(QtCore.QObject):
     @QtCore.pyqtSlot()
     def stop_working(self) -> None:
         """Safely stops all operations."""
-        self.gui_update_timer.stop()
         self.stats_timer.stop()
 
         if self.state != EngineState.RUNNING:
@@ -185,12 +181,11 @@ class TelemetryEngine(QtCore.QObject):
         """Reader-thread callback: parses one chunk and stores its frames."""
         with self._data_lock:
             self.protocol.add_data(data)
-            for frame in self.protocol.process_available_frames():
-                self.data_mgr.store_frame(frame)
+            frames = list(self.protocol.process_available_frames())
+        self.store.append(frames)
 
     def _store_virtual_frame(self, frame: DecodedFrame) -> None:
-        with self._data_lock:
-            self.data_mgr.store_frame(frame)
+        self.store.append((frame,))
 
     @QtCore.pyqtSlot(str)
     def _on_reader_failed(self, message: str) -> None:
@@ -202,22 +197,12 @@ class TelemetryEngine(QtCore.QObject):
         self.connection_failed.emit(msg)
         self.stop_working()
 
-    def _emit_buffered_data(self) -> None:
-        """Periodic task (triggered by gui_update_timer)."""
-        if self.state != EngineState.RUNNING:
-            return
-
-        with self._data_lock:
-            data = self.data_mgr.get_plot_data(self.sample_period_s)
-        if data:
-            self.data_ready.emit(data)
-
     def _emit_link_stats(self) -> None:
         """Periodic task (stats_timer): emits counters and rates since the previous report."""
         now = time.monotonic()
         with self._data_lock:
             cur = self.protocol.stats.snapshot()
-            samples = self.data_mgr.total_stored
+            samples = self.store.total_stored
         report = make_link_report(
             self._stats_prev, cur, samples - self._stats_prev_samples, now - self._stats_prev_ts
         )
@@ -228,15 +213,13 @@ class TelemetryEngine(QtCore.QObject):
     def update_time_config(self, period_ms: float, max_samples: int) -> None:
         """Updates sampling settings and resizes buffers."""
         self.sample_period_s = period_ms / 1000.0
-        with self._data_lock:
-            self.data_mgr.update_max_samples(max_samples)
+        self.store.resize(max_samples)
         self.virtual.update_params(self.sample_period_s)
 
     @QtCore.pyqtSlot(dict)
     def configure_signals(self, signals_cfg: SignalsConfig) -> None:
         """Configures the Data Manager with the signal definitions."""
-        with self._data_lock:
-            self.data_mgr.configure(signals_cfg)
+        self.store.configure(signals_cfg)
         # Never demote RUNNING here: that silently stalled acquisition with the port open (C5).
         if self.state == EngineState.IDLE:
             self._set_state(EngineState.CONFIGURED)

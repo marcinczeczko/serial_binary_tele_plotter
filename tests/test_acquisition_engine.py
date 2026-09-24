@@ -67,8 +67,7 @@ def test_link_stats_report_counts_bytes_and_samples(pyqt_stub):
             header + bytes([calculate_crc8(header)]) + payload + bytes([calculate_crc8(payload)])
         )
         engine.protocol.add_data(frame)
-    for decoded in engine.protocol.process_available_frames():
-        engine.data_mgr.store_frame(decoded)
+    engine.store.append(engine.protocol.process_available_frames())
 
     reports = []
     engine.link_stats.connect(reports.append)
@@ -139,7 +138,7 @@ def test_serial_data_is_read_on_reader_thread_and_stored(pyqt_stub):
     try:
         assert engine.state.name == "RUNNING"
         assert msgs[-1] == "Connected to COM7"
-        assert wait_for(lambda: engine.data_mgr.total_stored == 200)
+        assert wait_for(lambda: engine.store.total_stored == 200)
         assert engine.protocol.stats.bytes_rx == len(blob)
     finally:
         engine.stop_working()
@@ -201,7 +200,7 @@ def test_select_stream_while_running_restarts_on_same_port(pyqt_stub):
 
     vstart.assert_called_once()
     assert engine.state.name == "RUNNING"
-    assert engine.data_mgr._field_map == {"b": "b"}
+    assert engine.store._fields == ["b"]
     assert engine.protocol.active_stream_id == 2
     assert [s.name for s in states] == ["CONFIGURED", "RUNNING", "CONFIGURED", "RUNNING"]
 

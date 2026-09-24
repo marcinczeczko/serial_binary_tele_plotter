@@ -6,6 +6,40 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-24 — SampleStore + GUI pull model (R2.4, R2.6)
+
+- `core/acquisition/storage.SampleStore` replaces `SignalDataManager`:
+  - A column-major matrix (2 × capacity rows) where every row is written twice, so the
+    window is always one contiguous slice.
+  - It has its own lock and a `version`. `append()` takes a batch as a few slice
+    assignments. `snapshot(ids, since_version)` copies only the requested signals and
+    returns None when nothing changed.
+- The engine no longer pushes anything bulky: `data_ready` and the 100 ms
+  `gui_update_timer` are gone (P2, P3).
+- `ui/charts/live_feed.LiveFeed` (GUI thread):
+  - Pulls the visible signals at up to 30 FPS, only on a new version, and backs off to
+    twice the last frame's cost.
+  - Pausing freezes one full snapshot, including hidden signals.
+  - Visibility and stream changes invalidate the feed.
+- Bench (`pid`, 34 signals; same machine, before → after):
+  - parse+store 62–67k → **68–73k frames/s**
+  - snapshot of all signals @100k: 25 ms → **12–13 ms**
+  - what the GUI actually takes (6 visible) @100k: **1.6 ms / 5.6 MB**, down from
+    26 ms / 28 MB every 100 ms
+  - @20k: 0.4 ms
+  - idle tick (no new data): **0.3 µs**
+- GUI frame, offscreen software raster (reference only): 6 visible @100k = 20 ms tick +
+  86 ms render; 34 visible @100k = 112 + 265 ms. Rendering is now the dominant cost, which
+  is R3.4's render budget. With pull plus back-off there's no backlog; the frame rate just
+  drops.
+- Tests (+11, 116 with Qt; 98 + 18 skipped without):
+  - store order across wrap for any batch size, batches larger than capacity,
+    requested-only copies, version skip, NaN, resize, clear, and a concurrent
+    writer/reader test with no torn snapshots
+  - LiveFeed: visible-only pulls, no redraw when idle, invalidation, pause freeze
+
+---
+
 ## 2026-09-24 — Phase 2 starts: Transport + reader thread (R2.1)
 
 - ADR-0002 is now **Accepted**.

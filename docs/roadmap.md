@@ -120,17 +120,22 @@ PRs that each keep the app working. Measure with `tools/bench_pipeline.py` befor
   A numpy structured dtype per stream, built from `frame.fields` + endianness. Payloads are
   decoded in batches (`np.frombuffer` over concatenated payloads) straight into the store.
   Target: 5× or better throughput vs. the R0.2 baseline.
-- [ ] **R2.4 `SampleStore` per stream** (P2, P3)
+- [x] **R2.4 `SampleStore` per stream** (P2, P3)
   A double-write ring buffer, so the chronological window is always a contiguous zero-copy
   slice. It has a monotonic `version`, a short `threading.Lock` around write and read, and
   per-stream `time` computed at write time. Snapshots copy only requested signals and the
   requested X range.
+  *Scope note:* the store is a column-major matrix (batch writes are a few slice
+  assignments) with its own lock. Two parts are deferred. Time is still computed at
+  snapshot time as `loop_cntr × period`; that moves to write time with R2.5. X-range
+  clipping of snapshots comes with zoomable lanes in Phase 3, because live view always
+  shows the whole window. One store per stream comes with R2.2 (multi-stream).
 - [ ] **R2.5 Time base** (C2)
   Per-stream config `time: {field: "loop_cntr", scale_s: 0.001}` (or a µs timestamp field).
   u32 unwrap, reset detection (new segment + status message), and NaN gap insertion when
   Δcounter is more than k × nominal. The UI "Period" control becomes a per-stream override
   that is saved to config, not a global runtime knob.
-- [ ] **R2.6 GUI pull model** (P3)
+- [x] **R2.6 GUI pull model** (P3)
   A `PlotController` `QTimer` at 30–60 FPS calls `store.snapshot(visible, since_version)`,
   which returns `None` if nothing changed. Nothing crosses threads except small control
   signals and stats, so the queued-packet backlog goes away entirely.

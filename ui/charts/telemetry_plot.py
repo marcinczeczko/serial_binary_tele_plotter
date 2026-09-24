@@ -33,9 +33,6 @@ class TelemetryPlot(QtWidgets.QWidget):
         # --- State ---
         self.mode: PlotMode = PlotMode.LIVE
 
-        self._last_render_ts: float = 0.0
-        self._min_render_interval: float = 0.07
-
         # Performance: Throttle range updates
         self._last_range_update_ts: float = 0.0
         self._range_update_interval: float = 0.2  # Update ranges every 200ms instead of every frame
@@ -172,33 +169,26 @@ class TelemetryPlot(QtWidgets.QWidget):
 
         return lo, hi
 
-    @QtCore.pyqtSlot(dict)
-    def on_data_ready(self, packet: PlotPacketWithBounds) -> None:
-        """
-        Takes RAW floats from packet and puts them on the chart.
-        NO MATH HERE.
-        """
-        # --- FRAME SKIP GUARD ---
-        now = time.perf_counter()
-        if (now - self._last_render_ts) < self._min_render_interval:
-            return
-        self._last_render_ts = now
+    def visible_signal_ids(self) -> list[str]:
+        """The signals worth copying out of the store for the next frame."""
+        return [sid for sid, view in self.signal_views.items() if view["curve"].isVisible()]
 
+    def show_packet(self, packet: PlotPacketWithBounds) -> None:
+        """
+        Draws a live packet (raw values, no scaling). Called by LiveFeed at frame rate with
+        the visible signals only. Ignored while paused.
+        """
         self.last_packet = packet
         if self.mode == PlotMode.ANALYSIS:
             return
 
         time_arr = packet["time"]
-        # Get raw signals (floats)
         signals_data = packet["signals"]
 
         if len(time_arr) == 0:
             return
 
-        for sid, raw_y in signals_data.items():
-            if sid in self.signal_views:
-                # RAW_Y goes to setData directly. No subtraction, no division.
-                self.signal_views[sid]["curve"].setData(time_arr, raw_y, clear=False)
+        self._draw(time_arr, signals_data)
 
         # Throttle range updates for better performance
         now = time.perf_counter()
@@ -223,11 +213,21 @@ class TelemetryPlot(QtWidgets.QWidget):
 
         self.update_hud_position()
 
-    @QtCore.pyqtSlot(bool)
-    def set_paused(self, paused: bool) -> None:
+    def _draw(self, time_arr: np.ndarray, signals_data: dict[str, np.ndarray]) -> None:
+        for sid, raw_y in signals_data.items():
+            if sid in self.signal_views:
+                self.signal_views[sid]["curve"].setData(time_arr, raw_y)
+
+    def set_paused(self, paused: bool, frozen: PlotPacketWithBounds | None = None) -> None:
+        """
+        Enters or leaves analysis mode. `frozen` should hold *all* signals (live packets
+        carry only visible ones), so signals made visible while paused still have data.
+        """
         if paused:
             self.mode = PlotMode.ANALYSIS
-            self.analysis_packet = self.last_packet  # copy.deepcopy(self.last_packet)
+            self.analysis_packet = frozen if frozen is not None else self.last_packet
+            if frozen is not None and len(frozen["time"]):
+                self._draw(frozen["time"], frozen["signals"])
         else:
             self.mode = PlotMode.LIVE
             self.analysis_packet = None

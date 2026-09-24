@@ -1,119 +1,193 @@
 """
-Data Manager Module.
-Uses numpy arrays directly for buffers (no deque → array conversion).
+Sample storage: a thread-safe, versioned ring buffer per stream (ADR-0002, R2.4).
+
+The writer (the reader thread) appends decoded frames. The GUI thread pulls snapshots at
+its own frame rate. Nothing bulky crosses threads through the Qt event queue (P3), and a
+snapshot copies only what will be drawn (P2).
+
+Layout: one column-major (Fortran-order) matrix, `2 * capacity` rows by one column per
+signal, plus the loop counter. Every sample row is written twice, at `i` and
+`i + capacity`. The chronological window is then always the contiguous row range
+`[head + capacity - count, head + capacity)`. So a snapshot is one `memcpy` per requested
+column, and a batch of frames is a few slice assignments.
 """
 
 from __future__ import annotations
 
 import math
+import threading
 import warnings
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 
 import numpy as np
 
 from core.protocol.constants import LOOP_CNTR_NAME
-from core.types import DecodedFrame, PlotPacketWithBounds, SignalsConfig
+from core.types import DecodedFrame, SignalsConfig
 
 
-class SignalDataManager:
+@dataclass
+class Snapshot:
+    """A consistent copy of the newest samples of some signals."""
+
+    version: int
+    time: np.ndarray
+    signals: dict[str, np.ndarray]
+    bounds: dict[str, tuple[float, float]] = field(default_factory=dict)
+    """(min, max) of finite values per signal; signals without finite data are absent."""
+
+
+class SampleStore:
     """
-    Manages telemetry data in pre-allocated numpy arrays (circular buffer).
-    No conversion overhead: get_plot_data returns array slices.
+    Ring buffer of the latest `capacity` frames for one stream's signals.
+
+    Thread safety: all public methods take the store's own lock and do bounded work while
+    holding it (one frame batch, or one copy of the requested signals).
     """
 
-    def __init__(self, max_samples: int):
-        self.max_samples = max(int(max_samples), 1)
-        # Pre-allocated arrays: [max_samples] each
-        self._loop_arr: np.ndarray = np.zeros(self.max_samples, dtype=np.float64)
-        self._signal_arrays: dict[str, np.ndarray] = {}
-        self._field_map: dict[str, str] = {}
-        # Circular buffer state
-        self._write_index: int = 0
-        self._count: int = 0
-        # Monotonic count of stored samples (never reset); used for rate reporting.
-        self.total_stored: int = 0
+    def __init__(self, capacity: int) -> None:
+        self._lock = threading.Lock()
+        self._capacity = max(int(capacity), 1)
+        self._ids: list[str] = []  # column order
+        self._fields: list[str] = []  # frame field per column
+        self._col: dict[str, int] = {}
+        self._loop = self._alloc_loop()
+        self._mat = self._alloc_matrix()
+        self._head = 0  # next write position, 0..capacity-1
+        self._count = 0  # valid samples, <= capacity
+        self._version = 0  # bumps on every change visible to readers
+        self.total_stored = 0  # monotonic, for rate reporting
+
+    # --- configuration -----------------------------------------------------------------
+
+    @property
+    def capacity(self) -> int:
+        return self._capacity
+
+    @property
+    def version(self) -> int:
+        return self._version
+
+    def __len__(self) -> int:
+        return self._count
 
     def configure(self, signals_cfg: SignalsConfig) -> None:
-        """Initializes buffers based on configuration."""
-        self._signal_arrays.clear()
-        self._field_map.clear()
-        self._loop_arr = np.zeros(self.max_samples, dtype=np.float64)
-        for sig_id, sig in signals_cfg.items():
-            self._field_map[sig_id] = sig["field"]
-            self._signal_arrays[sig_id] = np.zeros(self.max_samples, dtype=np.float64)
-        self._write_index = 0
-        self._count = 0
+        """Replaces the signal set; drops all samples."""
+        with self._lock:
+            self._ids = list(signals_cfg)
+            self._fields = [sig["field"] for sig in signals_cfg.values()]
+            self._col = {sid: k for k, sid in enumerate(self._ids)}
+            self._mat = self._alloc_matrix()
+            self._reset_locked()
 
-    def update_max_samples(self, max_samples: int) -> None:
-        max_samples = int(max_samples)
-        if max_samples == self.max_samples:
-            return
-        old_max = self.max_samples
-        old_count = self._count
-        old_write = self._write_index
-        old_loop = self._loop_arr
-        old_signals = dict(self._signal_arrays)
-        self.max_samples = max(max_samples, 1)
-        self._loop_arr = np.zeros(self.max_samples, dtype=np.float64)
-        self._signal_arrays = {
-            sid: np.zeros(self.max_samples, dtype=np.float64) for sid in old_signals
-        }
-        self._write_index = 0
-        self._count = 0
-        if old_count > 0:
-            start = (old_write - old_count) % old_max
-            indices = (np.arange(old_count) + start) % old_max
-            copy_n = min(old_count, self.max_samples)
-            # Keep the most recent copy_n samples
-            src_idx = indices[-copy_n:]
-            self._loop_arr[:copy_n] = old_loop[src_idx]
-            for sid, arr in old_signals.items():
-                self._signal_arrays[sid][:copy_n] = arr[src_idx]
-            self._count = copy_n
-            self._write_index = copy_n % self.max_samples
+    def clear(self) -> None:
+        with self._lock:
+            self._reset_locked()
 
-    def clear_all(self) -> None:
-        self._write_index = 0
-        self._count = 0
+    def resize(self, capacity: int) -> None:
+        """Changes the capacity, keeping the newest samples that fit."""
+        capacity = max(int(capacity), 1)
+        with self._lock:
+            if capacity == self._capacity:
+                return
+            keep = min(self._count, capacity)
+            old_loop = self._window_locked(self._loop)[len(self) - keep :]
+            old_rows = self._window_locked(self._mat)[len(self) - keep :]
+            self._capacity = capacity
+            self._loop = self._alloc_loop()
+            self._mat = self._alloc_matrix()
+            self._head = 0
+            self._count = 0
+            self._write_locked(old_loop, old_rows)
+            self._version += 1
 
-    def store_frame(self, decoded_frame: DecodedFrame) -> None:
-        loop_cntr = float(decoded_frame.get(LOOP_CNTR_NAME, 0))
-        idx = self._write_index
-        self._loop_arr[idx] = loop_cntr
-        for sig_id, field in self._field_map.items():
-            # A missing field is "no data" (NaN, drawn as a gap), never a fake 0 (C3).
-            val = decoded_frame.get(field, math.nan)
-            self._signal_arrays[sig_id][idx] = float(val)
-        self._write_index = (idx + 1) % self.max_samples
-        self._count = min(self._count + 1, self.max_samples)
-        self.total_stored += 1
+    # --- writer side -------------------------------------------------------------------
 
-    def _logical_indices(self) -> np.ndarray:
-        """Indices for valid samples in chronological order (oldest to newest)."""
-        start = (self._write_index - self._count) % self.max_samples
-        return (np.arange(self._count) + start) % self.max_samples
+    def append(self, frames: Iterable[DecodedFrame]) -> int:
+        """Stores frames in order (one lock acquisition per batch). Returns how many."""
+        frames = list(frames)
+        fields = self._fields
+        # A missing field is "no data" (NaN, drawn as a gap), never 0 (C3).
+        rows = [[frame.get(f, math.nan) for f in fields] for frame in frames]
+        if not rows:
+            return 0
+        counters = [frame.get(LOOP_CNTR_NAME, math.nan) for frame in frames]
+        values = np.asarray(rows, dtype=np.float64).reshape(len(rows), len(fields))
+        loop = np.asarray(counters, dtype=np.float64)
+        with self._lock:
+            if len(fields) != self._mat.shape[1]:
+                return 0  # reconfigured while this batch was being prepared
+            self._write_locked(loop, values)
+            self.total_stored += len(rows)
+            self._version += 1
+        return len(rows)
 
-    def get_plot_data(self, sample_period_s: float) -> PlotPacketWithBounds | None:
-        if self._count < 2:
-            return None
-        idx = self._logical_indices()
-        # Fancy (integer-array) indexing always returns an independent copy in numpy,
-        # so the explicit .copy() calls are redundant and can be removed.
-        time_axis: np.ndarray = self._loop_arr[idx] * sample_period_s
-        snapshot_raw: dict[str, np.ndarray] = {}
-        signal_bounds: dict[str, tuple[float, float]] = {}
+    # --- reader side -------------------------------------------------------------------
+
+    def snapshot(
+        self,
+        signal_ids: Iterable[str] | None = None,
+        since_version: int | None = None,
+        sample_period_s: float = 1.0,
+    ) -> Snapshot | None:
+        """
+        Copies the current window of `signal_ids` (all signals if None).
+
+        Returns None when fewer than 2 samples are stored, or when nothing changed since
+        `since_version`, so a caller polling at frame rate does no work while idle.
+        Time is `loop_cntr * sample_period_s` (per-stream time bases arrive with R2.5).
+        """
+        with self._lock:
+            if self._count < 2 or (since_version is not None and since_version == self._version):
+                return None
+            wanted = self._ids if signal_ids is None else signal_ids
+            ids = [sid for sid in wanted if sid in self._col]
+            loop = self._window_locked(self._loop).copy()
+            window = self._window_locked(self._mat)
+            data = {sid: window[:, self._col[sid]].copy() for sid in ids}  # contiguous
+            version = self._version
+        # Everything below works on private copies, outside the lock.
+        bounds: dict[str, tuple[float, float]] = {}
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN signals
-            for sid, arr in self._signal_arrays.items():
-                data = arr[idx]  # fancy index → new array, no extra copy needed
-                snapshot_raw[sid] = data
-                # Compute per-signal bounds here on the worker thread so the UI thread only
-                # needs an O(num_signals) visibility filter instead of O(n * num_signals)
-                # scans. Signals with no finite data get no bounds.
-                lo, hi = float(np.nanmin(data)), float(np.nanmax(data))
+            for sid, values in data.items():
+                lo, hi = float(np.nanmin(values)), float(np.nanmax(values))
                 if math.isfinite(lo) and math.isfinite(hi):
-                    signal_bounds[sid] = (lo, hi)
-        return {
-            "time": time_axis,
-            "signals": snapshot_raw,
-            "signal_bounds": signal_bounds,
-        }
+                    bounds[sid] = (lo, hi)
+        return Snapshot(version=version, time=loop * sample_period_s, signals=data, bounds=bounds)
+
+    # --- internals ---------------------------------------------------------------------
+
+    def _alloc_loop(self) -> np.ndarray:
+        return np.full(2 * self._capacity, math.nan, dtype=np.float64)
+
+    def _alloc_matrix(self) -> np.ndarray:
+        shape = (2 * self._capacity, len(self._ids))
+        return np.full(shape, math.nan, dtype=np.float64, order="F")
+
+    def _write_locked(self, loop: np.ndarray, values: np.ndarray) -> None:
+        """Appends rows (both copies), wrapping at capacity; keeps the newest if too many."""
+        cap = self._capacity
+        n = len(loop)
+        if n > cap:
+            loop, values, n = loop[-cap:], values[-cap:], cap
+        done = 0
+        while done < n:
+            i = self._head
+            k = min(n - done, cap - i)  # up to the wrap point
+            for base in (i, i + cap):
+                self._loop[base : base + k] = loop[done : done + k]
+                self._mat[base : base + k] = values[done : done + k]
+            self._head = (i + k) % cap
+            done += k
+        self._count = min(self._count + n, cap)
+
+    def _reset_locked(self) -> None:
+        self._head = 0
+        self._count = 0
+        self._version += 1
+
+    def _window_locked(self, buf: np.ndarray) -> np.ndarray:
+        """Chronological view (oldest..newest) of the valid samples; no copy."""
+        end = self._head + self._capacity
+        return buf[end - self._count : end]

@@ -263,12 +263,13 @@ serial_bin_plotter/
 - **Threading:** a dedicated reader thread does blocking serial reads and parses them, so
   the OS buffer is drained however busy the GUI is. `TelemetryEngine` runs in its own
   `QThread`. The GUI talks to it only through Qt signals and queued calls.
-- **Data flow:** `SerialTransport` → `ReaderThread` → `ProtocolHandler` →
-  `SignalDataManager` (numpy ring buffers) → `TelemetryPlot` at ~10 FPS via a 100 ms
-  `QTimer`. The target design is in `docs/adr/0002-target-acquisition-pipeline.md`.
-- **Performance:** Y-axis bounds are computed on the worker thread and shipped with each data
-  packet; the UI thread only does an O(num_signals) visibility filter. The tooltip reuses a
-  single `searchsorted` result across all signals per mouse event.
+- **Data flow:** `SerialTransport` → `ReaderThread` → `ProtocolHandler` → `SampleStore`
+  (a versioned ring buffer shared between threads). `LiveFeed` then pulls snapshots of the
+  visible signals into `TelemetryPlot` at up to 30 FPS, only when there's new data, and
+  backs off when frames are expensive. See `docs/adr/0002-target-acquisition-pipeline.md`.
+- **Performance:** hidden signals are never copied or drawn. Pausing freezes one full
+  snapshot, so signals shown while paused still have data. The tooltip reuses a single
+  `searchsorted` result across all signals per mouse event.
 
 ## Troubleshooting
 
