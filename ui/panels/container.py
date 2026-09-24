@@ -1,9 +1,12 @@
 """
 Main Control Panel Container Module.
 
-This module aggregates specialized sub-panels into a single sidebar widget.
-It uses **QStackedWidget** to dynamically switch the central control panel
-(e.g., PID Tuning vs Empty) based on the active stream type.
+This module aggregates specialized sub-panels into a single sidebar widget. A
+**QStackedWidget** shows the control panel the shown stream names in `controls`, one of
+the panels generated from streams.json `panels` (R5.2).
+
+With a `UiState`, the shown stream, visibility, lane moves and panel values are remembered
+between runs (R5.3) and applied on top of streams.json.
 """
 
 from __future__ import annotations
@@ -13,12 +16,12 @@ from PyQt6 import QtCore, QtWidgets
 from core.config import StreamConfigLoader
 from core.types import StreamConfig
 from ui.common.widgets import CollapsableSection
+from ui.panels.command_panel import CommandPanel
 from ui.panels.connection import ConnectionPanel
-from ui.panels.imu import ImuCalibrationPanel
-from ui.panels.pid import PidTuningPanel
 from ui.panels.signals import SignalListPanel
 from ui.panels.timing import TimeConfigPanel
 from ui.panels.trigger import TriggerPanel
+from ui.ui_state import UiState, apply_view_overrides
 
 
 class MainControlPanel(QtWidgets.QWidget):
@@ -29,34 +32,7 @@ class MainControlPanel(QtWidgets.QWidget):
     # --- Public Signals ---
     connection_requested = QtCore.pyqtSignal(str, int)
     pause_requested = QtCore.pyqtSignal(bool)
-    pid_left_sent = QtCore.pyqtSignal(
-        int, int, float, float, float, float, float, float, float, float
-    )
-    pid_right_sent = QtCore.pyqtSignal(
-        int, int, float, float, float, float, float, float, float, float
-    )
-    pid_all_sent = QtCore.pyqtSignal(
-        int,
-        int,
-        float,
-        float,
-        float,
-        float,
-        float,
-        float,
-        float,
-        float,
-        int,
-        int,
-        float,
-        float,
-        float,
-        float,
-        float,
-        float,
-        float,
-        float,
-    )
+    send_requested = QtCore.pyqtSignal(object)  # command_panel.SendRequest
 
     period_changed = QtCore.pyqtSignal(float)  # ms, for the shown stream
     samples_changed = QtCore.pyqtSignal(int)
@@ -64,8 +40,9 @@ class MainControlPanel(QtWidgets.QWidget):
     signal_visibility_changed = QtCore.pyqtSignal(str, bool)
     signal_lane_changed = QtCore.pyqtSignal(str, str, str)  # signal id, lane key, lane label
 
-    def __init__(self, stream_loader: StreamConfigLoader) -> None:
+    def __init__(self, stream_loader: StreamConfigLoader, ui_state: UiState | None = None) -> None:
         super().__init__()
+        self.ui_state = ui_state
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
@@ -82,6 +59,9 @@ class MainControlPanel(QtWidgets.QWidget):
 
         for sid, s in self.stream_loader.list_streams().items():
             self.payload_combo.addItem(s["name"], sid)
+        remembered = ui_state.stream() if ui_state else None
+        if remembered is not None and self.payload_combo.findData(remembered) >= 0:
+            self.payload_combo.setCurrentIndex(self.payload_combo.findData(remembered))
 
         self.payload_combo.currentIndexChanged.connect(self._on_stream_selection)
         l_stream.addWidget(self.payload_combo)
@@ -89,25 +69,12 @@ class MainControlPanel(QtWidgets.QWidget):
         # 3. Dynamic Stacked Panel (Context-Aware UI)
         self.dynamic_stack = QtWidgets.QStackedWidget()
 
-        # -- A: PID Panel --
-        self.pid_panel = PidTuningPanel()
-        self.pid_section = CollapsableSection("PID Tunning", self.pid_panel)
-        self.imu_panel = ImuCalibrationPanel()
-        self.imu_section = CollapsableSection("IMU Calibration", self.imu_panel)
-
-        # -- B: Empty Panel (for streams with no controls) --
         self.empty_panel = QtWidgets.QWidget()
-
-        self.dynamic_stack.addWidget(self.empty_panel)  # Index 0
-        self.dynamic_stack.addWidget(self.pid_section)  # Index 1
-        self.dynamic_stack.addWidget(self.imu_section)
-
-        # Map string keys from JSON ('panel_type') to widget instances
-        self.panel_map: dict[str, QtWidgets.QWidget] = {
-            "none": self.empty_panel,
-            "pid": self.pid_section,
-            "imu": self.imu_section,
-        }
+        self.dynamic_stack.addWidget(self.empty_panel)
+        # Generated from streams.json `panels`, by key (R5.2).
+        self.control_panels: dict[str, CommandPanel] = {}
+        self.control_sections: dict[str, CollapsableSection] = {}
+        self._build_control_panels()
 
         # 4. Fixed Bottom Panels
         self.time_panel = TimeConfigPanel()
@@ -142,10 +109,44 @@ class MainControlPanel(QtWidgets.QWidget):
         self.sig_panel.signal_visibility_changed.connect(self.signal_visibility_changed)
         self.sig_panel.signal_lane_changed.connect(self.signal_lane_changed)
 
-        # PID Panel
-        self.pid_panel.pid_left_sent.connect(self.pid_left_sent)
-        self.pid_panel.pid_right_sent.connect(self.pid_right_sent)
-        self.pid_panel.run_test_sent.connect(self.pid_all_sent)
+        # Remembered between runs (R5.3)
+        self.sig_panel.signal_visibility_changed.connect(self._remember_visibility)
+        self.sig_panel.signal_lane_changed.connect(self._remember_lane)
+
+    def _build_control_panels(self) -> None:
+        """(Re)creates one panel per valid streams.json panel, with remembered values."""
+        for key, section in self.control_sections.items():
+            self.dynamic_stack.removeWidget(section)
+            # A collapsed section's content has no parent: delete both explicitly (on
+            # this thread), never leave them to garbage collection.
+            self.control_panels[key].deleteLater()
+            section.deleteLater()
+        self.control_panels.clear()
+        self.control_sections.clear()
+        for key, definition in self.stream_loader.panels.items():
+            panel = CommandPanel(definition)
+            if self.ui_state is not None:
+                panel.set_values(self.ui_state.panel_values(key))
+            panel.values_changed.connect(lambda k=key: self._remember_panel_values(k))
+            panel.send_requested.connect(self.send_requested)
+            section = CollapsableSection(definition.title, panel)
+            self.dynamic_stack.addWidget(section)
+            self.control_panels[key] = panel
+            self.control_sections[key] = section
+
+    def _remember_panel_values(self, key: str) -> None:
+        if self.ui_state is not None and key in self.control_panels:
+            self.ui_state.set_panel_values(key, self.control_panels[key].values())
+
+    def _remember_visibility(self, sid: str, visible: bool) -> None:
+        key = self.current_stream_key()
+        if self.ui_state is not None and key is not None:
+            self.ui_state.set_visible(key, sid, visible)
+
+    def _remember_lane(self, sid: str, lane: str, label: str) -> None:
+        key = self.current_stream_key()
+        if self.ui_state is not None and key is not None:
+            self.ui_state.set_lane(key, sid, lane, label)
 
     def _on_stream_selection(self, idx: int) -> None:
         """
@@ -155,18 +156,16 @@ class MainControlPanel(QtWidgets.QWidget):
         if sid is None:
             return
 
-        cfg = self.stream_loader.get_stream(sid)
+        cfg = self._effective_config(sid)
+        if self.ui_state is not None:
+            self.ui_state.set_stream(sid)
 
-        # 1. Get type from config (default to 'none')
-        panel_type = cfg.get("panel_type", "none")
-
-        # --- FIX: Hide the stack completely if panel_type is 'none' ---
-        if panel_type == "none":
+        # The stream's control panel, if it names one; nothing otherwise.
+        panel = self.stream_loader.panel_for(sid)
+        if panel is None:
             self.dynamic_stack.setVisible(False)
         else:
-            # Resolve widget from map and show it
-            target_widget = self.panel_map.get(panel_type, self.empty_panel)
-            self.dynamic_stack.setCurrentWidget(target_widget)
+            self.dynamic_stack.setCurrentWidget(self.control_sections[panel.key])
             self.dynamic_stack.setVisible(True)
 
         # Update Signal List & Notify Main Window
@@ -182,11 +181,22 @@ class MainControlPanel(QtWidgets.QWidget):
         return key if isinstance(key, str) else None
 
     def get_current_stream_config(self) -> StreamConfig | None:
-        idx = self.payload_combo.currentIndex()
-        sid = self.payload_combo.itemData(idx)
-        if sid is not None:
-            return self.stream_loader.get_stream(sid)
-        return None
+        """The shown stream as displayed: streams.json plus remembered view overrides."""
+        sid = self.current_stream_key()
+        return self._effective_config(sid) if sid is not None else None
+
+    def _effective_config(self, sid: str) -> StreamConfig:
+        cfg = self.stream_loader.get_stream(sid)
+        if self.ui_state is None:
+            return cfg
+        return apply_view_overrides(cfg, self.ui_state.visibility(sid), self.ui_state.lanes(sid))
+
+    def reset_view(self) -> None:
+        """Forgets the shown stream's visibility and lane moves: back to streams.json."""
+        sid = self.current_stream_key()
+        if self.ui_state is not None and sid is not None:
+            self.ui_state.reset_view(sid)
+            self._on_stream_selection(self.payload_combo.currentIndex())
 
     def reload_streams(self) -> None:
         """
@@ -196,6 +206,7 @@ class MainControlPanel(QtWidgets.QWidget):
         """
         current = self.payload_combo.currentData()
         self.stream_loader.load()
+        self._build_control_panels()
 
         self.payload_combo.blockSignals(True)
         self.payload_combo.clear()

@@ -28,7 +28,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 IMU_STREAM: StreamConfig = {
     "name": "IMU test",
-    "panel_type": "none",
     "frame": {
         "stream_id": 3,
         "endianness": "little",
@@ -164,8 +163,9 @@ def test_main_window_starts_switches_stream_and_closes(qtbot: Any, monkeypatch: 
 
     panel = win.panel
     assert panel.payload_combo.count() >= 2
-    panel.pid_section.header.click()  # expand, then collapse the PID section
-    panel.pid_section.header.click()
+    section = panel.control_sections["diffbot_pid"]  # generated from streams.json (R5.2)
+    section.header.click()  # expand, then collapse the PID section
+    section.header.click()
     panel.payload_combo.setCurrentIndex(1)
     qtbot.wait(50)
     current = panel.get_current_stream_config()

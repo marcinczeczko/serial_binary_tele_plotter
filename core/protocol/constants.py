@@ -1,7 +1,7 @@
 """
 Protocol Constants.
 
-Defines magic numbers, Packet IDs, and data type mappings used
+Defines the sync markers and the data type mappings used
 for binary frame parsing.
 """
 
@@ -9,16 +9,8 @@ for binary frame parsing.
 MAGIC_0 = 0xAA
 MAGIC_1 = 0x55
 
-# Packet IDs
-RTP_REQ_PID_SINGLE = 0x10  # Configuration Request - single motor
-RTP_REQ_PID_ALL = 0x11  # Configuration Request - all motors
-
-# Command payload layouts (little endian). Firmware-visible: shared by the encoder in
-# handler.py and the simulator, which applies received gains (R2.7).
-# Single motor: motor_id, kp, ki, k1, k2, k3, k_aw, alpha, rps, use_ramp, use_pi
-PID_SINGLE_FORMAT = "<BffffffffBB"
-# Both motors: (kp, ki, k1, k2, k3, k_aw, alpha, rps, use_ramp, use_pi) left, then right
-PID_ALL_FORMAT = "<ffffffffBBffffffffBB"
+# Host -> MCU command packets (IDs and layouts) are defined in streams.json `commands`
+# (R5.2, `core.protocol.commands`), not here.
 
 
 # Mapping: JSON type string -> (struct format char, size in bytes)

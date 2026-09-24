@@ -22,7 +22,8 @@ from core.acquisition.timebase import time_base_config
 from core.analysis.export import ExportError, export_table, parquet_available
 from core.analysis.step_response import StepMetrics, step_metrics
 from core.analysis.trigger import TriggerSpec
-from core.config import DEFAULT_CONFIG_PATH, StreamConfigLoader
+from core.config import DEFAULT_CONFIG_PATH, SCHEMA_VERSION, StreamConfigLoader
+from core.protocol.commands import CommandError, encode_command, resolve_values
 from core.protocol.stats import LinkReport, format_link_report
 from core.recording.sbtp import SUFFIX as RECORDING_SUFFIX
 from core.recording.sbtp import recording_name
@@ -37,7 +38,9 @@ from ui.charts.live_feed import LiveFeed
 from ui.charts.telemetry_plot import TelemetryPlot
 from ui.charts.trigger_controller import TriggerController
 from ui.config.tab import ConfiguratorTab
+from ui.panels.command_panel import SendRequest
 from ui.panels.container import MainControlPanel
+from ui.ui_state import UiState
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +74,10 @@ class MainWindow(QtWidgets.QMainWindow):
     4. **Lifecycle**: Managing startup configuration and safe shutdown sequences.
     """
 
+    # To the engine thread (queued): an encoded command packet, and the command layouts.
+    send_packet = QtCore.pyqtSignal(bytes)
+    commands_configured = QtCore.pyqtSignal(object)
+
     def __init__(
         self,
         config_path: Path = DEFAULT_CONFIG_PATH,
@@ -86,6 +93,7 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.settings = settings if settings is not None else app_settings()
         self.stream_loader = StreamConfigLoader(config_path)
+        self.ui_state = UiState(self.settings, self.stream_loader.path)
 
         # --- State Tracking ---
         # Mirror of the engine's state, updated only from `state_changed` (never read across
@@ -119,7 +127,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
 
         # Instantiate the main view components
-        self.panel = MainControlPanel(self.stream_loader)
+        self.panel = MainControlPanel(self.stream_loader, self.ui_state)
+        remembered = self.ui_state.connection()
+        if remembered is not None:
+            self.panel.conn_panel.select(*remembered)
         self.plot = TelemetryPlot()
 
         self.splitter.addWidget(self.panel)
@@ -175,9 +186,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.panel.stream_changed.connect(self._on_stream_changed)
         self.panel.period_changed.connect(self._on_period_changed)
         self.panel.samples_changed.connect(self.engine.set_capacity)
-        self.panel.pid_left_sent.connect(self.engine.send_left_config)
-        self.panel.pid_right_sent.connect(self.engine.send_right_config)
-        self.panel.pid_all_sent.connect(self.engine.send_all_config)
+        self.panel.send_requested.connect(self._send_command)
+        self.send_packet.connect(self.engine.send_packet)
+        self.commands_configured.connect(self.engine.configure_commands)
 
         # 2. Control Logic: Panel -> Main Window
         self.panel.connection_requested.connect(self._handle_connection)
@@ -229,18 +240,35 @@ class MainWindow(QtWidgets.QMainWindow):
         self._report_config_problems()
 
     def _report_config_problems(self) -> None:
-        """Surfaces streams.json problems in the status bar (no modal dialog at startup)."""
-        problems = self.panel.stream_loader.problems
+        """
+        Surfaces streams.json problems, and a migration from an older schema, in the status
+        bar (no modal dialog at startup).
+        """
+        loader = self.panel.stream_loader
+        problems = loader.problems
         for problem in problems:
             logger.warning("streams.json: %s", problem)
-        if not problems:
+        for note in loader.migration_notes:
+            logger.info("streams.json: %s", note)
+        details = [str(p) for p in problems]
+        parts: list[str] = []
+        if problems:
+            errors = [p for p in problems if p.severity == "error"]
+            text = f"{len(problems)} problem(s)"
+            if errors:
+                left_out = {p.stream or p.item for p in errors}
+                text += f", {len(left_out)} stream(s)/command(s)/panel(s) not loaded"
+            parts.append(text)
+        if loader.migrated:
+            parts.append(
+                f"schema {loader.source_version} read as {SCHEMA_VERSION}; save it from the "
+                "Configuration tab to update the file"
+            )
+            details += loader.migration_notes
+        if not parts:
             return
-        errors = sum(p.severity == "error" for p in problems)
-        summary = f"streams.json: {len(problems)} problem(s)"
-        if errors:
-            summary += f", {errors} stream(s) not loaded"
-        self.lbl_status.setText(summary + " (hover for details)")
-        self.lbl_status.setToolTip("\n".join(str(p) for p in problems))
+        self.lbl_status.setText("streams.json: " + "; ".join(parts) + " (hover for details)")
+        self.lbl_status.setToolTip("\n".join(details))
         self.lbl_status.setStyleSheet("color: #FFB74D; font-weight: bold;")
 
     def _configure_engine_streams(self) -> None:
@@ -248,6 +276,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Fresh stores use the (possibly just edited) streams.json time bases.
         self._scale_overrides.clear()
         self._show_period()
+        self.commands_configured.emit(tuple(self.stream_loader.commands.values()))
         QtCore.QMetaObject.invokeMethod(
             self.engine,
             "configure_streams",
@@ -318,6 +347,7 @@ class MainWindow(QtWidgets.QMainWindow):
         Handles connection requests triggered by the Control Panel.
         """
         if port != "STOP":
+            self.ui_state.set_connection(port, baud)
             self._session_label = port
             self._replaying = False
             QtCore.QMetaObject.invokeMethod(
@@ -387,14 +417,44 @@ class MainWindow(QtWidgets.QMainWindow):
         if update_status:
             self.lbl_status.setText("PAUSED" if paused else "Connected")
 
+    # --- commands (R5.2) -----------------------------------------------------------------
+
+    def _send_command(self, request: SendRequest) -> None:
+        """Encodes a panel button's command and hands the packet to the engine."""
+        command = self.stream_loader.commands.get(request.button.command)
+        if command is None:
+            return  # a panel only offers valid commands; kept for reloads in flight
+        if self.engine_state != EngineState.RUNNING:
+            self._command_status(f"Not connected: '{request.button.label}' not sent", error=True)
+            return
+        try:
+            values = resolve_values(command, request.params, request.column, request.button.values)
+            packet = encode_command(command, values)
+        except CommandError as e:
+            self._command_status(f"Not sent: {e}", error=True)
+            return
+        self.send_packet.emit(packet)
+        self._command_status(
+            f"Sent '{request.button.label}': {command.label} "
+            f"(ID 0x{command.packet_id:02X}, {len(packet)} B)"
+        )
+
+    def _command_status(self, text: str, error: bool = False) -> None:
+        self.lbl_status.setText(text)
+        self.lbl_status.setStyleSheet("color: #F44336; font-weight: bold;" if error else "")
+
     # --- menus: recording, replay, export (R4.1-R4.3) -----------------------------------
 
     def _build_menus(self) -> None:
         bar = self.menuBar()
         assert bar is not None
         file_menu = bar.addMenu("&File")
+        view_menu = bar.addMenu("&View")
         rec_menu = bar.addMenu("&Recording")
-        assert file_menu is not None and rec_menu is not None
+        assert file_menu is not None and view_menu is not None and rec_menu is not None
+        self.act_reset_view = _action(
+            view_menu, "Reset view to streams.json", self.panel.reset_view
+        )
 
         self.act_export_shown = _action(file_menu, "Export shown stream…", self._export_shown)
         self.act_export_all = _action(file_menu, "Export all streams…", self._export_all)

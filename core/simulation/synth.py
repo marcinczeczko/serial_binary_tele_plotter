@@ -22,25 +22,18 @@ from __future__ import annotations
 
 import math
 import struct
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
 from core.acquisition.timebase import time_base_config
-from core.protocol.constants import (
-    LOOP_CNTR_NAME,
-    MAGIC_0,
-    MAGIC_1,
-    PID_ALL_FORMAT,
-    PID_SINGLE_FORMAT,
-    RTP_REQ_PID_ALL,
-    RTP_REQ_PID_SINGLE,
-    STRUCT_TYPE_MAP,
-)
+from core.protocol.commands import CommandDef, decode_command
+from core.protocol.constants import LOOP_CNTR_NAME, MAGIC_0, MAGIC_1, STRUCT_TYPE_MAP
 from core.protocol.crc import calculate_crc8
 from core.protocol.record_decoder import frame_dtype
-from core.simulation.pid_motor import SIDES, Gains, PidMotorModel
+from core.simulation.pid_motor import PidMotorModel
 from core.types import StreamConfig
 
 WAVES = ("sine", "step", "noise", "const", "counter")
@@ -194,24 +187,18 @@ class FrameSynth:
             out.append(calculate_crc8(payload))
         return bytes(out)
 
-    def apply_command(self, packet_id: int, payload: bytes) -> bool:
-        """Applies a PID command to the model, as the firmware would. Returns True if used."""
+    def apply_command(self, packet_id: int, payload: bytes, commands: Sequence[CommandDef]) -> bool:
+        """
+        Applies a received command to the model, as the firmware would: decoded with the
+        first configured command of that ID whose payload size matches. Returns True if the
+        model used it.
+        """
         if self.model is None:
             return False
-        if packet_id == RTP_REQ_PID_SINGLE and len(payload) == struct.calcsize(PID_SINGLE_FORMAT):
-            motor_id, *params = struct.unpack(PID_SINGLE_FORMAT, payload)
-            if 0 <= motor_id < len(SIDES):
-                self.model.set_gains(SIDES[motor_id], _gains(params))
-                return True
-        elif packet_id == RTP_REQ_PID_ALL and len(payload) == struct.calcsize(PID_ALL_FORMAT):
-            values = struct.unpack(PID_ALL_FORMAT, payload)
-            half = len(values) // 2
-            self.model.set_gains("left", _gains(list(values[:half])))
-            self.model.set_gains("right", _gains(list(values[half:])))
-            return True
+        for command in commands:
+            if command.packet_id != packet_id:
+                continue
+            values = decode_command(command, payload)
+            if values is not None:
+                return self.model.apply_command(values)
         return False
-
-
-def _gains(params: list[Any]) -> Gains:
-    kp, ki, k1, k2, k3, k_aw, alpha, rps, use_ramp, use_pi = params
-    return Gains(kp, ki, k1, k2, k3, k_aw, alpha, rps, bool(use_ramp), bool(use_pi))

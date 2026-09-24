@@ -1,28 +1,21 @@
 """
-Loading and validation of telemetry stream configurations (`streams.json`).
+Validation of the stream definitions in `streams.json` (`streams.<key>`).
 
-`validate_config()` is the single source of truth for what a usable stream definition is.
-The loader uses it to keep broken streams out of the UI. The config editor uses it to
-refuse saving a file that wouldn't load.
+`validate_stream()` is the single source of truth for what a usable stream is: frame
+layout, time base, simulation, lanes and signals. The document-level checks (schema
+version, commands, panels, cross-references) are in `core.config.document`.
 """
 
 from __future__ import annotations
 
-import json
 import struct
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from core.acquisition.timebase import TIME_KEYS
 from core.protocol.constants import LOOP_CNTR_NAME, STRUCT_TYPE_MAP
 from core.simulation.synth import SIM_KEYS, SIM_MODELS, WAVE_KEYS, WAVES
-from core.types import StreamConfig
 
-# The streams.json shipped next to the application code (not the current working directory).
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "streams.json"
-
-PANEL_TYPES = ("none", "pid", "imu")
 ENDIANNESS = ("little", "big")
 MAX_PAYLOAD_BYTES = 255  # LEN is a single byte on the wire
 Y_RANGE_MODES = ("auto", "auto-grow", "manual")  # per-lane Y range behaviour (R3.2)
@@ -32,44 +25,27 @@ Y_RANGE_KEYS = ("mode", "min", "max", "include_zero")
 
 @dataclass(frozen=True)
 class ConfigProblem:
+    """
+    One problem in the document. `stream` names the stream it excludes or concerns;
+    `item` names a command or panel instead (e.g. "command 'pid_single'"). A problem with
+    neither concerns the whole document: an error there means the file can't be used.
+    """
+
     severity: Literal["error", "warning"]
     stream: str | None
     message: str
+    item: str | None = None
+
+    @property
+    def fatal(self) -> bool:
+        return self.severity == "error" and self.stream is None and self.item is None
 
     def __str__(self) -> str:
-        where = f"[{self.stream}] " if self.stream else ""
-        return f"{self.severity.upper()}: {where}{self.message}"
+        where = self.stream or self.item
+        return f"{self.severity.upper()}: {f'[{where}] ' if where else ''}{self.message}"
 
 
-def resolve_config_path(
-    cli_path: str | Path | None,
-    remembered_path: str | Path | None = None,
-    default: Path = DEFAULT_CONFIG_PATH,
-) -> Path:
-    """
-    Picks the configuration file (C10): an explicit `--config` wins (even if missing, so
-    the user gets an error about the file they asked for). Otherwise the last used file,
-    if it still exists. Otherwise the bundled default. Never the current working directory.
-    """
-    if cli_path:
-        return Path(cli_path).expanduser().resolve()
-    if remembered_path and Path(remembered_path).is_file():
-        return Path(remembered_path).resolve()
-    return default
-
-
-def validate_config(data: Any) -> list[ConfigProblem]:
-    """Returns every problem found in a parsed `streams.json` document."""
-    if not isinstance(data, dict) or not isinstance(data.get("streams"), dict):
-        return [ConfigProblem("error", None, "missing or invalid 'streams' object")]
-    problems: list[ConfigProblem] = []
-    for key, stream in data["streams"].items():
-        problems.extend(validate_stream(str(key), stream))
-    problems.extend(_shared_id_problems(data["streams"]))
-    return problems
-
-
-def _shared_id_problems(streams: dict[str, Any]) -> list[ConfigProblem]:
+def shared_id_problems(streams: dict[str, Any]) -> list[ConfigProblem]:
     """
     Streams may share a stream_id. The router tells them apart by payload size and decodes
     identical layouts once. Two *different* layouts of the same size are ambiguous: only
@@ -116,9 +92,8 @@ def validate_stream(key: str, stream: Any) -> list[ConfigProblem]:
         return problems
     if not isinstance(stream.get("name"), str) or not stream["name"]:
         error("'name' must be a non-empty string")
-    panel_type = stream.get("panel_type", "none")
-    if panel_type not in PANEL_TYPES:
-        warning(f"unknown panel_type '{panel_type}' (known: {', '.join(PANEL_TYPES)})")
+    if "controls" in stream and not isinstance(stream["controls"], str):
+        warning("'controls' must be the key of a panel")
 
     frame = stream.get("frame")
     if not isinstance(frame, dict):
@@ -328,56 +303,3 @@ def _lane_problems(key: str, stream: dict[str, Any]) -> list[ConfigProblem]:
         if "y_range" in sig:
             msgs.extend(_y_range_problems(f"signal '{sig_key}'", sig["y_range"]))
     return [ConfigProblem("warning", key, msg) for msg in msgs]
-
-
-class StreamConfigLoader:
-    """
-    Loads `streams.json` and exposes the streams that are valid.
-
-    Streams with errors are left out of `list_streams()`; every problem (errors and
-    warnings) is available in `problems` so the UI can report it.
-    """
-
-    def __init__(self, path: str | Path):
-        self.path = Path(path)
-        self._streams: dict[str, StreamConfig] = {}
-        self.data: dict[str, Any] = {}
-        self.problems: list[ConfigProblem] = []
-
-        if not self.path.exists():
-            raise FileNotFoundError(f"Required configuration file not found: {self.path.resolve()}")
-
-        self.load()
-
-    def load(self) -> None:
-        """Loads, validates and filters the JSON configuration file."""
-        try:
-            with self.path.open("r", encoding="utf-8") as f:
-                self.data = json.load(f)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in {self.path}: {e}") from e
-
-        self.problems = validate_config(self.data)
-        if any(p.stream is None for p in self.problems):
-            raise ValueError(f"Invalid {self.path.name}: missing or invalid 'streams' section")
-
-        broken = {p.stream for p in self.problems if p.severity == "error"}
-        self._streams = {}
-        for key, stream in self.data["streams"].items():
-            if key in broken:
-                continue
-            # Copy with defaults applied: `self.data` stays exactly as read, because the
-            # config editor round-trips it.
-            entry = {**stream, "panel_type": stream.get("panel_type", "none")}
-            self._streams[key] = cast(StreamConfig, entry)
-
-    def list_streams(self) -> dict[str, StreamConfig]:
-        """Returns all valid stream definitions."""
-        return self._streams
-
-    def get_stream(self, stream_id: str) -> StreamConfig:
-        """Returns configuration for a specific stream."""
-        try:
-            return self._streams[stream_id]
-        except KeyError as e:
-            raise KeyError(f"Stream '{stream_id}' not found in streams.json") from e

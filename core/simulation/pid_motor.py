@@ -3,14 +3,16 @@ A small closed-loop model of two DC motors under feedforward + PI speed control 
 
 It produces the quantities a motor-control firmware typically streams (setpoint,
 measurement, the PI terms, saturation, anti-windup, PWM), so a `pid` stream shows
-plausible, correlated data on VIRTUAL. It also accepts the PID command packets, so gains
-sent from the PID panel visibly change the response.
+plausible, correlated data on VIRTUAL. It also applies received commands, so gains sent
+from a control panel visibly change the response.
 
 Frame fields are matched by name: `{side}_{quantity}`, where side is `left` or `right` and
 quantity is one of `QUANTITIES`. Fields the model doesn't know get a default waveform.
 
-Command parameters (same order as the firmware packet): kp, ki, k1, k2, k3, k_aw, alpha,
-rps, use_ramp, use_pi. In the model:
+Commands are matched by field name, not by packet ID (R5.2): any command whose fields
+name gains (`GAIN_NAMES`) updates them, for the motor in its `motor_id` field (0 left,
+1 right), or per side with `left_`/`right_` prefixes. So the bundled `pid_single` and
+`pid_both` commands work, and so would a command carrying only `left_kp`. In the model:
 - `k1` is the feedforward gain in %/rps.
 - `k2` is the static-friction offset in %.
 - `k3` is ignored.
@@ -21,7 +23,9 @@ rps, use_ramp, use_pi. In the model:
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, fields, replace
+from typing import Any
 
 import numpy as np
 
@@ -71,6 +75,9 @@ class Gains:
     use_pi: bool = True
 
 
+GAIN_NAMES = tuple(f.name for f in fields(Gains))
+
+
 @dataclass
 class _Motor:
     gains: Gains = field(default_factory=Gains)
@@ -94,6 +101,26 @@ class PidMotorModel:
 
     def set_gains(self, side: str, gains: Gains) -> None:
         self._motors[side].gains = gains
+
+    def apply_command(self, values: Mapping[str, float | int | bool]) -> bool:
+        """Updates the gains a decoded command names; True if it named any."""
+        used = False
+        motor_id = values.get("motor_id")
+        if motor_id is not None and 0 <= int(motor_id) < len(SIDES):
+            used |= self._update(SIDES[int(motor_id)], values, "")
+        for side in SIDES:
+            used |= self._update(side, values, f"{side}_")
+        return used
+
+    def _update(self, side: str, values: Mapping[str, float | int | bool], prefix: str) -> bool:
+        changes: dict[str, Any] = {}
+        for name in GAIN_NAMES:
+            if prefix + name in values:
+                value = values[prefix + name]
+                changes[name] = bool(value) if name.startswith("use_") else float(value)
+        if changes:
+            self._motors[side].gains = replace(self._motors[side].gains, **changes)
+        return bool(changes)
 
     def step(self, t: float, dt: float) -> dict[str, float]:
         """Advances both motors by one control period; returns every quantity by field name."""

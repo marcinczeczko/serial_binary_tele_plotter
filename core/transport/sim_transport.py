@@ -6,16 +6,18 @@ one stream in real time. The engine drives it with the same `ReaderThread`, pars
 and stores as a serial port, so the simulator exercises the whole receive path. Link
 statistics count its bytes and frames too.
 
-Commands written to it are parsed like the firmware would parse them. PID gains change the
-simulated motors (see `core.simulation.pid_motor`).
+Commands written to it are framed and decoded like the firmware would: with the command
+layouts from `streams.json` (R5.2), given by `set_commands`. PID gains change the simulated
+motors (see `core.simulation.pid_motor`).
 """
 
 from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
+from core.protocol.commands import CommandDef
 from core.protocol.frame_parser import FrameParser
 from core.simulation.synth import FrameSynth
 from core.transport.base import TransportError
@@ -44,8 +46,10 @@ class SimTransport:
         start_frame: int = 0,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        commands: Sequence[CommandDef] = (),
     ) -> None:
         self._lock = threading.Lock()
+        self._command_defs = tuple(commands)
         self._seed = seed
         self._clock = clock
         self._sleep = sleep
@@ -75,6 +79,11 @@ class SimTransport:
     def close(self) -> None:
         with self._lock:
             self._open = False
+
+    def set_commands(self, commands: Sequence[CommandDef]) -> None:
+        """The command layouts written packets are decoded with."""
+        with self._lock:
+            self._command_defs = tuple(commands)
 
     def set_stream(self, stream: StreamConfig) -> None:
         """Simulates another stream from now on, at that stream's period."""
@@ -112,4 +121,4 @@ class SimTransport:
             if not self._open:
                 raise TransportError("simulator closed")
             for packet_id, payload in self._commands.feed(data):
-                self._synth.apply_command(packet_id, payload)
+                self._synth.apply_command(packet_id, payload, self._command_defs)

@@ -3,20 +3,20 @@ Configuration Tab Module.
 Manages the list of streams, file I/O operations, and integrates the Stream Editor.
 
 Edits are committed to the in-memory document whenever the selection moves to another
-stream, so nothing is lost before saving (C4a). Saving validates the whole document first
-and refuses to write a file the app couldn't load.
+stream, so nothing is lost before saving (C4a). Saving writes the whole document (schema
+version, commands and panels are kept as loaded) through `save_document`, which refuses
+a file the app couldn't load. A file with an older schema is saved migrated (R5.1).
 """
 
 from __future__ import annotations
 
 import copy
-import json
 import logging
-import shutil
+from typing import Any
 
 from PyQt6 import QtCore, QtWidgets
 
-from core.config import StreamConfigLoader, validate_config
+from core.config import InvalidConfigError, StreamConfigLoader, save_document
 from core.types import StreamConfig
 from ui.config.stream_editor import StreamEditor
 
@@ -110,6 +110,8 @@ class ConfiguratorTab(QtWidgets.QWidget):
         # Edit a private copy of the raw document, including streams with errors, so they
         # can be fixed here.
         self.data = copy.deepcopy(self.loader.data.get("streams", {}))
+        panels = self.loader.data.get("panels")
+        self.editor.set_panel_choices(list(panels) if isinstance(panels, dict) else [])
         self.refresh_list()
 
     def refresh_list(self) -> None:
@@ -161,7 +163,6 @@ class ConfiguratorTab(QtWidgets.QWidget):
 
         self.data[key] = {
             "name": "New Stream",
-            "panel_type": "none",
             "frame": {
                 "stream_id": 0,
                 "endianness": "little",
@@ -186,27 +187,25 @@ class ConfiguratorTab(QtWidgets.QWidget):
         if current is not None:
             self._commit(current)
 
+    def document(self) -> dict[str, Any]:
+        """The document to save: as loaded, with the edited streams."""
+        return {**self.loader.data, "streams": self.data}
+
     def save_to_file(self) -> None:
         self.save_current()
-        document = {"streams": self.data}
-        problems = validate_config(document)
-        errors = [str(p) for p in problems if p.severity == "error"]
-        if errors:
+        try:
+            problems = save_document(self.filepath, self.document())
+        except InvalidConfigError as e:
+            errors = [str(p) for p in e.problems]
             shown = "\n".join(errors[:15]) + ("\n..." if len(errors) > 15 else "")
             QtWidgets.QMessageBox.critical(
                 self, "Not saved", f"Fix these problems before saving:\n\n{shown}"
             )
             return
-        try:
-            shutil.copy(self.filepath, self.filepath + ".bak")
-        except OSError:
-            logger.warning("Could not create backup file: %s.bak", self.filepath)
-        try:
-            with open(self.filepath, "w", encoding="utf-8") as f:
-                json.dump(document, f, indent=4)
-            warnings = [str(p) for p in problems]
-            note = ("\n\nWarnings:\n" + "\n".join(warnings)) if warnings else ""
-            QtWidgets.QMessageBox.information(self, "Saved", "Configuration saved!" + note)
-            self.config_saved.emit()
         except OSError as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Save failed: {e}")
+            return
+        warnings = [str(p) for p in problems]
+        note = ("\n\nWarnings:\n" + "\n".join(warnings)) if warnings else ""
+        QtWidgets.QMessageBox.information(self, "Saved", "Configuration saved!" + note)
+        self.config_saved.emit()

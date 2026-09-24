@@ -5,7 +5,7 @@ import pytest
 from core.config import StreamConfigLoader, validate_config, validate_stream
 
 
-def test_load_valid_config_and_default_panel_type(tmp_path):
+def test_load_valid_schema_1_config(tmp_path):
     payload = {
         "streams": {
             "s1": {
@@ -20,8 +20,9 @@ def test_load_valid_config_and_default_panel_type(tmp_path):
 
     loader = StreamConfigLoader(str(path))
     streams = loader.list_streams()
-    assert "s1" in streams
-    assert streams["s1"]["panel_type"] == "none"
+    assert "s1" in streams and "controls" not in streams["s1"]
+    assert loader.source_version == 1 and loader.migrated  # no schema_version: version 1
+    assert loader.data["schema_version"] == 2 and loader.panel_for("s1") is None
 
 
 def test_invalid_json_raises(tmp_path):
@@ -43,7 +44,6 @@ def test_missing_streams_raises(tmp_path):
 def _stream(**overrides):
     stream = {
         "name": "S",
-        "panel_type": "none",
         "frame": {
             "stream_id": 3,
             "endianness": "little",
@@ -115,16 +115,18 @@ def test_signal_mapped_to_missing_field_is_an_error():
 
 
 def test_warnings_do_not_block_loading(tmp_path):
-    stream = _stream(panel_type="fancy")
+    stream = _stream(controls="missing")
     stream["frame"]["fields"] = [{"name": "x", "type": "f32"}, {"name": "loop_cntr", "type": "u16"}]
     path = tmp_path / "streams.json"
-    path.write_text(json.dumps({"streams": {"ok": stream}}), encoding="utf-8")
+    doc = {"schema_version": 2, "streams": {"ok": stream}}
+    path.write_text(json.dumps(doc), encoding="utf-8")
 
     loader = StreamConfigLoader(path)
 
-    assert "ok" in loader.list_streams()
+    assert "ok" in loader.list_streams() and loader.panel_for("ok") is None
     warnings = _messages(loader.problems, "warning")
-    assert len(warnings) == 3  # unknown panel_type, loop_cntr not first, loop_cntr not u32
+    assert len(warnings) == 3  # unknown controls panel, loop_cntr not first, loop_cntr not u32
+    assert any("controls panel 'missing' is not defined" in w for w in warnings)
 
 
 def test_loader_excludes_only_broken_streams(tmp_path):
@@ -152,16 +154,15 @@ def test_resolve_config_path_prefers_cli_then_remembered_then_default(tmp_path):
     assert DEFAULT_CONFIG_PATH.is_file()  # bundled next to the code, not the CWD
 
 
-def test_loader_does_not_mutate_the_raw_document(tmp_path):
-    stream = _stream()
-    del stream["panel_type"]
+def test_loader_keeps_the_document_as_loaded(tmp_path):
+    doc = {"schema_version": 2, "streams": {"s": _stream()}}
     path = tmp_path / "streams.json"
-    path.write_text(json.dumps({"streams": {"s": stream}}), encoding="utf-8")
+    path.write_text(json.dumps(doc), encoding="utf-8")
 
     loader = StreamConfigLoader(path)
+    loader.list_streams()["s"]["name"] = "changed by a user of the loader"
 
-    assert loader.list_streams()["s"]["panel_type"] == "none"
-    assert "panel_type" not in loader.data["streams"]["s"]
+    assert loader.data == doc and not loader.migrated
 
 
 def test_shared_stream_id_with_ambiguous_layout_is_a_warning():

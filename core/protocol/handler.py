@@ -2,9 +2,9 @@
 Protocol Handler Module.
 
 `ProtocolHandler` is the single-stream convenience API: framing via `FrameParser`, then
-per-frame decoding into dicts for the one configured stream. It also encodes the command
-packets sent to the MCU. The engine's multi-stream path uses `FrameParser` +
-`StreamRouter` directly.
+per-frame decoding into dicts for the one configured stream. The engine's multi-stream path
+uses `FrameParser` + `StreamRouter` directly; commands sent to the MCU are encoded by
+`core.protocol.commands` from their config definitions.
 """
 
 from __future__ import annotations
@@ -12,16 +12,7 @@ from __future__ import annotations
 import struct
 from collections.abc import Generator
 
-from core.protocol.constants import (
-    LOOP_CNTR_NAME,
-    MAGIC_0,
-    MAGIC_1,
-    PID_ALL_FORMAT,
-    PID_SINGLE_FORMAT,
-    RTP_REQ_PID_ALL,
-    RTP_REQ_PID_SINGLE,
-)
-from core.protocol.crc import calculate_crc8
+from core.protocol.constants import LOOP_CNTR_NAME
 from core.protocol.decoder import FrameDecoder
 from core.protocol.frame_parser import HEADER_LEN, MAX_FRAME_LEN, MIN_FRAME_LEN, FrameParser
 from core.protocol.stats import LinkStats
@@ -115,90 +106,3 @@ class ProtocolHandler:
             self.stats.counter_missing += value - last - 1
         else:
             self.stats.counter_resets += 1
-
-    def create_pid_packet(
-        self,
-        motor_id: int,
-        use_ramp: int,
-        use_pi: int,
-        kp: float,
-        ki: float,
-        k1: float,
-        k2: float,
-        k3: float,
-        k_aw: float,
-        alpha: float,
-        rps: float,
-    ) -> bytes:
-        """
-        Constructs a binary packet for PID configuration to be sent to the MCU.
-
-        Structure:
-        [Header: MAGIC0, MAGIC1, PID_REQ_ID, LEN] + [H_CRC] + [Payload] + [P_CRC]
-
-        """
-        payload = struct.pack(
-            PID_SINGLE_FORMAT, motor_id, kp, ki, k1, k2, k3, k_aw, alpha, rps, use_ramp, use_pi
-        )
-
-        h_base = struct.pack("BBBB", MAGIC_0, MAGIC_1, RTP_REQ_PID_SINGLE, len(payload))
-        h_crc = calculate_crc8(h_base)
-        p_crc = calculate_crc8(payload)
-
-        return h_base + struct.pack("B", h_crc) + payload + struct.pack("B", p_crc)
-
-    def create_pid_packet_all_motors(
-        self,
-        l_use_ramp: int,
-        l_use_pi: int,
-        l_kp: float,
-        l_ki: float,
-        l_k1: float,
-        l_k2: float,
-        l_k3: float,
-        l_k_aw: float,
-        l_alpha: float,
-        l_rps: float,
-        r_use_ramp: int,
-        r_use_pi: int,
-        r_kp: float,
-        r_ki: float,
-        r_k1: float,
-        r_k2: float,
-        r_k3: float,
-        r_k_aw: float,
-        r_alpha: float,
-        r_rps: float,
-    ) -> bytes:
-        """
-        Constructs a binary packet for PID configuration to be sent to the MCU for both motors
-        """
-        payload = struct.pack(
-            PID_ALL_FORMAT,
-            l_kp,
-            l_ki,
-            l_k1,
-            l_k2,
-            l_k3,
-            l_k_aw,
-            l_alpha,
-            l_rps,
-            l_use_ramp,
-            l_use_pi,
-            r_kp,
-            r_ki,
-            r_k1,
-            r_k2,
-            r_k3,
-            r_k_aw,
-            r_alpha,
-            r_rps,
-            r_use_ramp,
-            r_use_pi,
-        )
-
-        h_base = struct.pack("BBBB", MAGIC_0, MAGIC_1, RTP_REQ_PID_ALL, len(payload))
-        h_crc = calculate_crc8(h_base)
-        p_crc = calculate_crc8(payload)
-
-        return h_base + struct.pack("B", h_crc) + payload + struct.pack("B", p_crc)

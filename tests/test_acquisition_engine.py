@@ -128,15 +128,34 @@ def test_commands_on_the_virtual_port_reach_the_simulator(pyqt_stub):
     engine.configure_streams({"pid": {**_CFG_B, "sim": {"model": "pid_motor"}}})
     msgs = []
     engine.status_msg.connect(msgs.append)
+    # Any config-defined command works (R5.2): here one carrying only three left gains.
+    from core.protocol.commands import CommandDef, CommandField, encode_command
+
+    tune = CommandDef(
+        "tune",
+        "Left tune",
+        0x20,
+        (
+            CommandField("left_kp", "f32"),
+            CommandField("left_rps", "f32"),
+            CommandField("left_use_pi", "u8"),
+        ),
+    )
+    engine.configure_commands((tune,))  # before connecting: the simulator gets them on start
     engine.start_working("VIRTUAL", 115200)
     try:
         sim = engine._sim
-        engine.send_left_config(0, 0, 1.5, 0.5, 20.0, 2.0, 0.0, 1.0, 0.5, 2.0)
+        engine.send_packet(
+            encode_command(tune, {"left_kp": 1.5, "left_rps": 2.0, "left_use_pi": 0})
+        )
         gains = sim.synth.model.gains("left")
         assert (gains.kp, gains.rps, gains.use_pi) == (1.5, 2.0, False)
+        assert sim.synth.model.gains("right").kp == 0.1  # untouched
         assert not any("not sent" in m for m in msgs)
     finally:
         engine.stop_working()
+    engine.send_packet(encode_command(tune, {"left_kp": 1, "left_rps": 1, "left_use_pi": 1}))
+    assert msgs[-1] == "Not connected to a serial port: command not sent"
 
 
 def test_serial_open_failure_emits_error(pyqt_stub):
@@ -276,10 +295,10 @@ def test_commands_are_written_to_the_transport(pyqt_stub):
     transport = FakeTransport()
     engine = _engine_with(transport)
     engine.start_working("COM7", 115200)
+    packet = _frame(0x10, bytes(35))
     try:
-        engine.send_left_config(1, 0, 0.1, 0.02, 1.0, 2.0, 3.0, 1.0, 0.2, -0.3)
-        assert len(transport.written) == 1
-        assert transport.written[0][:3] == bytes([0xAA, 0x55, 0x10])
+        engine.send_packet(packet)
+        assert transport.written == [packet]  # written as encoded, in one piece
     finally:
         engine.stop_working()
 
@@ -291,7 +310,7 @@ def test_write_failure_is_reported_not_fatal(pyqt_stub):
     engine.status_msg.connect(msgs.append)
     engine.start_working("COM7", 115200)
     try:
-        engine.send_left_config(1, 0, 0.1, 0.02, 1.0, 2.0, 3.0, 1.0, 0.2, 0.3)
+        engine.send_packet(_frame(0x10, bytes(35)))
         assert msgs[-1] == "Write Error: write timeout"
         assert engine.state.name == "RUNNING"
     finally:
@@ -302,7 +321,7 @@ def test_command_without_connection_is_reported(pyqt_stub):
     engine = _engine_with(FakeTransport())
     msgs = []
     engine.status_msg.connect(msgs.append)
-    engine.send_left_config(1, 0, 0.1, 0.02, 1.0, 2.0, 3.0, 1.0, 0.2, 0.3)
+    engine.send_packet(_frame(0x10, bytes(35)))
     assert msgs == ["Not connected to a serial port: command not sent"]
 
 
