@@ -41,8 +41,7 @@ class TimeConfigPanel(QtWidgets.QGroupBox):
         self.period_sb.setSuffix(" ms")
         self.period_sb.setSingleStep(1.0)
         self.period_sb.setToolTip(
-            "Time interval between data points.\n"
-            "Lower value = Higher frequency (more CPU usage)."
+            "Time interval between data points.\nLower value = Higher frequency (more CPU usage)."
         )
 
         # --- Sample Count Input ---
@@ -52,7 +51,7 @@ class TimeConfigPanel(QtWidgets.QGroupBox):
         self.samples_sb.setValue(2000)  # Default: 2000 points history
         self.samples_sb.setSingleStep(100)
         self.samples_sb.setToolTip(
-            "Number of data points to keep in history.\n" "Total Time Window = Period * Samples."
+            "Number of data points to keep in history.\nTotal Time Window = Period * Samples."
         )
 
         # --- Signal Wiring ---

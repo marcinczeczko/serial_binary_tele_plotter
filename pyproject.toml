@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "serial-bin-plotter"
 version = "0.1.0"
-description = "DiffBot telemetry viewer and serial binary plotter."
+description = "Real-time plotter for binary telemetry streamed from microcontrollers over serial."
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
 dependencies = [

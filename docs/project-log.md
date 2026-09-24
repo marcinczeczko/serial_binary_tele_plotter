@@ -6,6 +6,36 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-24 — Phase 0: safety net (R0.1–R0.6)
+
+- R0.1: `tests/test_protocol_stream.py` covers random chunking, byte-by-byte feeds, garbage
+  and fake magic bytes, header/payload CRC corruption, a split magic pair, wrong length,
+  a 255 B payload, interleaved stream IDs and big-endian frames. C1 is pinned with
+  `xfail(strict=True)` on reads over 4 KiB.
+- R0.2: `tools/bench_pipeline.py` (≈2 s). Baseline for `pid`: 66.9k frames/s, 9.76 MB/s;
+  5000 B reads 0/20000 decoded; CRC 3.5 µs; snapshot 0.84 / 6.1 / 25.6 ms per tick at
+  2k / 20k / 100k samples (0.6 / 5.6 / 28 MB).
+- R0.3: `qt` marker + real-Qt tests (`tests/test_qt_integration.py`): an engine in a real
+  `QThread` delivering queued packets to the GUI thread, and a lossless editor round trip
+  for `pid`. C4c (line width forced to 2) is pinned as a strict xfail. The `qt` tests skip
+  under `-p no:pytest-qt`. `QT_QPA_PLATFORM` defaults to `offscreen`.
+- R0.4: `.github/workflows/ci.yml` runs ruff check + format, mypy, pytest and the
+  benchmark on ubuntu-24.04 with the Qt system libraries. Ticked once green on `main`.
+- R0.5: `uv run mypy .` exits 0. App fixes: None-narrowing, `CollapsableSection.layout` no
+  longer shadows `QWidget.layout()`, typed `StreamEditor.get_data`. Tests became a package
+  so `[mypy-tests.*]` relaxations apply. Legacy untyped tests aren't body-checked.
+- R0.6: removed `streams.json.bak` (`*.bak` is now ignored), translated the Polish
+  comments and launch names, and dropped "DiffBot" from the window title, docstrings and
+  package description.
+- Note: with `target-version = "py314"`, `ruff format` rewrites `except (A, B):` as the
+  PEP 758 form `except A, B:` (`core/acquisition/engine.py`). If T6 widens the supported
+  Python versions, lowering the ruff target restores the parentheses.
+- Also added a real-Qt `MainWindow` smoke test: start, expand the PID section, switch stream, close.
+- Results: 49 passed, 4 xfailed with Qt; 46 passed, 4 skipped, 3 xfailed with
+  `-p no:pytest-qt`.
+
+---
+
 ## 2026-09-24 — Architecture review, roadmap, project records
 
 - Reviewed the codebase at `637f7ba` in full:

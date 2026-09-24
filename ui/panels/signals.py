@@ -37,7 +37,7 @@ class SignalListPanel(QtWidgets.QWidget):
 
         self.signals_container = QtWidgets.QWidget()
         self.signals_layout = QtWidgets.QVBoxLayout(self.signals_container)
-        self.signals_layout.setSpacing(2)  # Mniejszy odstęp dla płaskiej listy
+        self.signals_layout.setSpacing(2)  # tighter spacing for the flat list
         self.signals_layout.addStretch()
 
         scroll.setWidget(self.signals_container)
@@ -51,8 +51,9 @@ class SignalListPanel(QtWidgets.QWidget):
         # 1. Clear existing widgets
         while self.signals_layout.count() > 1:
             item = self.signals_layout.takeAt(0)
-            if item and item.widget():
-                item.widget().deleteLater()
+            widget = item.widget() if item else None
+            if widget:
+                widget.deleteLater()
 
         # 2. Create Signal Controls (Flat List)
         signals = cfg.get("signals", {})

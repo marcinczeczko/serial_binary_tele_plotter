@@ -103,7 +103,7 @@ class TelemetryEngine(QtCore.QObject):
         if self.serial_port and self.serial_port.is_open:
             try:
                 self.serial_port.close()
-            except (OSError, serial.SerialException):
+            except OSError, serial.SerialException:
                 pass
             self.serial_port = None
 

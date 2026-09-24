@@ -54,7 +54,7 @@ class TelemetryPlot(QtWidgets.QWidget):
         self.graphics = pg.GraphicsLayoutWidget()
         layout.addWidget(self.graphics)
 
-        # Główny PlotItem
+        # Main PlotItem
         self.plot: pg.PlotItem = self.graphics.addPlot()
         self.plot.showGrid(x=True, y=True, alpha=0.3)
         self.plot.setLabel("bottom", "Time [s]")
@@ -66,7 +66,7 @@ class TelemetryPlot(QtWidgets.QWidget):
         # TURN ON left axis and enable auto-scaling
         self.plot.getAxis("left").setVisible(True)
         self.plot.enableAutoRange(axis="y")
-        # Optionsl: block minimal range to prevent wild swings when values are zero
+        # Optional: block minimal range to prevent wild swings when values are zero
         # self.plot.setLimits(yMin=-1000, yMax=1000)
 
         # --- Interactive Tools ---
