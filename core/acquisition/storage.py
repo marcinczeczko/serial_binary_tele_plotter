@@ -20,12 +20,12 @@ from __future__ import annotations
 
 import math
 import threading
-import warnings
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 import numpy as np
 
+from core.acquisition.lod import TARGET_BUCKETS, MinMaxLod
 from core.acquisition.timebase import TimeBase, TimeBaseConfig, time_base_config
 from core.types import DecodedFrame, SignalsConfig, StreamConfig
 
@@ -39,6 +39,8 @@ class Snapshot:
     signals: dict[str, np.ndarray]
     bounds: dict[str, tuple[float, float]] = field(default_factory=dict)
     """(min, max) of finite values per signal; signals without finite data are absent."""
+    decimated: bool = False
+    """Drawable min/max buckets (3 points each, see `overview`), not individual samples."""
 
 
 class SampleStore:
@@ -62,6 +64,8 @@ class SampleStore:
         self._scale_s = self._time.cfg.scale_s
         self._ticks = self._alloc_ticks()
         self._mat = self._alloc_matrix()
+        self._lod = self._alloc_lod()
+        self._rows = 0  # rows ever written (incl. ones a too-big batch skipped), for the LOD
         self._head = 0  # next write position, 0..capacity-1
         self._count = 0  # valid samples, <= capacity
         self._version = 0  # bumps on every change visible to readers
@@ -117,6 +121,7 @@ class SampleStore:
             )
             self._col = {sid: k for k, sid in enumerate(self._ids)}
             self._mat = self._alloc_matrix()
+            self._lod = self._alloc_lod()
             self._reset_locked()
 
     def clear(self) -> None:
@@ -142,6 +147,8 @@ class SampleStore:
             self._capacity = capacity
             self._ticks = self._alloc_ticks()
             self._mat = self._alloc_matrix()
+            self._lod = self._alloc_lod()
+            self._rows = 0
             self._head = 0
             self._count = 0
             self._write_locked(old_ticks, old_rows)
@@ -214,7 +221,7 @@ class SampleStore:
         since_version: int | None = None,
     ) -> Snapshot | None:
         """
-        Copies the current window of `signal_ids` (all signals if None).
+        Copies the current window of `signal_ids` (all signals if None), every sample.
 
         Returns None when fewer than 2 samples are stored, or when nothing changed since
         `since_version`, so a caller polling at frame rate does no work while idle.
@@ -227,20 +234,83 @@ class SampleStore:
             wanted = self._ids if signal_ids is None else signal_ids
             ids = [sid for sid in wanted if sid in self._col]
             ticks = self._window_locked(self._ticks).copy()
-            scale_s = self._scale_s
             window = self._window_locked(self._mat)
             data = {sid: window[:, self._col[sid]].copy() for sid in ids}  # contiguous
             version = self._version
+            scale_s = self._scale_s
         # Everything below works on private copies, outside the lock.
         bounds: dict[str, tuple[float, float]] = {}
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN signals
-            for sid, values in data.items():
-                lo, hi = float(np.nanmin(values)), float(np.nanmax(values))
-                if math.isfinite(lo) and math.isfinite(hi):
-                    bounds[sid] = (lo, hi)
+        for sid, values in data.items():
+            b = _finite_bounds(values, values)
+            if b is not None:
+                bounds[sid] = b
         ticks *= scale_s
         return Snapshot(version=version, time=ticks, signals=data, bounds=bounds)
+
+    def overview(
+        self,
+        signal_ids: Iterable[str] | None = None,
+        since_version: int | None = None,
+    ) -> Snapshot | None:
+        """
+        The window of `signal_ids` ready to draw, from the incremental min/max level of
+        detail (R3.4): 3 points per bucket (min, max, then max again or NaN where the bucket
+        holds a gap), about `TARGET_BUCKETS` buckets whatever the capacity. That's what the
+        live view pulls every frame. A window small enough to draw sample by sample comes
+        back as a plain `snapshot()`. Same None rules as `snapshot()`.
+        """
+        with self._lock:
+            if self._count < 2 or (since_version is not None and since_version == self._version):
+                return None
+            if self._lod.k == 1 or self._count <= 3 * TARGET_BUCKETS:
+                small = True
+            else:
+                small = False
+                wanted = self._ids if signal_ids is None else signal_ids
+                cols = {sid: self._col[sid] for sid in wanted if sid in self._col}
+                self._sync_lod_locked()
+                t0, lo, hi, gap = self._lod.window(self._count)
+                first_tick = float(self._window_locked(self._ticks)[0])
+                version = self._version
+                scale_s = self._scale_s
+        if small:
+            return self.snapshot(signal_ids, since_version)
+        # The oldest bucket may reach back before the window; start it at the window.
+        t0[0] = max(float(t0[0]), first_tick)
+        time = np.repeat(t0 * scale_s, 3)
+        signals: dict[str, np.ndarray] = {}
+        bounds: dict[str, tuple[float, float]] = {}
+        for sid, c in cols.items():
+            y = np.empty(3 * len(t0))
+            y[0::3] = lo[:, c]
+            y[1::3] = hi[:, c]
+            y[2::3] = np.where(gap[:, c], math.nan, hi[:, c])
+            signals[sid] = y
+            b = _finite_bounds(lo[:, c], hi[:, c])
+            if b is not None:
+                bounds[sid] = b
+        return Snapshot(version, time, signals, bounds, decimated=True)
+
+    def values_at(self, t_s: float, signal_ids: Iterable[str]) -> dict[str, float]:
+        """
+        Exact values at time `t_s` (linear between the two samples around it; clamped to
+        the window). NaN where either neighbour is a gap or the signal has no data. The
+        live cursor readout uses this, since live frames only hold min/max buckets.
+        """
+        with self._lock:
+            if self._count < 2:
+                return {}
+            ticks = self._window_locked(self._ticks)
+            x = min(max(t_s / self._scale_s, float(ticks[0])), float(ticks[-1]))
+            i = int(np.searchsorted(ticks, x, side="right"))
+            i = max(1, min(i, len(ticks) - 1))
+            x0, x1 = float(ticks[i - 1]), float(ticks[i])
+            rows = self._window_locked(self._mat)[i - 1 : i + 1].copy()
+            cols = {sid: self._col[sid] for sid in signal_ids if sid in self._col}
+        frac = (x - x0) / (x1 - x0) if x1 != x0 else 0.0
+        return {
+            sid: float(rows[0, c] + frac * (rows[1, c] - rows[0, c])) for sid, c in cols.items()
+        }
 
     # --- internals ---------------------------------------------------------------------
 
@@ -251,10 +321,14 @@ class SampleStore:
         shape = (2 * self._capacity, len(self._ids))
         return np.full(shape, math.nan, dtype=np.float64, order="F")
 
+    def _alloc_lod(self) -> MinMaxLod:
+        return MinMaxLod(self._capacity, len(self._ids))
+
     def _write_locked(self, ticks: np.ndarray, values: np.ndarray) -> None:
         """Appends rows (both copies), wrapping at capacity; keeps the newest if too many."""
         cap = self._capacity
         n = len(ticks)
+        self._rows += n  # the LOD catches up lazily, when a frame reads it
         if n > cap:
             ticks, values, n = ticks[-cap:], values[-cap:], cap
         done = 0
@@ -268,8 +342,27 @@ class SampleStore:
             done += k
         self._count = min(self._count + n, cap)
 
+    def _sync_lod_locked(self) -> None:
+        """
+        Summarises the rows written since the last frame (~33 at 1 kHz and 30 FPS). Done
+        here rather than per written batch, so the reader thread pays nothing for it.
+        """
+        lod = self._lod
+        if lod.written == self._rows:
+            return
+        oldest = self._rows - self._count  # row number of the window's first sample
+        start = max(lod.written, oldest)
+        offset = start - oldest
+        lod.add(
+            self._window_locked(self._ticks)[offset:],
+            self._window_locked(self._mat)[offset:],
+            skipped=start - lod.written,
+        )
+
     def _reset_locked(self) -> None:
         self._time.reset()
+        self._lod.reset()
+        self._rows = 0
         self._head = 0
         self._count = 0
         self._version += 1
@@ -278,6 +371,14 @@ class SampleStore:
         """Chronological view (oldest..newest) of the valid samples; no copy."""
         end = self._head + self._capacity
         return buf[end - self._count : end]
+
+
+def _finite_bounds(lo: np.ndarray, hi: np.ndarray) -> tuple[float, float] | None:
+    """(min of `lo`, max of `hi`) ignoring NaN, or None when there's no finite value."""
+    if not len(lo):
+        return None
+    low, high = float(np.fmin.reduce(lo)), float(np.fmax.reduce(hi))
+    return (low, high) if math.isfinite(low) and math.isfinite(high) else None
 
 
 class StreamStores:

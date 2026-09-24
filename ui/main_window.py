@@ -139,6 +139,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # 3. Visuals: Panel -> Plot
         self.panel.signal_visibility_changed.connect(self.plot.set_signal_visible)
         self.panel.signal_visibility_changed.connect(lambda *_: self.live_feed.invalidate())
+        self.panel.signal_lane_changed.connect(self.plot.move_signal)
 
         # 4. Engine -> UI (small signals only; plot data is pulled by LiveFeed)
         self.engine.status_msg.connect(self.lbl_status.setText)
@@ -212,7 +213,7 @@ class MainWindow(QtWidgets.QMainWindow):
         change: acquisition isn't restarted and the stream's history is kept. The engine
         is told only so the virtual device simulates the shown stream.
         """
-        self.plot.configure_signals(stream_cfg["signals"])
+        self.plot.configure_stream(stream_cfg)
         self._bind_live_feed()
         self._show_period()
         key = self.panel.current_stream_key()

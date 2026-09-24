@@ -41,6 +41,7 @@ class SimTransport:
         stream: StreamConfig,
         *,
         seed: int | None = None,
+        start_frame: int = 0,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -51,6 +52,7 @@ class SimTransport:
         self._synth = FrameSynth(stream, seed)
         self._commands = FrameParser()
         self._open = False
+        self._start_frame = start_frame  # e.g. to follow history a benchmark pre-filled
         self._k = 0  # next frame number; frames continue across stream switches
         self._t0 = 0.0  # when frame `_k0` was due
         self._k0 = 0
@@ -67,7 +69,7 @@ class SimTransport:
     def open(self) -> None:
         with self._lock:
             self._open = True
-            self._k = self._k0 = 0
+            self._k = self._k0 = self._start_frame
             self._t0 = self._last_read = self._clock()
 
     def close(self) -> None:

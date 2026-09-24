@@ -25,6 +25,9 @@ DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "streams.json"
 PANEL_TYPES = ("none", "pid", "imu")
 ENDIANNESS = ("little", "big")
 MAX_PAYLOAD_BYTES = 255  # LEN is a single byte on the wire
+Y_RANGE_MODES = ("auto", "auto-grow", "manual")  # per-lane Y range behaviour (R3.2)
+GROUP_KEYS = ("label", "order", "y_range")
+Y_RANGE_KEYS = ("mode", "min", "max", "include_zero")
 
 
 @dataclass(frozen=True)
@@ -167,6 +170,7 @@ def validate_stream(key: str, stream: Any) -> list[ConfigProblem]:
 
     problems.extend(_time_problems(key, stream.get("time"), names))
     problems.extend(_sim_problems(key, stream.get("sim"), names))
+    problems.extend(_lane_problems(key, stream))
 
     signals = stream.get("signals", {})
     if not isinstance(signals, dict):
@@ -268,6 +272,62 @@ def _sim_problems(key: str, sim: Any, names: list[str]) -> list[ConfigProblem]:
             ):
                 problems.append(warning(f"fields.{name}.{param} must be a number"))
     return problems
+
+
+def _y_range_problems(where: str, y_range: Any) -> list[str]:
+    if not isinstance(y_range, dict):
+        return [f"{where}.y_range must be an object"]
+    msgs = []
+    mode = y_range.get("mode", "auto")
+    if mode not in Y_RANGE_MODES:
+        msgs.append(f"{where}.y_range.mode {mode!r} is unknown (known: {', '.join(Y_RANGE_MODES)})")
+    lo, hi = y_range.get("min"), y_range.get("max")
+    for name, value in (("min", lo), ("max", hi)):
+        if value is not None and (not isinstance(value, int | float) or isinstance(value, bool)):
+            msgs.append(f"{where}.y_range.{name} must be a number")
+    if isinstance(lo, int | float) and isinstance(hi, int | float) and not lo < hi:
+        msgs.append(f"{where}.y_range needs min < max")
+    if "include_zero" in y_range and not isinstance(y_range["include_zero"], bool):
+        msgs.append(f"{where}.y_range.include_zero must be true or false")
+    unknown = sorted(set(y_range) - set(Y_RANGE_KEYS))
+    if unknown:
+        msgs.append(f"{where}.y_range: unknown key(s) {', '.join(unknown)}")
+    return msgs
+
+
+def _lane_problems(key: str, stream: dict[str, Any]) -> list[ConfigProblem]:
+    """
+    Checks lanes (R3.1): `groups` and each signal's `group` and `y_range`. They only
+    affect display, so every problem is a warning, and the plot falls back to defaults.
+    """
+    msgs: list[str] = []
+    groups = stream.get("groups", {})
+    if not isinstance(groups, dict):
+        msgs.append("'groups' must be an object")
+        groups = {}
+    for name, group in groups.items():
+        if not isinstance(group, dict):
+            msgs.append(f"groups.{name} must be an object")
+            continue
+        if "label" in group and not isinstance(group["label"], str):
+            msgs.append(f"groups.{name}.label must be a string")
+        order = group.get("order")
+        if order is not None and (not isinstance(order, int | float) or isinstance(order, bool)):
+            msgs.append(f"groups.{name}.order must be a number")
+        if "y_range" in group:
+            msgs.extend(_y_range_problems(f"groups.{name}", group["y_range"]))
+        unknown = sorted(set(group) - set(GROUP_KEYS))
+        if unknown:
+            msgs.append(f"groups.{name}: unknown key(s) {', '.join(unknown)}")
+    signals = stream.get("signals", {})
+    for sig_key, sig in signals.items() if isinstance(signals, dict) else ():
+        if not isinstance(sig, dict):
+            continue
+        if "group" in sig and not isinstance(sig["group"], str):
+            msgs.append(f"signal '{sig_key}': group must be a string")
+        if "y_range" in sig:
+            msgs.extend(_y_range_problems(f"signal '{sig_key}'", sig["y_range"]))
+    return [ConfigProblem("warning", key, msg) for msg in msgs]
 
 
 class StreamConfigLoader:

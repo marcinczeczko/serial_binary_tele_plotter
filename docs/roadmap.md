@@ -177,17 +177,34 @@ PRs that each keep the app working. Measure with `tools/bench_pipeline.py` befor
 
 ## Phase 3: visualisation for analysis (A4, P7)
 
-- [ ] **R3.1 Plot lanes**: `signals[*].lane` (or a `lanes` list per stream). Stacked
+- [x] **R3.1 Plot lanes**: `signals[*].lane` (or a `lanes` list per stream). Stacked
   `PlotItem`s with linked X, each with its own Y auto-range. Drag a signal between lanes
   in the UI.
-- [ ] **R3.2 Range modes** per lane: `auto` (visible X window only), `auto-grow`, `manual`.
+  *Done (ADR-0005):* lanes reuse the keys streams.json already had: `signals[*].group`
+  and `groups.<id>` (`label`, `order`, `y_range`). A lane shows while one of its signals is
+  visible. *Scope change:* a lane selector per signal row (with "New lane") replaces
+  drag-and-drop; the Configuration tab's Lane column saves it. The bundled PID streams got
+  Speed / Error / Control / PWM lanes.
+- [x] **R3.2 Range modes** per lane: `auto` (visible X window only), `auto-grow`, `manual`.
   In live mode X follows the head, but the user can zoom or pan Y without it being reset.
   Drop the forced "include zero" rule, or make it a per-lane option.
-- [ ] **R3.3 Cursor/HUD**: `pg.SignalProxy(rateLimit=60)`, readout per lane, two-cursor
+  *Done:* all three modes, set from config or the lane's context menu, with
+  `include_zero` as an option (default off). Dragging or zooming Y switches the lane to
+  manual. Paused `auto` fits only the zoomed X range.
+- [x] **R3.3 Cursor/HUD**: `pg.SignalProxy(rateLimit=60)`, readout per lane, two-cursor
   Δ measurement, and a readout that stays correct across segments and gaps.
-- [ ] **R3.4 Render budget check**: with the bench fixture (34 signals × 100k samples ×
+  *Done:*
+  - A readout per lane; the top lane also shows T and Δt.
+  - Paused, a click drops a Δ anchor that can be dragged (anchor + cursor are the two
+    cursors). Every lane's anchor moves together.
+  - Gap-aware interpolation reads "n/a" next to a gap.
+  - The live readout is exact (`SampleStore.values_at`).
+- [x] **R3.4 Render budget check**: with the bench fixture (34 signals × 100k samples ×
   1 kHz), the GUI holds ≥ 30 FPS and the reader drops 0 bytes. Record the numbers in the
   log.
+  *Done:* `tools/bench_render.py` passes at **30.1 FPS**, 0 lost (offscreen software
+  raster; was ~2.7 FPS). The fix was an incremental min/max level of detail in
+  `SampleStore`, plus one paint per frame instead of ~1.6 (see ADR-0005 and the log).
 
 ## Phase 4: record, replay, analyse (A3)
 

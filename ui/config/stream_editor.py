@@ -3,7 +3,7 @@ Stream Editor Module.
 
 Edits one stream definition. The editor is lossless (C4): it only overwrites the keys it
 shows (name, panel type, stream ID, endianness, time base, field names and types, signal
-label, field, color, visibility, line style and width). Every other key in the stream,
+label, field, color, visibility, line style and width, lane). Every other key in the stream,
 frame, time, field, signal or line object is carried through unchanged, in its original
 order. A time key is written only if it was in the file or its value differs from the
 default, so an untouched stream saves byte-identically.
@@ -89,6 +89,7 @@ class StreamEditor(QtWidgets.QWidget):
         super().__init__(parent)
         self.current_stream_key: str | None = None
         self._original: dict[str, Any] = {}
+        self._lane_choices: list[str] = []
         self.init_ui()
         self.apply_styles()
 
@@ -214,7 +215,7 @@ class StreamEditor(QtWidgets.QWidget):
         self.sig_tree.setRootIsDecorated(False)
 
         # Cols: Label | Field | Color | Vis | Style
-        self.sig_cols = ["Label Name", "Field Map", "Color", "Vis", "Style", "Width"]
+        self.sig_cols = ["Label Name", "Field Map", "Color", "Vis", "Style", "Width", "Lane"]
         self.sig_tree.setColumnCount(len(self.sig_cols))
         self.sig_tree.setHeaderLabels(self.sig_cols)
 
@@ -261,7 +262,14 @@ class StreamEditor(QtWidgets.QWidget):
         self.time_scale_edit.setText(_number_text(time_cfg.get("scale_s", DEFAULT_SCALE_S)))
         self.time_step_edit.setText(_number_text(time_cfg.get("step", 1)))
 
-        # Signals (flat list)
+        # Signals (flat list). Lane choices: the described groups, then any in use.
+        groups = data.get("groups")
+        lanes = list(groups) if isinstance(groups, dict) else []
+        for sdata in data.get("signals", {}).values():
+            group = sdata.get("group") if isinstance(sdata, dict) else None
+            if isinstance(group, str) and group and group not in lanes:
+                lanes.append(group)
+        self._lane_choices = lanes
         self.sig_tree.clear()
         for skey, sdata in data.get("signals", {}).items():
             line = sdata.get("line", {})
@@ -272,6 +280,7 @@ class StreamEditor(QtWidgets.QWidget):
                 "visible": sdata.get("visible", True),
                 "style": line.get("style", "solid"),
                 "width": line.get("width", DEFAULT_LINE_WIDTH),
+                "lane": sdata.get("group", "") if isinstance(sdata.get("group"), str) else "",
             }
             self.add_signal_row(row, key=skey, original=dict(sdata))
 
@@ -323,6 +332,12 @@ class StreamEditor(QtWidgets.QWidget):
                 self.sig_tree.itemWidget(item, 5), QtWidgets.QSpinBox
             ).value()
             sig["line"] = line
+            lane = _as_widget(self.sig_tree.itemWidget(item, 6), QtWidgets.QComboBox)
+            lane_text = lane.currentText().strip()
+            if lane_text:
+                sig["group"] = lane_text
+            else:
+                sig.pop("group", None)  # the default lane
 
             key = item.data(0, ROLE_KEY)
             if not isinstance(key, str) or not key or key in signals:
@@ -486,6 +501,17 @@ class StreamEditor(QtWidgets.QWidget):
         self.sig_tree.setItemWidget(item, 3, w_chk)
         self.sig_tree.setItemWidget(item, 4, cb_sty)
         self.sig_tree.setItemWidget(item, 5, sb_width)
+
+        # Col 6: Lane (signals[*].group); empty is the default lane, a new name a new lane
+        cb_lane = QtWidgets.QComboBox()
+        cb_lane.setEditable(True)
+        cb_lane.addItem("")
+        cb_lane.addItems(self._lane_choices)
+        lane = d.get("lane", "")
+        if lane and cb_lane.findText(lane) < 0:
+            cb_lane.addItem(lane)
+        cb_lane.setCurrentText(lane)
+        self.sig_tree.setItemWidget(item, 6, cb_lane)
 
     def remove_tree_item(self) -> None:
         # Removes selected signal

@@ -188,11 +188,17 @@ def test_plot_downsampling_is_enabled_and_pens_default_to_1px(qtbot: Any) -> Non
         }
     )
 
+    curve_a = plot.signal_views["a"]["curve"]
+    # Live frames come decimated from the store's level of detail (R3.4): pyqtgraph's own
+    # downsampling would only add cost. Paused, the full-resolution capture needs it (P1).
+    assert curve_a.opts["autoDownsample"] is False
+    plot.set_paused(True)
     _, auto, method = plot.plot.downsampleMode()
     assert (auto, method) == (True, "peak")
-    curve_a = plot.signal_views["a"]["curve"]
     assert curve_a.opts["autoDownsample"] is True
     assert curve_a.opts["clipToView"] is True
+    plot.set_paused(False)
+    assert curve_a.opts["autoDownsample"] is False
     assert curve_a.opts["pen"].width() == 1
     assert plot.signal_views["b"]["curve"].opts["pen"].width() == 3
 
@@ -402,8 +408,8 @@ def test_plot_handles_signals_without_data(qtbot: Any) -> None:
     assert np.isfinite([lo, hi]).all()
     assert lo <= -2.0 and hi >= 3.0
 
-    plot.update_tooltip(4.5, plot.last_packet)  # type: ignore[arg-type]
-    assert "Ghost: n/a" in plot.label.textItem.toPlainText()
+    plot.move_cursor(4.5)
+    assert "Ghost: n/a" in plot.readout_text()
 
 
 def test_main_parse_args_keeps_qt_options() -> None:
@@ -484,9 +490,9 @@ def test_live_feed_pulls_only_visible_signals_and_only_when_changed(qtbot: Any) 
     drawn: list[Any] = []
     original = plot.show_packet
 
-    def recording_show(packet: Any) -> None:
+    def recording_show(packet: Any, prepared: Any = None) -> None:
         drawn.append(packet)
-        original(packet)
+        original(packet, prepared)
 
     plot.show_packet = recording_show
 

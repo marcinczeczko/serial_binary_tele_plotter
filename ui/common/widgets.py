@@ -76,10 +76,10 @@ class CollapsibleGroup(QtWidgets.QWidget):
 
 class YAxisControlWidget(QtWidgets.QWidget):
     """
-    Simple widget for a single signal: [X] Color_Icon Label_Name
+    One signal's row: [X] color swatch, label, and (optionally) its lane.
     """
 
-    def __init__(self, label: str, color: str, checked: bool) -> None:
+    def __init__(self, label: str, color: str, checked: bool, with_lane: bool = False) -> None:
         super().__init__()
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(5, 2, 5, 2)
@@ -102,6 +102,14 @@ class YAxisControlWidget(QtWidgets.QWidget):
         layout.addWidget(self.color_icon)
         layout.addWidget(self.name_label)
         layout.addStretch()  # keep everything left-aligned
+
+        # Lane choice (R3.1): which stacked plot the signal is drawn in.
+        self.lane_combo: QtWidgets.QComboBox | None = None
+        if with_lane:
+            self.lane_combo = QtWidgets.QComboBox()
+            self.lane_combo.setToolTip("Lane (stacked plot) this signal is drawn in")
+            self.lane_combo.setMaximumWidth(110)
+            layout.addWidget(self.lane_combo)
 
 
 class CollapsableSection(QtWidgets.QWidget):

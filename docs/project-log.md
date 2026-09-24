@@ -6,6 +6,57 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-24 — Phase 3: plot lanes, range modes, cursor, render budget (R3.1–R3.4)
+
+- **Lanes (A4, ADR-0005).**
+  - `TelemetryPlot` stacks one `PlotItem` per lane, from `signals[*].group` and `groups`.
+    It uses a linked X axis and a fixed axis width, and shows only lanes with a visible
+    signal.
+  - Moving a signal: the Signals panel has a lane selector per row, including "New lane".
+    The Configuration tab's Lane column saves it.
+  - Lane settings are validated as warnings.
+  - The bundled PID streams got Speed / Error / Control / PWM lanes.
+- **Range modes (R3.2, P7).**
+  - `auto`, `auto-grow` and `manual` per lane. Zero is no longer forced (`include_zero`
+    option). A Y drag or zoom switches the lane to manual.
+  - Live, X follows the head and the mouse controls Y only. Paused, `auto` fits the
+    zoomed X range.
+- **Cursor (R3.3).**
+  - Readout per lane at 60 Hz (`SignalProxy`). Gap-aware interpolation reads "n/a" next
+    to a gap.
+  - Paused, a draggable Δ anchor.
+  - The live readout is exact, from `SampleStore.values_at`.
+- **Render budget (R3.4)**, `tools/bench_render.py`: 34 signals × 100k samples at 1 kHz,
+  offscreen software raster. Went from ~2.7 FPS (112 ms tick + 265 ms paint) to **30.1 FPS**,
+  0 lost, with 6–7 ms pull + draw and 22 ms paint per frame. Six signals: 30.3 FPS.
+  Steps (FPS in the bench):
+  - Min/max decimation to about the pixel width: 7.7 FPS.
+  - A worker thread for decimation made it *worse* (8.4 FPS; PyQt holds the GIL during
+    paint), so it was dropped.
+  - An incremental store-side level of detail (`core/acquisition/lod.py`, updated lazily
+    on read): live pull 1.1 ms instead of 6.6 ms for a full snapshot. 19 FPS.
+  - One paint per frame instead of ~1.6: hidden empty HUD and idle cursor, and the view
+    matrix applied before paint. 23 FPS.
+  - pyqtgraph downsampling only when paused: 24 FPS.
+  - Only restart the frame timer when its interval changes (setInterval restarted it every
+    tick: 36.5 ms period). Plus 1000 buckets and a major-ticks-only grid (the full grid
+    was 70 ms of paint): 30 FPS.
+- `bench_pipeline.py`: parse+store unchanged (113k frames/s at 900 B reads, 211k at 5000
+  B), because the level of detail costs the reader thread nothing. Live overview at 100k:
+  1.07 ms for 34 signals, 0.24 ms for 6.
+- Fixed a Qt crash: hidden lanes' plots were removed from the scene and destroyed later.
+  Hidden lanes now stay in the layout.
+- Tests (+30, 2 stubbed-Qt plot tests replaced; 193 with Qt, 161 + 32 skipped without):
+  - lane layout and range policy
+  - decimation, interpolation and bounds
+  - the level of detail equals a brute-force reduction for any batching, wrap and
+    oversized batch
+  - overview, `values_at`, and lane warnings
+  - real-Qt lanes, modes, a manual hold, auto-grow, paused fitting, the Δ anchor, lane
+    moves, the panel selector, the editor Lane column, and live overview + exact readout
+
+---
+
 ## 2026-09-24 — Byte-level simulator (R2.7, A6)
 
 - `VIRTUAL` is now `core/transport/sim_transport.SimTransport`, read by the normal

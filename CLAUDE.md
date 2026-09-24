@@ -33,9 +33,11 @@ uv run pytest -p no:pytest-qt         # when Qt can't load (no libEGL): `qt` tes
 uv run ruff check . && uv run ruff format --check .
 uv run mypy .                         # strict for app code and tools; must exit 0
 uv run python tools/bench_pipeline.py # parser/storage benchmark (C1 guard, snapshot cost)
+uv run python tools/bench_render.py   # GUI render budget (R3.4): 34 signals x 100k @ 1 kHz, >= 30 FPS
 ```
 
-CI (`.github/workflows/ci.yml`) runs exactly these on every PR. Keep them green.
+CI (`.github/workflows/ci.yml`) runs exactly these on every PR. Keep them green. The two benchmarks
+are informational there (`bench_render` may not reach 30 FPS on a shared runner).
 
 Headless containers (e.g. Claude Code on the web) may lack `libEGL.so.1`. Either install
 `libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 libglib2.0-0t64` with apt (what CI
@@ -61,9 +63,11 @@ core/protocol/          wire format: constants, crc (CRC-8), frame_parser (sync/
 core/transport/         Transport protocol, SerialTransport, SimTransport (the VIRTUAL port), ReaderThread (no Qt)
 core/simulation/        synth (frames from a stream's `sim` config), pid_motor (FF + PI motor model); no Qt
 core/acquisition/       engine (QThread controller), storage (SampleStore, StreamStores), timebase (per-stream time:
-                        wrap/reset/gap -> monotonic ticks; seconds applied at snapshot)
+                        wrap/reset/gap -> monotonic ticks; seconds applied at snapshot), lod (min/max level of
+                        detail for live frames, summarised lazily on read)
 ui/main_window.py       composition, thread setup, signal wiring
-ui/charts/              TelemetryPlot (pyqtgraph), LiveFeed (pulls store snapshots)
+ui/charts/              TelemetryPlot (lanes = signals[*].group, per-lane Y modes, cursor/Δ), LiveFeed (pulls the
+                        store's overview), lanes.py + series.py (Qt-free layout, range, decimation, readout)
 ui/panels/              connection, stream select, PID, IMU, timing, signal visibility
 ui/config/              in-app streams.json editor
 tests/                  pytest: pure logic, stubbed-Qt legacy tests, `qt`-marked real-Qt tests
@@ -95,9 +99,15 @@ Changing any of this is a firmware-visible change. Call it out explicitly.
   the engine thread only under `TelemetryEngine._data_lock`. Keep those sections short.
   Reader failures reach the engine thread through a queued signal, never a direct call.
 - **Bulk data doesn't belong in the Qt event queue.** The reader thread appends to the
-  shared `SampleStore` (own lock, versioned). The GUI's `LiveFeed` pulls snapshots of the
-  *visible* signals at up to 30 FPS, and only when the version changed. Don't add signals
-  that carry sample arrays.
+  shared `SampleStore` (own lock, versioned). The GUI's `LiveFeed` pulls
+  `store.overview()` of the *visible* signals at up to 30 FPS, and only when the version
+  changed. That's min/max buckets, about 1000 per signal (ADR-0005). Exact values come from
+  `store.values_at()`, and pause uses a full `snapshot()`. Don't add signals that carry
+  sample arrays.
+- **Render budget.** Keep one paint per live frame. pyqtgraph items that change their
+  transform or geometry inside `paint()` (a visible `TextItem`, a deferred view matrix)
+  schedule a second paint. Check changes to the plot with `tools/bench_render.py` and
+  record the numbers.
 - **The protocol and decoding layers (`core/protocol`) must not import Qt.** Keep them
   pure and unit-testable.
 - **Config-driven over hard-coded.** New stream or command shapes belong in
