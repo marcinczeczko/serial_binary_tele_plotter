@@ -2,9 +2,11 @@
 Stream Editor Module.
 
 Edits one stream definition. The editor is lossless (C4): it only overwrites the keys it
-shows (name, panel type, stream ID, endianness, field names and types, signal label, field,
-color, visibility, line style and width). Every other key in the stream, frame, field,
-signal or line object is carried through unchanged, in its original order.
+shows (name, panel type, stream ID, endianness, time base, field names and types, signal
+label, field, color, visibility, line style and width). Every other key in the stream,
+frame, time, field, signal or line object is carried through unchanged, in its original
+order. A time key is written only if it was in the file or its value differs from the
+default, so an untouched stream saves byte-identically.
 """
 
 from __future__ import annotations
@@ -16,8 +18,9 @@ from typing import Any
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 # Core Imports
+from core.acquisition.timebase import DEFAULT_SCALE_S
 from core.config import ENDIANNESS, PANEL_TYPES
-from core.protocol.constants import STRUCT_TYPE_MAP
+from core.protocol.constants import LOOP_CNTR_NAME, STRUCT_TYPE_MAP
 from core.types import StreamConfig, StreamFrameField
 
 # Common UI Imports
@@ -50,6 +53,23 @@ def _select_or_add(combo: QtWidgets.QComboBox, text: str) -> None:
     if combo.findText(text) < 0:
         combo.addItem(text)
     combo.setCurrentText(text)
+
+
+def _number_text(value: Any) -> str:
+    return repr(value) if isinstance(value, float) else str(value)
+
+
+def _parse_number(text: str) -> int | float | str:
+    """An int when the text is one (so `1` stays `1` in JSON), else a float, else the text."""
+    text = text.strip()
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        return text  # kept as typed; validation reports it
 
 
 def _as_widget[W: QtWidgets.QWidget](widget: QtWidgets.QWidget | None, cls: type[W]) -> W:
@@ -127,6 +147,26 @@ class StreamEditor(QtWidgets.QWidget):
         form.addRow("Endianness:", self.endian_combo)
         form.addRow("Panel Type:", self.panel_combo)
         layout.addWidget(grp_info)
+
+        # --- Time base (R2.5) ---
+        grp_time = QtWidgets.QGroupBox("Time Base")
+        time_form = QtWidgets.QFormLayout(grp_time)
+        self.time_field_combo = QtWidgets.QComboBox()
+        self.time_field_combo.setToolTip("Frame field that drives the X axis.")
+        self.time_scale_edit = QtWidgets.QLineEdit()
+        self.time_scale_edit.setToolTip(
+            "Seconds per tick of the time field: the MCU loop period for a loop counter "
+            "(0.005 = 5 ms), or 1e-6 for a microsecond timestamp."
+        )
+        self.time_step_edit = QtWidgets.QLineEdit()
+        self.time_step_edit.setToolTip(
+            "Nominal increase of the time field per frame: 1 for a loop counter. A larger "
+            "jump is drawn as a gap (lost frames)."
+        )
+        time_form.addRow("Time field:", self.time_field_combo)
+        time_form.addRow("Seconds per tick:", self.time_scale_edit)
+        time_form.addRow("Ticks per frame:", self.time_step_edit)
+        layout.addWidget(grp_time)
 
         # --- Tabs ---
         self.tabs = QtWidgets.QTabWidget()
@@ -214,6 +254,13 @@ class StreamEditor(QtWidgets.QWidget):
             self.add_frame_row(f.get("name", ""), f.get("type", "f32"), original=dict(f))
         self.frame_table.blockSignals(False)
 
+        # Time base
+        raw_time = data.get("time")
+        time_cfg: dict[str, Any] = dict(raw_time) if isinstance(raw_time, dict) else {}
+        self._refresh_time_field_combo(str(time_cfg.get("field", LOOP_CNTR_NAME)))
+        self.time_scale_edit.setText(_number_text(time_cfg.get("scale_s", DEFAULT_SCALE_S)))
+        self.time_step_edit.setText(_number_text(time_cfg.get("step", 1)))
+
         # Signals (flat list)
         self.sig_tree.clear()
         for skey, sdata in data.get("signals", {}).items():
@@ -250,6 +297,7 @@ class StreamEditor(QtWidgets.QWidget):
             fields.append(field)  # type: ignore[arg-type]
         frame["fields"] = fields
         data["frame"] = frame
+        self._put_time(data)
 
         signals: dict[str, dict[str, Any]] = {}
         root = self.sig_tree.invisibleRootItem()
@@ -283,6 +331,34 @@ class StreamEditor(QtWidgets.QWidget):
             signals[key] = sig
         data["signals"] = signals
         return self.key_edit.text(), data  # type: ignore[return-value]
+
+    def _put_time(self, data: dict[str, Any]) -> None:
+        """Writes the time base, touching only keys that were there or now differ."""
+        original = data.get("time")
+        time_cfg: dict[str, Any] = copy.deepcopy(original) if isinstance(original, dict) else {}
+        edited: list[tuple[str, Any, Any]] = [
+            ("field", self.time_field_combo.currentText(), LOOP_CNTR_NAME),
+            ("scale_s", _parse_number(self.time_scale_edit.text()), DEFAULT_SCALE_S),
+            ("step", _parse_number(self.time_step_edit.text()), 1),
+        ]
+        for key, value, default in edited:
+            if key in time_cfg or value != default:
+                time_cfg[key] = value
+        if time_cfg or isinstance(original, dict):
+            data["time"] = time_cfg
+
+    def _refresh_time_field_combo(self, current: str | None = None) -> None:
+        """Lists the frame's fields as time field choices, keeping the selection."""
+        combo = self.time_field_combo
+        current = combo.currentText() if current is None else current
+        fields = self.get_fields()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(fields)
+        if current and current not in fields:
+            combo.addItem(current)  # stale choice stays visible; validation flags it
+        combo.setCurrentText(current)
+        combo.blockSignals(False)
 
     @staticmethod
     def _unique_signal_key(base: str, taken: dict[str, Any]) -> str:
@@ -318,6 +394,7 @@ class StreamEditor(QtWidgets.QWidget):
 
     def _refresh_field_combos(self) -> None:
         """Re-lists frame fields in every signal's "Field Map", keeping each selection."""
+        self._refresh_time_field_combo()
         fields = self.get_fields()
         root = self.sig_tree.invisibleRootItem()
         if root is None:

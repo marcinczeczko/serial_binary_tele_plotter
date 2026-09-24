@@ -6,6 +6,36 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-24 — Per-stream time base (R2.5, C2)
+
+- New `core/acquisition/timebase.py`, and an optional `time: {field, scale_s, step}` per
+  stream (validated; stated explicitly in the bundled `streams.json`). See ADR-0003.
+- `SampleStore` stores monotonic **ticks**:
+  - Integer time fields are unwrapped at their modulus.
+  - A backwards jump is a reset: a new segment after a NaN marker, plus a status message
+    from the engine.
+  - A jump of more than 1.5 × `step` gets a NaN gap marker.
+  - `snapshot()` returns `ticks × scale_s`, so a scale change re-times the history.
+- GUI:
+  - The global Period is gone. The dashboard shows the shown stream's period, and an edit
+    is a session override for that stream only (orange). It's applied through
+    `engine.set_time_scale`, and buffer size through `engine.set_capacity`.
+  - The Configuration tab has Time Base fields and stays lossless: keys are written only
+    when present or non-default.
+  - `LiveFeed` no longer takes a period.
+- Perf: a vectorised time base cost about 40% of parse+store at 900 B reads (about 6
+  frames per batch). It's now a Python loop: 2.5 µs per 6-frame batch, about 5%.
+  `pid`, best of 3, same machine:
+  - 900 B reads: 114–123k → 108–112k frames/s
+  - 5000 B reads: 220–226k → 200–207k frames/s
+  - Snapshots unchanged: 1.0 ms for 6 visible signals at 100k samples.
+- Tests (+24; 151 with Qt, 130 + 21 skipped without): wrap (u32; u8 across batches), reset vs long wrap, gaps across batches,
+  timestamp jitter, float fields, the store keeping time sorted across a reset, re-timing,
+  config errors and warnings, the engine's reset message, the editor round trip, and a
+  real-Qt per-stream override.
+
+---
+
 ## 2026-09-24 — Multi-stream decoding + vectorised decoder (R2.2, R2.3)
 
 - New `core/protocol/`:

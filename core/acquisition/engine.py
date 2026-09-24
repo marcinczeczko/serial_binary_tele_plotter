@@ -26,6 +26,7 @@ from collections.abc import Callable
 from PyQt6 import QtCore
 
 from core.acquisition.storage import StreamStores
+from core.acquisition.timebase import DEFAULT_SCALE_S, time_base_config
 from core.acquisition.virtual import VirtualDevice
 from core.protocol.frame_parser import FrameParser
 from core.protocol.handler import ProtocolHandler
@@ -55,11 +56,8 @@ class TelemetryEngine(QtCore.QObject):
     # The set of streams (and so the StreamStores' stores) changed; re-look-up stores.
     streams_configured = QtCore.pyqtSignal()
 
-    def __init__(
-        self, sample_period_ms: float, max_samples: int, stores: StreamStores | None = None
-    ) -> None:
+    def __init__(self, max_samples: int, stores: StreamStores | None = None) -> None:
         super().__init__()
-        self.sample_period_s: float = sample_period_ms / 1000.0
 
         # Shared with the GUI, which reads snapshots from them directly (thread-safe).
         self.stores: StreamStores = stores if stores is not None else StreamStores(max_samples)
@@ -91,6 +89,7 @@ class TelemetryEngine(QtCore.QObject):
         self._stats_prev: LinkStats = LinkStats()
         self._stats_prev_samples: int = 0
         self._stats_prev_ts: float = 0.0
+        self._time_resets_seen: dict[str, int] = {}
 
     @QtCore.pyqtSlot(str, int)
     def start_working(self, port_name: str, baudrate: int) -> None:
@@ -111,9 +110,11 @@ class TelemetryEngine(QtCore.QObject):
             self._stats_prev = self.parser.stats.snapshot()
             self._stats_prev_samples = self.stores.total_stored
         self._stats_prev_ts = time.monotonic()
+        self._time_resets_seen = {}
 
         if port_name == "VIRTUAL":
-            self.virtual.start(self.sample_period_s)
+            cfg = self._streams.get(self._active_key or "")
+            self.virtual.start(time_base_config(cfg).period_s if cfg else DEFAULT_SCALE_S)
         else:
             transport = self.transport_factory(port_name, baudrate)
             try:
@@ -167,7 +168,7 @@ class TelemetryEngine(QtCore.QObject):
         except (KeyError, ValueError) as e:
             self.status_msg.emit(f"Stream config error: {e}")
             return
-        self.stores.configure({key: cfg.get("signals", {}) for key, cfg in streams.items()})
+        self.stores.configure(streams)
         self._streams = dict(streams)
         self._apply_active_stream()
         if self.state == EngineState.IDLE:
@@ -240,13 +241,39 @@ class TelemetryEngine(QtCore.QObject):
         )
         self._stats_prev, self._stats_prev_samples, self._stats_prev_ts = cur, samples, now
         self.link_stats.emit(report)
+        self._report_time_resets()
 
-    @QtCore.pyqtSlot(float, int)
-    def update_time_config(self, period_ms: float, max_samples: int) -> None:
-        """Updates sampling settings and resizes buffers."""
-        self.sample_period_s = period_ms / 1000.0
+    def _report_time_resets(self) -> None:
+        """Says when a stream's time field went backwards: the device most likely restarted."""
+        names = []
+        for key in self.stores.keys():
+            store = self.stores.get(key)
+            if store is None:
+                continue
+            resets = store.time_resets
+            if resets > self._time_resets_seen.get(key, 0):
+                names.append(self._streams.get(key, {}).get("name", key))
+            self._time_resets_seen[key] = resets
+        if names:
+            self.status_msg.emit(
+                f"Time counter went backwards in {', '.join(names)} (device reset?); "
+                "continuing on a new segment"
+            )
+
+    @QtCore.pyqtSlot(int)
+    def set_capacity(self, max_samples: int) -> None:
+        """Resizes every stream's buffer, keeping the newest samples."""
         self.stores.resize(max_samples)
-        self.virtual.update_params(self.sample_period_s)
+
+    @QtCore.pyqtSlot(str, float)
+    def set_time_scale(self, key: str, scale_s: float) -> None:
+        """
+        Overrides a stream's seconds per tick (the dashboard's per-stream Period). The whole
+        history is re-timed, since the scale is applied when the GUI reads a snapshot.
+        """
+        store = self.stores.get(key)
+        if store is not None:
+            store.set_time_scale(scale_s)
 
     @QtCore.pyqtSlot(int, int, float, float, float, float, float, float, float, float)
     def send_left_config(

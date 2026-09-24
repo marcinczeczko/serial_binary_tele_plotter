@@ -1,51 +1,47 @@
 """
 Time Configuration Panel Module.
 
-This module provides the `TimeConfigPanel` widget, which controls the temporal
-parameters of the data acquisition system:
-1. **Sampling Period**: How often data is read/generated.
-2. **Buffer Size**: How much history is kept in memory (and shown on the plot).
+`TimeConfigPanel` controls:
+1. **Period** of the stream shown: the time between two of its frames. It comes from the
+   stream's `time` block in streams.json (R2.5). Editing it here overrides it for this
+   session only. Set it permanently in the Configuration tab.
+2. **Samples**: how much history each stream's buffer keeps (shared by all streams).
 """
 
 from __future__ import annotations
 
 from PyQt6 import QtCore, QtWidgets
 
+_OVERRIDE_STYLE = "QDoubleSpinBox { color: #FFB74D; }"
+
 
 class TimeConfigPanel(QtWidgets.QGroupBox):
     """
-    A group box for configuring time window parameters.
-
-    It bridges the UI inputs to the TelemetryEngine, allowing dynamic resizing
-    of data buffers and adjustment of the acquisition loop speed.
-
     Attributes:
-        time_config_changed (pyqtSignal): Emitted when period or sample count changes.
-            Payload: (period_ms: float, max_samples: int).
+        period_changed (pyqtSignal): the user edited the shown stream's period (ms).
+        samples_changed (pyqtSignal): the user edited the buffer size (samples).
     """
 
-    time_config_changed = QtCore.pyqtSignal(float, int)
+    period_changed = QtCore.pyqtSignal(float)
+    samples_changed = QtCore.pyqtSignal(int)
 
     def __init__(self) -> None:
-        """Initializes the Time Config panel layout and widgets."""
         super().__init__("Time Window")
 
         layout = QtWidgets.QGridLayout(self)
         layout.setSpacing(8)
 
-        # --- Sample Period Input ---
-        # Controls the dt (delta time) between points.
+        self._configured_ms: float | None = None
+
+        # --- Period of the shown stream ---
         self.period_sb = QtWidgets.QDoubleSpinBox()
-        self.period_sb.setRange(1.0, 1000.0)
-        self.period_sb.setValue(5.0)  # Default: 5ms (200Hz)
+        self.period_sb.setDecimals(3)
+        self.period_sb.setRange(0.001, 60_000.0)
+        self.period_sb.setValue(5.0)
         self.period_sb.setSuffix(" ms")
         self.period_sb.setSingleStep(1.0)
-        self.period_sb.setToolTip(
-            "Time interval between data points.\nLower value = Higher frequency (more CPU usage)."
-        )
 
         # --- Sample Count Input ---
-        # Controls the size of the Deque (Ring Buffer).
         self.samples_sb = QtWidgets.QSpinBox()
         self.samples_sb.setRange(10, 100000)
         self.samples_sb.setValue(2000)  # Default: 2000 points history
@@ -60,8 +56,8 @@ class TimeConfigPanel(QtWidgets.QGroupBox):
         # Arrow and wheel steps still apply immediately.
         self.period_sb.setKeyboardTracking(False)
         self.samples_sb.setKeyboardTracking(False)
-        self.period_sb.valueChanged.connect(self._emit_config)
-        self.samples_sb.valueChanged.connect(self._emit_config)
+        self.period_sb.valueChanged.connect(self._on_period_edited)
+        self.samples_sb.valueChanged.connect(self.samples_changed)
 
         # --- Layout Assembly ---
         layout.addWidget(QtWidgets.QLabel("Period:"), 0, 0)
@@ -69,18 +65,41 @@ class TimeConfigPanel(QtWidgets.QGroupBox):
 
         layout.addWidget(QtWidgets.QLabel("Samples:"), 1, 0)
         layout.addWidget(self.samples_sb, 1, 1)
+        self._update_period_hint()
 
-    def _emit_config(self) -> None:
-        """
-        Slot called when spinboxes change.
-        Emits the current configuration values to the container.
-        """
-        self.time_config_changed.emit(self.period_sb.value(), self.samples_sb.value())
+    def show_period(self, period_ms: float, configured_ms: float) -> None:
+        """Shows a stream's period (and its streams.json value) without emitting a change."""
+        self._configured_ms = configured_ms
+        self.period_sb.blockSignals(True)
+        self.period_sb.setValue(period_ms)
+        self.period_sb.blockSignals(False)
+        self._update_period_hint()
 
-    # --- Public Accessors (for MainWindow Initialization) ---
+    def _on_period_edited(self, value: float) -> None:
+        self._update_period_hint()
+        self.period_changed.emit(value)
+
+    def is_overridden(self) -> bool:
+        configured = self._configured_ms
+        return configured is not None and abs(self.period_sb.value() - configured) > 1e-9
+
+    def _update_period_hint(self) -> None:
+        configured = self._configured_ms
+        tip = (
+            "Time between two frames of the shown stream; the X axis is its time field "
+            "(loop_cntr by default) times this period."
+        )
+        if configured is not None:
+            tip += f"\nstreams.json: {configured:g} ms (time.scale_s x time.step)."
+        if self.is_overridden():
+            tip += "\nOverridden for this session: set it in the Configuration tab to keep it."
+        self.period_sb.setToolTip(tip)
+        self.period_sb.setStyleSheet(_OVERRIDE_STYLE if self.is_overridden() else "")
+
+    # --- Public Accessors ---
 
     def get_period(self) -> float:
-        """Returns the current sampling period in milliseconds."""
+        """Returns the shown stream's period in milliseconds."""
         return self.period_sb.value()
 
     def get_samples(self) -> int:

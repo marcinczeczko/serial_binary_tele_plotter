@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from core.acquisition.timebase import TIME_KEYS
 from core.protocol.constants import LOOP_CNTR_NAME, STRUCT_TYPE_MAP
 from core.types import StreamConfig
 
@@ -155,13 +156,15 @@ def validate_stream(key: str, stream: Any) -> list[ConfigProblem]:
         error(f"payload is {payload} B; the protocol allows at most {MAX_PAYLOAD_BYTES} B")
 
     if LOOP_CNTR_NAME not in names:
-        error(f"frame must contain '{LOOP_CNTR_NAME}' (it drives the time axis)")
+        error(f"frame must contain '{LOOP_CNTR_NAME}' (it's used to detect lost frames)")
     else:
         if names[0] != LOOP_CNTR_NAME:
             warning(f"'{LOOP_CNTR_NAME}' is conventionally the first field")
         cntr = next(f for f in fields if isinstance(f, dict) and f.get("name") == LOOP_CNTR_NAME)
         if cntr.get("type") != "u32":
             warning(f"'{LOOP_CNTR_NAME}' should be u32, got {cntr.get('type')!r}")
+
+    problems.extend(_time_problems(key, stream.get("time"), names))
 
     signals = stream.get("signals", {})
     if not isinstance(signals, dict):
@@ -174,6 +177,51 @@ def validate_stream(key: str, stream: Any) -> list[ConfigProblem]:
         field_name = sig.get("field")
         if field_name not in names:
             error(f"signal '{sig_key}' maps to field {field_name!r}, which is not in the frame")
+    return problems
+
+
+def _is_positive_number(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool) and value > 0
+
+
+def _time_problems(key: str, time_cfg: Any, names: list[str]) -> list[ConfigProblem]:
+    """Checks the optional `time: {field, scale_s, step}` block (R2.5)."""
+    if time_cfg is None:
+        return []
+    if not isinstance(time_cfg, dict):
+        return [ConfigProblem("error", key, "'time' must be an object")]
+    problems: list[ConfigProblem] = []
+    field = time_cfg.get("field", LOOP_CNTR_NAME)
+    if field not in names:
+        problems.append(
+            ConfigProblem("error", key, f"time.field {field!r} is not a field of the frame")
+        )
+    for name in ("scale_s", "step"):
+        if name in time_cfg and not _is_positive_number(time_cfg[name]):
+            problems.append(
+                ConfigProblem(
+                    "error", key, f"time.{name} must be a positive number, got {time_cfg[name]!r}"
+                )
+            )
+    if field != LOOP_CNTR_NAME and "step" not in time_cfg:
+        problems.append(
+            ConfigProblem(
+                "warning",
+                key,
+                f"time.field is '{field}' but time.step is not set; gaps are detected against "
+                "a step of 1 (set it to the field's increase per frame, e.g. 5000 for a "
+                "microsecond timestamp at 200 Hz)",
+            )
+        )
+    unknown = sorted(set(time_cfg) - set(TIME_KEYS))
+    if unknown:
+        problems.append(
+            ConfigProblem(
+                "warning",
+                key,
+                f"unknown time key(s) {', '.join(unknown)} (known: {', '.join(TIME_KEYS)})",
+            )
+        )
     return problems
 
 

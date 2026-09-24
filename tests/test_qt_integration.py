@@ -52,7 +52,7 @@ class _Receiver(QtCore.QObject):
 
 
 def test_engine_in_worker_thread_fills_shared_store(qtbot: Any) -> None:
-    engine = TelemetryEngine(sample_period_ms=5.0, max_samples=500)
+    engine = TelemetryEngine(max_samples=500)
     engine.stats_timer.setInterval(100)
     thread = QtCore.QThread()
     engine.moveToThread(thread)
@@ -85,7 +85,7 @@ def test_engine_in_worker_thread_fills_shared_store(qtbot: Any) -> None:
         gui_thread = app.thread()
         assert all(t is gui_thread for t in receiver.delivery_threads)
 
-        snap = store.snapshot(["ax"], None, 0.005)
+        snap = store.snapshot(["ax"])
         assert snap is not None
         assert list(snap.signals) == ["ax"]
         assert len(snap.time) == len(snap.signals["ax"]) >= 10
@@ -416,7 +416,7 @@ def test_engine_thread_reads_transport_and_handles_disconnect(qtbot: Any) -> Non
     transport = FakeTransport(
         [blob[i : i + 64] for i in range(0, len(blob), 64)], fail_when_drained=True
     )
-    engine = TelemetryEngine(sample_period_ms=5.0, max_samples=1000)
+    engine = TelemetryEngine(max_samples=1000)
     engine.transport_factory = lambda port, baud: transport
     thread = QtCore.QThread()
     engine.moveToThread(thread)
@@ -449,6 +449,7 @@ def test_engine_thread_reads_transport_and_handles_disconnect(qtbot: Any) -> Non
 
 def _feed_setup(qtbot: Any) -> tuple[Any, Any, Any]:
     from core.acquisition.storage import SampleStore
+    from core.acquisition.timebase import TimeBaseConfig
     from ui.charts.live_feed import LiveFeed
     from ui.charts.telemetry_plot import TelemetryPlot
 
@@ -457,11 +458,11 @@ def _feed_setup(qtbot: Any) -> tuple[Any, Any, Any]:
         "b": {"label": "B", "field": "b", "color": "#f00", "visible": False},
     }
     store = SampleStore(1000)
-    store.configure(signals)
+    store.configure(signals, TimeBaseConfig(scale_s=0.01))
     plot = TelemetryPlot()
     qtbot.addWidget(plot)
     plot.configure_signals(signals)
-    feed = LiveFeed(store, plot, lambda: 0.01)
+    feed = LiveFeed(store, plot)
     feed.timer.stop()  # drive ticks by hand
     return store, plot, feed
 
@@ -547,4 +548,65 @@ def test_switching_streams_is_a_view_change_that_keeps_history(qtbot: Any) -> No
     assert kept >= 20  # imu history survived showing another stream
     assert states == []  # no stop/restart on a view change
     assert win.engine_state == EngineState.RUNNING
+    win.close()
+
+
+# --- Per-stream time base (R2.5) ---
+
+
+def test_stream_editor_time_base_round_trip_and_edits(qtbot: Any) -> None:
+    from ui.config.stream_editor import StreamEditor
+
+    editor = StreamEditor()
+    qtbot.addWidget(editor)
+    bare = copy.deepcopy(_load_stream("imu_6axis"))
+    del bare["time"]
+    editor.load_data("imu", copy.deepcopy(bare))
+    assert "time" not in editor.get_data()[1]  # defaults don't add a block
+    fields = [editor.time_field_combo.itemText(i) for i in range(editor.time_field_combo.count())]
+    assert fields == [f["name"] for f in bare["frame"]["fields"]]
+
+    editor.time_scale_edit.setText("1e-06")
+    editor.time_step_edit.setText("5000")
+    editor.time_field_combo.setCurrentText("motor")
+    assert editor.get_data()[1]["time"] == {"field": "motor", "scale_s": 1e-06, "step": 5000}
+
+    with_extra = {**bare, "time": {"step": 1, "note": "kept", "scale_s": 0.005}}
+    editor.load_data("imu", copy.deepcopy(with_extra))  # type: ignore[arg-type]
+    assert editor.get_data()[1]["time"] == with_extra["time"]  # same keys, same order
+
+
+def test_period_is_per_stream_and_an_override_retimes_history(
+    qtbot: Any, config_copy: Path
+) -> None:
+    from ui.main_window import MainWindow
+
+    doc = json.loads(config_copy.read_text(encoding="utf-8"))
+    doc["streams"]["imu_6axis"]["time"]["scale_s"] = 0.01
+    config_copy.write_text(json.dumps(doc, indent=4), encoding="utf-8")
+    win = MainWindow(config_copy)
+    qtbot.addWidget(win)
+    panel, time_panel = win.panel, win.panel.time_panel
+    qtbot.waitUntil(lambda: win.stores.get("imu_6axis") is not None, timeout=5000)
+    imu_store, pid_store = win.stores.get("imu_6axis"), win.stores.get("pid")
+    assert imu_store is not None and pid_store is not None
+
+    panel.payload_combo.setCurrentIndex(panel.payload_combo.findData("imu_6axis"))
+    assert time_panel.get_period() == pytest.approx(10.0)  # from its time block
+    assert not time_panel.is_overridden()
+
+    time_panel.period_sb.setValue(20.0)
+    qtbot.waitUntil(lambda: imu_store.time_scale_s == pytest.approx(0.02), timeout=5000)
+    assert time_panel.is_overridden()
+
+    panel.payload_combo.setCurrentIndex(panel.payload_combo.findData("pid"))
+    assert time_panel.get_period() == pytest.approx(5.0)
+    assert not time_panel.is_overridden()
+    assert pid_store.time_scale_s == pytest.approx(0.005)  # other streams are untouched
+    panel.payload_combo.setCurrentIndex(panel.payload_combo.findData("imu_6axis"))
+    assert time_panel.get_period() == pytest.approx(20.0)  # the override is remembered
+
+    win.configurator.save_to_file()  # reload: the file's values apply again
+    assert time_panel.get_period() == pytest.approx(10.0)
+    assert not time_panel.is_overridden()
     win.close()

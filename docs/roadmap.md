@@ -142,11 +142,20 @@ PRs that each keep the app working. Measure with `tools/bench_pipeline.py` befor
   snapshot time as `loop_cntr × period`; that moves to write time with R2.5. X-range
   clipping of snapshots comes with zoomable lanes in Phase 3, because live view always
   shows the whole window. One store per stream comes with R2.2 (multi-stream).
-- [ ] **R2.5 Time base** (C2)
+- [x] **R2.5 Time base** (C2)
   Per-stream config `time: {field: "loop_cntr", scale_s: 0.001}` (or a µs timestamp field).
   u32 unwrap, reset detection (new segment + status message), and NaN gap insertion when
   Δcounter is more than k × nominal. The UI "Period" control becomes a per-stream override
   that is saved to config, not a global runtime knob.
+  *Done (ADR-0003):*
+  - `time: {field, scale_s, step}`, with k = 1.5.
+  - Wrap is unwrapped for any integer width. A reset starts a new segment after a NaN
+    marker, with one status message.
+  - Ticks are stored at write time; `scale_s` is applied at snapshot time, so a scale
+    correction re-times the history consistently.
+  - *Scope change:* the dashboard Period is a per-stream **session** override. It's saved
+    through the Configuration tab's new Time Base fields, not written to the file directly,
+    because the tab keeps its own unsaved copy of the document and two writers would race.
 - [x] **R2.6 GUI pull model** (P3)
   A `PlotController` `QTimer` at 30–60 FPS calls `store.snapshot(visible, since_version)`,
   which returns `None` if nothing changed. Nothing crosses threads except small control

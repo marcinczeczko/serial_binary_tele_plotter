@@ -51,7 +51,7 @@ STREAMS = {"a": _CFG_BYTES, "b": _CFG_B, "a_view": _CFG_A_VIEW, "imu": _CFG_IMU}
 def _engine(transport=None):
     from core.acquisition.engine import TelemetryEngine
 
-    engine = TelemetryEngine(sample_period_ms=10.0, max_samples=500)
+    engine = TelemetryEngine(max_samples=500)
     if transport is not None:
         engine.transport_factory = lambda port, baud: transport
     return engine
@@ -268,3 +268,36 @@ def test_command_without_connection_is_reported(pyqt_stub):
     engine.status_msg.connect(msgs.append)
     engine.send_left_config(1, 0, 0.1, 0.02, 1.0, 2.0, 3.0, 1.0, 0.2, 0.3)
     assert msgs == ["Not connected to a serial port: command not sent"]
+
+
+def test_counter_reset_is_reported_and_time_keeps_growing(pyqt_stub):
+    engine = _engine_with(FakeTransport())
+    msgs = []
+    engine.status_msg.connect(msgs.append)
+    engine._on_bytes(b"".join(_frame(1, bytes([i, 7])) for i in (10, 11, 12, 0, 1)))
+
+    engine._emit_link_stats()
+    engine._emit_link_stats()  # reported once, not on every stats tick
+
+    assert msgs == [
+        "Time counter went backwards in bytes, A view (device reset?); continuing on a new segment"
+    ]
+    snap = engine.stores.get("a").snapshot()
+    assert (snap.time[1:] > snap.time[:-1]).all()
+
+
+def test_set_time_scale_retimes_one_stream(pyqt_stub):
+    engine = _engine_with(FakeTransport())
+    engine._on_bytes(_frames(3))
+    engine.set_time_scale("a", 0.5)
+    assert engine.stores.get("a").snapshot().time.tolist() == [0.0, 0.5, 1.0]
+    assert engine.stores.get("a_view").time_scale_s == 0.005  # the other view keeps its own
+    engine.set_time_scale("missing", 1.0)  # ignored
+
+
+def test_set_capacity_resizes_every_store(pyqt_stub):
+    engine = _engine_with(FakeTransport())
+    engine._on_bytes(_frames(20))
+    engine.set_capacity(5)
+    assert len(engine.stores.get("a")) == 5 and len(engine.stores.get("b")) == 0
+    assert engine.stores.get("a").capacity == 5

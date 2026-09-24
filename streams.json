@@ -150,6 +150,11 @@
                     }
                 ]
             },
+            "time": {
+                "field": "loop_cntr",
+                "scale_s": 0.005,
+                "step": 1
+            },
             "signals": {
                 "left_target_setpoint": {
                     "label": "L: Target Setpoint",
@@ -643,6 +648,11 @@
                     }
                 ]
             },
+            "time": {
+                "field": "loop_cntr",
+                "scale_s": 0.005,
+                "step": 1
+            },
             "signals": {
                 "left_target_setpoint": {
                     "label": "L: Target Setpoint",
@@ -857,6 +867,11 @@
                         "type": "f32"
                     }
                 ]
+            },
+            "time": {
+                "field": "loop_cntr",
+                "scale_s": 0.005,
+                "step": 1
             },
             "groups": {
                 "accel": {

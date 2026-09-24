@@ -28,6 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.acquisition.storage import SampleStore  # noqa: E402
+from core.acquisition.timebase import time_base_config  # noqa: E402
 from core.config import StreamConfigLoader  # noqa: E402
 from core.protocol.constants import MAGIC_0, MAGIC_1, STRUCT_TYPE_MAP  # noqa: E402
 from core.protocol.crc import calculate_crc8  # noqa: E402
@@ -78,7 +79,7 @@ def parse_and_store(cfg: StreamConfig, blob: bytes, chunk: int) -> tuple[int, fl
     router = StreamRouter(parser.stats)
     router.configure({"s": cfg})
     store = SampleStore(2_000)
-    store.configure(cfg.get("signals", {}))
+    store.configure(cfg.get("signals", {}), time_base_config(cfg))
     decoded = 0
     t0 = time.perf_counter()
     for off in range(0, len(blob), chunk):
@@ -93,7 +94,7 @@ def parse_and_store_dicts(cfg: StreamConfig, blob: bytes, chunk: int) -> tuple[i
     handler = ProtocolHandler()
     handler.configure(cfg)
     store = SampleStore(2_000)
-    store.configure(cfg.get("signals", {}))
+    store.configure(cfg.get("signals", {}), time_base_config(cfg))
     decoded = 0
     t0 = time.perf_counter()
     for off in range(0, len(blob), chunk):
@@ -111,7 +112,7 @@ def bench_snapshot(
     """
     store = SampleStore(max_samples)
     signals = cfg.get("signals", {})
-    store.configure(signals)
+    store.configure(signals, time_base_config(cfg))
     frame = {f["name"]: 1.0 for f in cfg["frame"]["fields"]}
     batch = []
     for i in range(max_samples + 17):  # wrap once so the window is not at index 0
@@ -123,13 +124,13 @@ def bench_snapshot(
     t0 = time.perf_counter()
     snap = None
     for _ in range(SNAPSHOT_REPEATS):
-        snap = store.snapshot(ids, None, 0.001)
+        snap = store.snapshot(ids, None)
     elapsed = (time.perf_counter() - t0) / SNAPSHOT_REPEATS
     assert snap is not None
     mb = (snap.time.nbytes + sum(a.nbytes for a in snap.signals.values())) / 1e6
     t0 = time.perf_counter()
     for _ in range(1000):
-        store.snapshot(ids, snap.version, 0.001)  # nothing changed -> None
+        store.snapshot(ids, snap.version)  # nothing changed -> None
     idle_us = (time.perf_counter() - t0) / 1000 * 1e6
     return elapsed * 1e3, mb, idle_us
 

@@ -184,3 +184,27 @@ def test_shared_stream_id_with_ambiguous_layout_is_a_warning():
 
     assert [(p.severity, p.stream) for p in problems] == [("warning", "d")]
     assert "only 'a' is decoded" in problems[0].message
+
+
+def test_time_block_is_optional_and_validated():
+    assert validate_stream("s", _stream(time={"scale_s": 0.002})) == []
+    assert _messages(validate_stream("s", _stream(time=[]))) == ["'time' must be an object"]
+    errors = _messages(
+        validate_stream("s", _stream(time={"field": "nope", "scale_s": 0, "step": True}))
+    )
+    assert errors == [
+        "time.field 'nope' is not a field of the frame",
+        "time.scale_s must be a positive number, got 0",
+        "time.step must be a positive number, got True",
+    ]
+
+
+def test_time_block_warnings():
+    warnings = _messages(
+        validate_stream("s", _stream(time={"field": "x", "unit": "ms"})), "warning"
+    )
+    assert len(warnings) == 2
+    assert warnings[0].startswith("time.field is 'x' but time.step is not set")
+    assert warnings[1] == "unknown time key(s) unit (known: field, scale_s, step)"
+    ok = validate_stream("s", _stream(time={"field": "x", "scale_s": 1e-6, "step": 5000}))
+    assert ok == []

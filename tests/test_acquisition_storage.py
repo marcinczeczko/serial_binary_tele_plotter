@@ -6,10 +6,12 @@ import time
 import numpy as np
 
 from core.acquisition.storage import SampleStore
+from core.acquisition.timebase import TimeBaseConfig
 from core.protocol.constants import LOOP_CNTR_NAME
 from core.types import SignalsConfig
 
 SIGNALS: SignalsConfig = {"sig_a": {"field": "a"}, "sig_b": {"field": "b"}}
+UNIT_TIME = TimeBaseConfig(scale_s=1.0)  # time == loop_cntr, so assertions read naturally
 
 
 def _frames(start: int, n: int) -> list[dict[str, float]]:
@@ -18,15 +20,16 @@ def _frames(start: int, n: int) -> list[dict[str, float]]:
 
 def _store(capacity: int = 5) -> SampleStore:
     store = SampleStore(capacity)
-    store.configure(SIGNALS)
+    store.configure(SIGNALS, UNIT_TIME)
     return store
 
 
 def test_snapshot_returns_chronological_window() -> None:
     store = _store()
     store.append(_frames(0, 4))
+    store.set_time_scale(0.1)
 
-    snap = store.snapshot(sample_period_s=0.1)
+    snap = store.snapshot()
 
     assert snap is not None
     assert np.allclose(snap.time, [0.0, 0.1, 0.2, 0.3])
@@ -119,7 +122,7 @@ def test_clear_and_configure_drop_samples() -> None:
 def test_concurrent_writer_never_produces_torn_snapshots() -> None:
     """Every snapshot must be a gap-free run of consecutive frames with matching values."""
     store = SampleStore(500)
-    store.configure(SIGNALS)
+    store.configure(SIGNALS, UNIT_TIME)
     stop = threading.Event()
 
     def writer() -> None:

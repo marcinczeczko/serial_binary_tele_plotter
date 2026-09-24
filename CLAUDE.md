@@ -59,7 +59,8 @@ core/config.py          validate_config (single source of truth) + StreamConfigL
 core/protocol/          wire format: constants, crc (CRC-8), frame_parser (sync/CRC, all IDs), record_decoder (numpy dtype),
                         router (multi-stream dispatch), handler (single-stream API + command encoding), stats
 core/transport/         Transport protocol, SerialTransport, ReaderThread (blocking reads, no Qt)
-core/acquisition/       engine (QThread controller), storage (SampleStore, StreamStores), virtual (simulator)
+core/acquisition/       engine (QThread controller), storage (SampleStore, StreamStores), timebase (per-stream time:
+                        wrap/reset/gap -> monotonic ticks; seconds applied at snapshot), virtual (simulator)
 ui/main_window.py       composition, thread setup, signal wiring
 ui/charts/              TelemetryPlot (pyqtgraph), LiveFeed (pulls store snapshots)
 ui/panels/              connection, stream select, PID, IMU, timing, signal visibility
@@ -74,8 +75,9 @@ docs/                   records (see "Start here")
 
 `[0xAA 0x55][TYPE u8][LEN u8][H_CRC8 over 4 header bytes][PAYLOAD LEN bytes][P_CRC8 over payload]`.
 CRC-8 uses poly 0x07 and init 0x00. The payload is the packed struct of `frame.fields`,
-in order, with the configured endianness. `LEN` ≤ 255. Frame X axis today is
-`loop_cntr × UI period` (C2). Host → MCU PID commands use IDs `0x10` (single motor) and
+in order, with the configured endianness. `LEN` ≤ 255. A stream's X axis is its
+`time.field` (default `loop_cntr`), unwrapped, times `time.scale_s` (ADR-0003). The MCU's
+loop period is config, not a UI knob. Host → MCU PID commands use IDs `0x10` (single motor) and
 `0x11` (both), with layouts hard-coded in `core/protocol/handler.py`.
 Changing any of this is a firmware-visible change. Call it out explicitly.
 
