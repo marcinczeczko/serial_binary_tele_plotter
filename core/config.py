@@ -12,10 +12,13 @@ import json
 import struct
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from core.protocol.constants import LOOP_CNTR_NAME, STRUCT_TYPE_MAP
 from core.types import StreamConfig
+
+# The streams.json shipped next to the application code (not the current working directory).
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "streams.json"
 
 PANEL_TYPES = ("none", "pid", "imu")
 ENDIANNESS = ("little", "big")
@@ -31,6 +34,23 @@ class ConfigProblem:
     def __str__(self) -> str:
         where = f"[{self.stream}] " if self.stream else ""
         return f"{self.severity.upper()}: {where}{self.message}"
+
+
+def resolve_config_path(
+    cli_path: str | Path | None,
+    remembered_path: str | Path | None = None,
+    default: Path = DEFAULT_CONFIG_PATH,
+) -> Path:
+    """
+    Picks the configuration file (C10): an explicit `--config` wins (even if missing, so
+    the user gets an error about the file they asked for). Otherwise the last used file,
+    if it still exists. Otherwise the bundled default. Never the current working directory.
+    """
+    if cli_path:
+        return Path(cli_path).expanduser().resolve()
+    if remembered_path and Path(remembered_path).is_file():
+        return Path(remembered_path).resolve()
+    return default
 
 
 def validate_config(data: Any) -> list[ConfigProblem]:
@@ -160,8 +180,10 @@ class StreamConfigLoader:
         for key, stream in self.data["streams"].items():
             if key in broken:
                 continue
-            stream.setdefault("panel_type", "none")
-            self._streams[key] = stream
+            # Copy with defaults applied: `self.data` stays exactly as read, because the
+            # config editor round-trips it.
+            entry = {**stream, "panel_type": stream.get("panel_type", "none")}
+            self._streams[key] = cast(StreamConfig, entry)
 
     def list_streams(self) -> dict[str, StreamConfig]:
         """Returns all valid stream definitions."""

@@ -20,7 +20,7 @@ from PyQt6 import QtCore  # noqa: E402
 
 from core.acquisition.engine import TelemetryEngine  # noqa: E402
 from core.protocol.stats import LinkReport  # noqa: E402
-from core.types import EngineState, PlotPacketWithRaw, StreamConfig  # noqa: E402
+from core.types import EngineState, PlotPacketWithBounds, StreamConfig  # noqa: E402
 
 pytestmark = pytest.mark.qt
 
@@ -42,12 +42,12 @@ class _Receiver(QtCore.QObject):
 
     def __init__(self) -> None:
         super().__init__()
-        self.packets: list[PlotPacketWithRaw] = []
+        self.packets: list[PlotPacketWithBounds] = []
         self.reports: list[LinkReport] = []
         self.delivery_threads: list[Any] = []
 
     @QtCore.pyqtSlot(dict)
-    def on_data(self, packet: PlotPacketWithRaw) -> None:
+    def on_data(self, packet: PlotPacketWithBounds) -> None:
         self.delivery_threads.append(QtCore.QThread.currentThread())
         self.packets.append(packet)
 
@@ -154,7 +154,7 @@ def test_stream_editor_round_trip_keeps_unknown_signal_keys(qtbot: Any) -> None:
 def test_main_window_starts_switches_stream_and_closes(qtbot: Any, monkeypatch: Any) -> None:
     from ui.main_window import MainWindow
 
-    monkeypatch.chdir(REPO_ROOT)  # streams.json is resolved relative to the CWD (C10)
+    monkeypatch.chdir(REPO_ROOT.parent)  # C10: must not depend on the working directory
     win = MainWindow()
     qtbot.addWidget(win)
     win.show()
@@ -197,7 +197,7 @@ def test_plot_downsampling_is_enabled_and_pens_default_to_1px(qtbot: Any) -> Non
 def test_main_window_switches_stream_while_running(qtbot: Any, monkeypatch: Any) -> None:
     from ui.main_window import MainWindow
 
-    monkeypatch.chdir(REPO_ROOT)
+    monkeypatch.chdir(REPO_ROOT.parent)
     win = MainWindow()
     qtbot.addWidget(win)
     conn = win.panel.conn_panel
@@ -260,9 +260,10 @@ def _select(tab: Any, key: str) -> None:
 
 
 def _tab(qtbot: Any, path: Path) -> Any:
+    from core.config import StreamConfigLoader
     from ui.config.tab import ConfiguratorTab
 
-    tab = ConfiguratorTab(str(path))
+    tab = ConfiguratorTab(StreamConfigLoader(path))
     qtbot.addWidget(tab)
     return tab
 
@@ -359,7 +360,7 @@ def test_config_save_refuses_invalid_document(
 def test_main_window_keeps_selected_stream_after_config_save(qtbot: Any, config_copy: Path) -> None:
     from ui.main_window import MainWindow
 
-    win = MainWindow()
+    win = MainWindow(config_copy)
     qtbot.addWidget(win)
     imu_index = win.panel.payload_combo.findData("imu_6axis")
     win.panel.payload_combo.setCurrentIndex(imu_index)
@@ -399,3 +400,13 @@ def test_plot_handles_signals_without_data(qtbot: Any) -> None:
 
     plot.update_tooltip(4.5, plot.last_packet)  # type: ignore[arg-type]
     assert "Ghost: n/a" in plot.label.textItem.toPlainText()
+
+
+def test_main_parse_args_keeps_qt_options() -> None:
+    from main import parse_args
+
+    args, rest = parse_args(["--config", "robot.json", "-platform", "offscreen"])
+    assert args.config == "robot.json"
+    assert rest == ["-platform", "offscreen"]
+    args, rest = parse_args([])
+    assert args.config is None and rest == []

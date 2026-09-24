@@ -6,6 +6,31 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-24 — Phase 1, part 3: dead features, config path (R1.9–R1.10). Phase 1 complete
+
+- R1.9 (C7, C8):
+  - The IMU panel buttons are disabled with a tooltip explaining that the protocol has no
+    IMU command packet. The unused `imu_command_sent` signal and the fake
+    `send_imu_command` slot are removed. I deliberately didn't invent a wire format; see
+    R5.2.
+  - The PID panel uses per-parameter `ParamSpec`s: signed ranges (±1000, `Rps` ±50,
+    `Alpha` 0–1), 4–5 decimals and finer steps.
+  - Removed the dead `raw` packet key (renamed the type to `PlotPacketWithBounds`) and the
+    `_render_busy` guard.
+- R1.10 (C10):
+  - `resolve_config_path()` picks `--config`, then the last used file (`QSettings`), then
+    the bundled `streams.json` next to the code; never the working directory.
+  - `main.py` parses `--config`, passing Qt options through, and shows a dialog instead
+    of a traceback when the file can't be loaded.
+  - One `StreamConfigLoader` is shared by the dashboard and the Configuration tab. The
+    loader no longer mutates the raw document (the `panel_type` default is applied to a
+    copy).
+  - Verified by launching `main.py` from `/tmp` with and without `--config` (offscreen).
+- Tests: 94 passed with Qt; 79 passed + 15 skipped without.
+- **Phase 1 is done.** Next is Phase 2 (ADR-0002 pipeline), starting with R2.1 `Transport`.
+
+---
+
 ## 2026-09-24 — Phase 1, part 2: validation, lossless editor, engine lifecycle (R1.5–R1.8)
 
 - R1.5 (C3, C11):

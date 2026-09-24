@@ -60,9 +60,8 @@ class MainControlPanel(QtWidgets.QWidget):
     time_config_changed = QtCore.pyqtSignal(float, int)
     stream_changed = QtCore.pyqtSignal(dict)
     signal_visibility_changed = QtCore.pyqtSignal(str, bool)
-    imu_command_sent = QtCore.pyqtSignal(int)
 
-    def __init__(self) -> None:
+    def __init__(self, stream_loader: StreamConfigLoader) -> None:
         super().__init__()
 
         layout = QtWidgets.QVBoxLayout(self)
@@ -75,7 +74,7 @@ class MainControlPanel(QtWidgets.QWidget):
         # 2. Stream Selection (Shared)
         self.grp_stream = QtWidgets.QGroupBox("Stream Type")
         l_stream = QtWidgets.QVBoxLayout(self.grp_stream)
-        self.stream_loader = StreamConfigLoader("streams.json")
+        self.stream_loader = stream_loader
         self.payload_combo = QtWidgets.QComboBox()
 
         for sid, s in self.stream_loader.list_streams().items():
@@ -139,9 +138,6 @@ class MainControlPanel(QtWidgets.QWidget):
         self.pid_panel.pid_left_sent.connect(self.pid_left_sent)
         self.pid_panel.pid_right_sent.connect(self.pid_right_sent)
         self.pid_panel.run_test_sent.connect(self.pid_all_sent)
-
-        # IMU Panel
-        self.imu_panel.calibration_requested.connect(self.imu_command_sent)
 
     def _on_stream_selection(self, idx: int) -> None:
         """

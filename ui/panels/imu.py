@@ -1,15 +1,22 @@
 """
 IMU Calibration Panel.
+
+The firmware protocol defines no IMU command packet yet, so these buttons are shown
+disabled rather than pretending to do something (C7). Config-defined commands
+(roadmap R5.2) are the way to add them without hard-coding a wire format here.
 """
 
 from __future__ import annotations
 
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtWidgets
+
+NOT_AVAILABLE = (
+    "Not available: the wire protocol has no IMU command packet yet.\n"
+    "See roadmap R5.2 (commands defined in streams.json)."
+)
 
 
 class ImuCalibrationPanel(QtWidgets.QGroupBox):
-    calibration_requested = QtCore.pyqtSignal(int)
-
     def __init__(self) -> None:
         super().__init__("IMU Control")
 
@@ -17,9 +24,7 @@ class ImuCalibrationPanel(QtWidgets.QGroupBox):
 
         self.btn_zero_gyro = QtWidgets.QPushButton("Zero Gyroscope")
         self.btn_acc_calib = QtWidgets.QPushButton("Calibrate Accelerometer")
-
-        layout.addWidget(self.btn_zero_gyro)
-        layout.addWidget(self.btn_acc_calib)
-
-        self.btn_zero_gyro.clicked.connect(lambda: self.calibration_requested.emit(1))
-        self.btn_acc_calib.clicked.connect(lambda: self.calibration_requested.emit(2))
+        for btn in (self.btn_zero_gyro, self.btn_acc_calib):
+            btn.setEnabled(False)
+            btn.setToolTip(NOT_AVAILABLE)
+            layout.addWidget(btn)

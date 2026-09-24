@@ -11,7 +11,7 @@ import warnings
 import numpy as np
 
 from core.protocol.constants import LOOP_CNTR_NAME
-from core.types import DecodedFrame, PlotPacketWithRaw, SignalsConfig
+from core.types import DecodedFrame, PlotPacketWithBounds, SignalsConfig
 
 
 class SignalDataManager:
@@ -92,7 +92,7 @@ class SignalDataManager:
         start = (self._write_index - self._count) % self.max_samples
         return (np.arange(self._count) + start) % self.max_samples
 
-    def get_plot_data(self, sample_period_s: float) -> PlotPacketWithRaw | None:
+    def get_plot_data(self, sample_period_s: float) -> PlotPacketWithBounds | None:
         if self._count < 2:
             return None
         idx = self._logical_indices()
@@ -115,6 +115,5 @@ class SignalDataManager:
         return {
             "time": time_axis,
             "signals": snapshot_raw,
-            "raw": snapshot_raw,
             "signal_bounds": signal_bounds,
         }

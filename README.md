@@ -22,7 +22,9 @@ Primary use cases:
 - Built-in configuration editor — edit frame fields and signal definitions in-app, save to
   `streams.json` without restarting.
 - Optional PID tuning panel: send controller gains to the MCU over the same serial connection.
-- Optional IMU calibration command panel.
+  Values may be negative (e.g. a reverse `Rps` setpoint).
+- IMU calibration panel (placeholder: its buttons are disabled until the protocol defines an
+  IMU command packet).
 - Virtual device simulator (`VIRTUAL` port) for UI development without hardware.
 - Adjustable sample period and ring-buffer window size.
 - Link statistics in the status bar: throughput, samples/s, CRC errors, lost frames
@@ -54,8 +56,12 @@ dev tools (`pytest`, `ruff`, `mypy`) — into an isolated `.venv` in one step. N
 ## Running
 
 ```bash
-uv run python main.py
+uv run python main.py                          # last used config, else the bundled streams.json
+uv run python main.py --config ~/robot.json    # a specific config (remembered for next time)
 ```
+
+The config file is never looked up in the current working directory, so the app can be
+started from anywhere.
 
 ## Development Commands
 
