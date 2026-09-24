@@ -30,6 +30,7 @@ from core.protocol.frame_parser import FrameParser
 from core.protocol.handler import ProtocolHandler
 from core.protocol.router import StreamRouter
 from core.protocol.stats import LinkStats, make_link_report
+from core.recording.sbtp import RecordingError, RecordingWriter
 from core.transport import (
     SIM_PORT_NAME,
     ReaderThread,
@@ -38,6 +39,7 @@ from core.transport import (
     Transport,
     TransportError,
 )
+from core.transport.replay_transport import ReplayTransport
 from core.types import EngineState, StreamConfig
 
 logger = logging.getLogger(__name__)
@@ -60,6 +62,12 @@ class TelemetryEngine(QtCore.QObject):
     _reader_failed = QtCore.pyqtSignal(str)
     # The set of streams (and so the StreamStores' stores) changed; re-look-up stores.
     streams_configured = QtCore.pyqtSignal()
+    # A session ended normally (a replay reached its end). Errors use connection_failed.
+    session_ended = QtCore.pyqtSignal(str)
+    # The file being recorded to (R4.1), or "" when not recording.
+    recording_changed = QtCore.pyqtSignal(str)
+    # A recording write failed on the reader thread; handled on the engine thread.
+    _reader_failed_recording = QtCore.pyqtSignal(str)
 
     def __init__(self, max_samples: int, stores: StreamStores | None = None) -> None:
         super().__init__()
@@ -78,10 +86,15 @@ class TelemetryEngine(QtCore.QObject):
         self.transport_factory: Callable[[str, int], Transport] = SerialTransport
         self.sim_factory: Callable[[StreamConfig], SimTransport] = SimTransport
         self._sim: SimTransport | None = None
+        self._replay: ReplayTransport | None = None
+        # Raw recording (R4.1): written on the reader thread, swapped on the engine thread.
+        self._recorder: RecordingWriter | None = None
+        self._rec_lock = threading.Lock()
         self._transport: Transport | None = None
         self._reader: ReaderThread | None = None
         self._data_lock = threading.Lock()
         self._reader_failed.connect(self._on_reader_failed)
+        self._reader_failed_recording.connect(self._on_recording_failed)
         self.state: EngineState = EngineState.IDLE
 
         # --- Link statistics (C13) ---
@@ -95,17 +108,55 @@ class TelemetryEngine(QtCore.QObject):
 
     @QtCore.pyqtSlot(str, int)
     def start_working(self, port_name: str, baudrate: int) -> None:
-        """Initiates the data acquisition process."""
+        """Connects to a serial port, or to the simulator (`VIRTUAL`)."""
+        if not self._can_start():
+            return
+        if port_name == SIM_PORT_NAME:
+            if not self._streams:
+                self.status_msg.emit("No valid stream to simulate")
+                return
+            self._sim = self.sim_factory(self._sim_stream())
+            if not self._start(self._sim, port_name):
+                self._sim = None
+        else:
+            self._start(self.transport_factory(port_name, baudrate), port_name)
+
+    @QtCore.pyqtSlot(str, float)
+    def start_replay(self, path: str, speed: float) -> None:
+        """Plays a recording through the pipeline (R4.2); `speed` 0 means as fast as possible."""
+        if not self._can_start():
+            return
+        try:
+            replay = ReplayTransport(path, speed if speed > 0 else None)
+        except RecordingError as e:
+            msg = f"Cannot replay: {e}"
+            self.status_msg.emit(msg)
+            self.connection_failed.emit(msg)
+            return
+        # Set before the reader starts: a short replay can end before _start() returns.
+        self._replay = replay
+        if not self._start(replay, replay.name):
+            self._replay = None
+            return
+        recorded = {k: v.get("frame") for k, v in replay.header.streams.items()}
+        current = {k: v.get("frame") for k, v in self._streams.items()}
+        if recorded != current:
+            self.status_msg.emit(
+                f"Replaying {replay.path.name}: it was recorded with different frame "
+                "layouts; decoding with the current streams.json"
+            )
+
+    def _can_start(self) -> bool:
         if self.state == EngineState.RUNNING:
             self.status_msg.emit("Already running")
-            return
+            return False
         if self.state != EngineState.CONFIGURED:
             self.status_msg.emit("No stream configured yet")
-            return
-        if port_name == SIM_PORT_NAME and not self._streams:
-            self.status_msg.emit("No valid stream to simulate")
-            return
+            return False
+        return True
 
+    def _start(self, transport: Transport, label: str) -> bool:
+        """Common start: resets the session, opens the transport, starts reading."""
         # Clear buffers to prevent "time travel" artifacts
         self.stores.clear()
         with self._data_lock:
@@ -117,27 +168,22 @@ class TelemetryEngine(QtCore.QObject):
         self._stats_prev_ts = time.monotonic()
         self._time_resets_seen = {}
 
-        transport: Transport
-        if port_name == SIM_PORT_NAME:
-            transport = self._sim = self.sim_factory(self._sim_stream())
-        else:
-            transport = self.transport_factory(port_name, baudrate)
         try:
             transport.open()
         except TransportError as e:
-            self._sim = None
             msg = f"Connection Error: {e}"
             self.status_msg.emit(msg)
             self.connection_failed.emit(msg)
-            return
+            return False
         self._transport = transport
 
         self._set_state(EngineState.RUNNING)
         self.stats_timer.start()
-        self.status_msg.emit(f"Connected to {port_name}")
+        self.status_msg.emit(f"Connected to {label}")
         # Start reading only once RUNNING, so an immediate failure is never ignored.
         self._reader = ReaderThread(transport, self._on_bytes, self._reader_failed.emit)
         self._reader.start()
+        return True
 
     @QtCore.pyqtSlot()
     def stop_working(self) -> None:
@@ -149,9 +195,11 @@ class TelemetryEngine(QtCore.QObject):
 
         self._set_state(EngineState.CONFIGURED)
         self._close_transport()
+        self.stop_recording()
 
     def _close_transport(self) -> None:
         self._sim = None
+        self._replay = None
         reader, self._reader = self._reader, None
         transport, self._transport = self._transport, None
         if reader is not None:
@@ -216,7 +264,15 @@ class TelemetryEngine(QtCore.QObject):
             self.status_msg.emit(f"Write Error: {e}")
 
     def _on_bytes(self, data: bytes) -> None:
-        """Reader-thread callback: parses one chunk and stores its frames."""
+        """Reader-thread callback: records (if on), parses one chunk and stores its frames."""
+        with self._rec_lock:
+            if self._recorder is not None:
+                try:
+                    self._recorder.write(data)
+                except OSError as e:  # disk full, drive removed: stop recording, keep reading
+                    logger.error("Recording failed: %s", e)
+                    self._recorder = None
+                    self._reader_failed_recording.emit(str(e))
         with self._data_lock:
             batches = self.router.route(self.parser.feed(data))
         for key, records in batches.items():
@@ -228,6 +284,15 @@ class TelemetryEngine(QtCore.QObject):
     def _on_reader_failed(self, message: str) -> None:
         """Engine-thread handler for a transport failure reported by the reader thread."""
         if self.state != EngineState.RUNNING:
+            return
+        replay = self._replay
+        if replay is not None and replay.finished:
+            note = ""
+            if replay.truncated_bytes:
+                note = f" ({replay.truncated_bytes} B at the end were cut off)"
+            self.stop_working()
+            self.status_msg.emit(f"Replay finished: {replay.path.name}{note}")
+            self.session_ended.emit(f"Replay finished: {replay.path.name}")
             return
         msg = f"Serial error: {message}"
         self.status_msg.emit(msg)
@@ -246,6 +311,10 @@ class TelemetryEngine(QtCore.QObject):
         self._stats_prev, self._stats_prev_samples, self._stats_prev_ts = cur, samples, now
         self.link_stats.emit(report)
         self._report_time_resets()
+        with self._rec_lock:
+            recorder = self._recorder
+        if recorder is not None:
+            recorder.flush()  # a crash loses at most about a second of recording
 
     def _report_time_resets(self) -> None:
         """Says when a stream's time field went backwards: the device most likely restarted."""
@@ -263,6 +332,61 @@ class TelemetryEngine(QtCore.QObject):
                 f"Time counter went backwards in {', '.join(names)} (device reset?); "
                 "continuing on a new segment"
             )
+
+    # --- recording and replay (R4.1, R4.2) ---------------------------------------------
+
+    @QtCore.pyqtSlot(str)
+    def start_recording(self, path: str) -> None:
+        """Records every byte received from now on to a new `.sbtp` file."""
+        if self.state != EngineState.RUNNING:
+            self.status_msg.emit("Connect first: a recording starts with a session")
+            return
+        self.stop_recording()
+        source = self._transport.name if self._transport is not None else ""
+        try:
+            recorder = RecordingWriter(path, dict(self._streams), source)
+        except OSError as e:
+            self.status_msg.emit(f"Cannot record: {e}")
+            self.recording_changed.emit("")
+            return
+        with self._rec_lock:
+            self._recorder = recorder
+        self.status_msg.emit(f"Recording to {recorder.path}")
+        self.recording_changed.emit(str(recorder.path))
+
+    @QtCore.pyqtSlot()
+    def stop_recording(self) -> None:
+        with self._rec_lock:
+            recorder, self._recorder = self._recorder, None
+        if recorder is None:
+            return
+        recorder.close()
+        self.status_msg.emit(
+            f"Recording saved: {recorder.path.name} ({recorder.bytes / 1000:.1f} kB)"
+        )
+        self.recording_changed.emit("")
+
+    @QtCore.pyqtSlot(str)
+    def _on_recording_failed(self, message: str) -> None:
+        self.status_msg.emit(f"Recording stopped: {message}")
+        self.recording_changed.emit("")
+
+    @QtCore.pyqtSlot(float)
+    def set_replay_speed(self, speed: float) -> None:
+        """0 means as fast as possible."""
+        if self._replay is not None:
+            self._replay.set_speed(speed if speed > 0 else None)
+
+    @QtCore.pyqtSlot(bool)
+    def set_replay_paused(self, paused: bool) -> None:
+        if self._replay is not None:
+            self._replay.set_paused(paused)
+
+    @QtCore.pyqtSlot()
+    def replay_step(self) -> None:
+        """While a replay is paused: plays one more recorded read."""
+        if self._replay is not None:
+            self._replay.step()
 
     @QtCore.pyqtSlot(int)
     def set_capacity(self, max_samples: int) -> None:

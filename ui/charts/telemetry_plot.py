@@ -220,6 +220,8 @@ class TelemetryPlot(QtWidgets.QWidget):
         self._last_range_ts = 0.0
         self._ranges_due = True
         self._syncing_anchor = False
+        # Overlaid traces of a previous capture (R4.5), dimmed and dashed.
+        self._reference: list[tuple[Lane, pg.PlotDataItem]] = []
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -229,8 +231,17 @@ class TelemetryPlot(QtWidgets.QWidget):
         scene = self.graphics.scene()
         # Rate-limited: a readout per raw mouse event re-rendered the HUD far too often (P7).
         self._mouse_proxy = pg.SignalProxy(
-            scene.sigMouseMoved, rateLimit=CURSOR_RATE_HZ, slot=self._on_mouse_moved
+            scene.sigMouseMoved,
+            rateLimit=CURSOR_RATE_HZ,
+            slot=self._on_mouse_moved,
+            threadSafe=False,  # GUI thread only: a plain QTimer that can be parented
         )
+        # Parentless, the proxy and its timer would be freed by whichever thread's garbage
+        # collection finds them, possibly a reader/engine thread. That leaves the timer
+        # registered on the GUI thread, and its next event hits freed memory. Parented, Qt
+        # destroys them with the plot, on the GUI thread.
+        self._mouse_proxy.setParent(self)
+        self._mouse_proxy.timer.setParent(self._mouse_proxy)
         scene.sigMouseClicked.connect(self.on_mouse_clicked)
         self.configure_stream({"signals": {}})
 
@@ -257,6 +268,7 @@ class TelemetryPlot(QtWidgets.QWidget):
         for lane in self.lanes.values():
             lane.plot.setXLink(None)
         self.graphics.clear()
+        self._reference = []
         self._shown = []
         self.lanes.clear()
         self.signal_views.clear()
@@ -458,8 +470,39 @@ class TelemetryPlot(QtWidgets.QWidget):
             for lane in self.lanes.values():
                 lane.anchor.setVisible(False)
                 lane.set_hud([])
+            self.clear_reference()
         self._apply_mouse_mode()
         self.refresh_ranges()
+
+    # --- reference overlay (R4.5) ---
+
+    def set_reference(self, packet: PlotPacketWithBounds, shift_s: float) -> None:
+        """
+        Overlays another capture's visible signals, shifted by `shift_s` in time (to line up
+        two triggers), as dimmed dashed traces in their lanes. Cleared when live view resumes.
+        """
+        self.clear_reference()
+        t = packet["time"] + shift_s
+        for sid, y in packet["signals"].items():
+            view = self.signal_views.get(sid)
+            if view is None or not view["visible"]:
+                continue
+            color = QtGui.QColor(view["config"].get("color", "#FFFFFF"))
+            color.setAlpha(120)
+            item = pg.PlotDataItem(
+                t, y, pen=pg.mkPen(color, width=1, style=QtCore.Qt.PenStyle.DashLine)
+            )
+            lane = self.lanes[view["lane"]]
+            lane.plot.addItem(item)
+            self._reference.append((lane, item))
+
+    def clear_reference(self) -> None:
+        for lane, item in self._reference:
+            lane.plot.removeItem(item)
+        self._reference = []
+
+    def reference_count(self) -> int:
+        return len(self._reference)
 
     # --- cursor and readout (R3.3) ---
 

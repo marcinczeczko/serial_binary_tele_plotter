@@ -26,7 +26,7 @@ it, and reference its ID in commits and PRs.
 Always go through `uv`. Never run bare `python`/`pytest`.
 
 ```bash
-uv sync                               # install runtime + dev deps into .venv (Python 3.14)
+uv sync --all-extras                  # runtime + dev deps + optional pyarrow into .venv (Python 3.14)
 uv run python main.py [--config PATH] # run the app (default: last used, else bundled streams.json)
 uv run pytest                         # all tests; `qt` ones use real Qt (offscreen)
 uv run pytest -p no:pytest-qt         # when Qt can't load (no libEGL): `qt` tests skip
@@ -47,7 +47,10 @@ does), or run with `-p no:pytest-qt`. `tests/conftest.py` defaults `QT_QPA_PLATF
 Tests come in two kinds. `qt`-marked tests (`tests/test_qt_integration.py`) use real Qt via
 `qtbot`. Older tests use the hand-written PyQt6/pyqtgraph stub (`pyqt_stub` fixture), which
 only activates when real PyQt6 isn't already imported. Write new Qt-facing tests as `qt`
-tests. Known bugs are pinned with `xfail(strict=True, reason="<finding ID> …")`. When you
+tests. Register every widget with `qtbot.addWidget` and give every other QObject a parent.
+The autouse `collect_qt_garbage` fixture then destroys a finished test's objects on the GUI
+thread. A Python-owned QObject freed by garbage collection on a reader/engine thread crashes
+some later test in `QObject::event`. Known bugs are pinned with `xfail(strict=True, reason="<finding ID> …")`. When you
 fix one, remove its xfail.
 
 ## Layout
@@ -60,15 +63,20 @@ core/types.py           TypedDict config shapes, PlotMode, EngineState
 core/config.py          validate_config (single source of truth) + StreamConfigLoader
 core/protocol/          wire format: constants, crc (CRC-8), frame_parser (sync/CRC, all IDs), record_decoder (numpy dtype),
                         router (multi-stream dispatch), handler (single-stream API + command encoding), stats
-core/transport/         Transport protocol, SerialTransport, SimTransport (the VIRTUAL port), ReaderThread (no Qt)
+core/transport/         Transport protocol, SerialTransport, SimTransport (the VIRTUAL port), ReplayTransport
+                        (plays an .sbtp file), ReaderThread (no Qt)
+core/recording/         .sbtp raw recordings (ADR-0006): RecordingWriter/Reader; no Qt
+core/analysis/          export (CSV/Parquet), trigger detection, step-response metrics; no Qt
 core/simulation/        synth (frames from a stream's `sim` config), pid_motor (FF + PI motor model); no Qt
 core/acquisition/       engine (QThread controller), storage (SampleStore, StreamStores), timebase (per-stream time:
                         wrap/reset/gap -> monotonic ticks; seconds applied at snapshot), lod (min/max level of
                         detail for live frames, summarised lazily on read)
-ui/main_window.py       composition, thread setup, signal wiring
+ui/main_window.py       composition, thread setup, signal wiring, File/Recording menus
+ui/app_settings.py      QSettings keys (config path, recording options)
 ui/charts/              TelemetryPlot (lanes = signals[*].group, per-lane Y modes, cursor/Δ), LiveFeed (pulls the
-                        store's overview), lanes.py + series.py (Qt-free layout, range, decimation, readout)
-ui/panels/              connection, stream select, PID, IMU, timing, signal visibility
+                        store's overview), lanes.py + series.py (Qt-free layout, range, decimation, readout),
+                        trigger_controller (arms on the shown store, emits captures)
+ui/panels/              connection, stream select, PID, IMU, timing, signal visibility, trigger/step response
 ui/config/              in-app streams.json editor
 tests/                  pytest: pure logic, stubbed-Qt legacy tests, `qt`-marked real-Qt tests
 tools/                  dev scripts (bench_pipeline.py)
@@ -84,7 +92,8 @@ in order, with the configured endianness. `LEN` ≤ 255. A stream's X axis is it
 `time.field` (default `loop_cntr`), unwrapped, times `time.scale_s` (ADR-0003). The MCU's
 loop period is config, not a UI knob. Host → MCU PID commands use IDs `0x10` (single motor) and
 `0x11` (both), with layouts in `core/protocol/constants.py` (the simulator parses them too).
-Changing any of this is a firmware-visible change. Call it out explicitly.
+Changing any of this is a firmware-visible change. Call it out explicitly. `.sbtp` recordings
+hold these bytes verbatim (ADR-0006), so a wire change also affects replaying old recordings.
 
 ## Architecture rules
 

@@ -18,6 +18,7 @@ from ui.panels.imu import ImuCalibrationPanel
 from ui.panels.pid import PidTuningPanel
 from ui.panels.signals import SignalListPanel
 from ui.panels.timing import TimeConfigPanel
+from ui.panels.trigger import TriggerPanel
 
 
 class MainControlPanel(QtWidgets.QWidget):
@@ -110,6 +111,8 @@ class MainControlPanel(QtWidgets.QWidget):
 
         # 4. Fixed Bottom Panels
         self.time_panel = TimeConfigPanel()
+        self.trigger_panel = TriggerPanel()
+        self.trigger_section = CollapsableSection("Trigger / Step Response", self.trigger_panel)
         self.sig_panel = SignalListPanel()
 
         # 5. Assemble Main Layout
@@ -120,6 +123,7 @@ class MainControlPanel(QtWidgets.QWidget):
         layout.addWidget(self.dynamic_stack)
 
         layout.addWidget(self.time_panel)
+        layout.addWidget(self.trigger_section)
         layout.addWidget(self.sig_panel, 1)
 
         # 6. Wiring & Init
@@ -167,6 +171,7 @@ class MainControlPanel(QtWidgets.QWidget):
 
         # Update Signal List & Notify Main Window
         self.sig_panel.rebuild_list(cfg)
+        self.trigger_panel.set_signals(cfg)
         self.stream_changed.emit(cfg)
 
     def get_initial_sample_count(self) -> int:

@@ -214,7 +214,8 @@ def test_main_window_switches_stream_while_running(qtbot: Any, monkeypatch: Any)
 
     conn.connect_btn.click()
     qtbot.waitUntil(lambda: win.engine_state == EngineState.RUNNING, timeout=5000)
-    assert win.lbl_status.text() == "Connected to VIRTUAL"
+    # The status arrives in its own queued event, right after the state change.
+    qtbot.waitUntil(lambda: win.lbl_status.text() == "Connected to VIRTUAL", timeout=5000)
 
     imu_index = win.panel.payload_combo.findData("imu_6axis")
     win.panel.payload_combo.setCurrentIndex(imu_index)

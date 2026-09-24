@@ -208,18 +208,30 @@ PRs that each keep the app working. Measure with `tools/bench_pipeline.py` befor
 
 ## Phase 4: record, replay, analyse (A3)
 
-- [ ] **R4.1 Raw recorder**: append-only `.sbtp` file with a small header (config snapshot
+- [x] **R4.1 Raw recorder**: append-only `.sbtp` file with a small header (config snapshot
   + schema version), then `[host_ts_ns, len, bytes]` chunks. Start/stop from the UI,
   optionally recording automatically on connect.
-- [ ] **R4.2 Replay transport**: open a recording, play it at 1×/N×/max speed or step
+  *Done (ADR-0006): Recording menu (Ctrl+R), auto-record on connect and folder in
+  `QSettings`; flushed each second; write errors stop the recording, not the session.*
+- [x] **R4.2 Replay transport**: open a recording, play it at 1×/N×/max speed or step
   through it, through the same pipeline. Use recordings as regression fixtures in tests.
-- [ ] **R4.3 Export**: current window or selection → CSV / Parquet (optional dependency),
+  *Done: `ReplayTransport` (1/2/5/10×/max, pause, step one read). It decodes with the
+  current `streams.json` and warns if the recorded layouts differ.
+  `tests/fixtures/pid_sim_300.sbtp` pins decoded count, CRC error and gaps.*
+- [x] **R4.3 Export**: current window or selection → CSV / Parquet (optional dependency),
   one file per stream, time column first.
-- [ ] **R4.4 Trigger capture**: oscilloscope-style trigger (signal crosses level,
+  *Done: "Export shown stream" (the paused view's range, else the buffer) and "Export all
+  streams" (whole buffers). Parquet via the `parquet` extra (`pyarrow`).*
+- [x] **R4.4 Trigger capture**: oscilloscope-style trigger (signal crosses level,
   rising/falling, pre/post samples) that freezes a capture around a setpoint step.
-- [ ] **R4.5 Step-response metrics** (optional): rise time, overshoot, settling time,
+  *Done: rising/falling/either, pre/post in seconds, single shot. It checks every stored
+  sample (not the drawn min/max). The capture opens paused, with Δ anchored at the
+  interpolated crossing.*
+- [x] **R4.5 Step-response metrics** (optional): rise time, overshoot, settling time,
   steady-state error for a chosen setpoint/measurement pair on a captured step. Overlay
   runs from before and after a gain change.
+  *Done: computed per capture and listed next to the previous capture's, whose traces
+  are overlaid (dashed, aligned at the trigger). Only one previous run is kept.*
 
 ## Phase 5: generic commands and config model (A5, C8)
 

@@ -11,8 +11,10 @@ On machines where Qt can't load (e.g. no libEGL), run `uv run pytest -p no:pytes
 `qt` tests are then skipped and the rest run against the stub.
 """
 
+import gc
 import os
 import sys
+from collections.abc import Iterator
 from types import ModuleType
 
 import pytest
@@ -198,3 +200,38 @@ def install_pyqt6_stub() -> None:
 def pyqt_stub():
     install_pyqt6_stub()
     yield
+
+
+@pytest.fixture(autouse=True)
+def isolated_settings(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """
+    Real-Qt tests must never read or write the user's QSettings (recording folder, record
+    on connect, last config). Qt isn't imported here: the stub lane depends on that.
+    """
+    qtcore = sys.modules.get("PyQt6.QtCore")
+    settings_cls = getattr(qtcore, "QSettings", None)
+    if settings_cls is None or not hasattr(settings_cls, "setPath"):
+        return
+    folder = str(tmp_path_factory.mktemp("qsettings"))
+    for fmt in (settings_cls.Format.NativeFormat, settings_cls.Format.IniFormat):
+        settings_cls.setPath(fmt, settings_cls.Scope.UserScope, folder)
+
+
+@pytest.fixture(autouse=True)
+def collect_qt_garbage(request: pytest.FixtureRequest) -> Iterator[None]:
+    """
+    Destroys a finished `qt` test's widgets on the GUI thread.
+
+    pytest-qt closes registered widgets with `deleteLater()`, which only runs in a later
+    event loop, and reference cycles (slots bound to `self`) keep the Python wrappers
+    alive until a garbage collection. Whichever thread runs that collection destroys the
+    widgets, possibly a later test's reader or engine thread. Destroyed there, their timers
+    stay registered on the GUI thread, and the next timer event hits freed memory: a
+    segfault in QObject::event, tests away from the cause.
+    """
+    yield
+    qtcore = sys.modules.get("PyQt6.QtCore")
+    if "qt" not in request.keywords or qtcore is None:
+        return
+    qtcore.QCoreApplication.sendPostedEvents(None, qtcore.QEvent.Type.DeferredDelete)
+    gc.collect()

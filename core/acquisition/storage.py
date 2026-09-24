@@ -66,6 +66,7 @@ class SampleStore:
         self._mat = self._alloc_matrix()
         self._lod = self._alloc_lod()
         self._rows = 0  # rows ever written (incl. ones a too-big batch skipped), for the LOD
+        self._generation = 0  # bumps on clear/configure: row numbers restart
         self._head = 0  # next write position, 0..capacity-1
         self._count = 0  # valid samples, <= capacity
         self._version = 0  # bumps on every change visible to readers
@@ -291,6 +292,37 @@ class SampleStore:
                 bounds[sid] = b
         return Snapshot(version, time, signals, bounds, decimated=True)
 
+    def read_since(
+        self, cursor: tuple[int, int] | None, signal_ids: Iterable[str]
+    ) -> tuple[tuple[int, int], np.ndarray, dict[str, np.ndarray]]:
+        """
+        The samples written since `cursor` (every sample, gap markers included), with time
+        in seconds, and the cursor for the next call. `None` starts at the newest sample
+        (nothing returned yet). After a `clear()` the next call starts at the new data. If
+        the ring already dropped some of the requested rows, you get the ones it still has.
+        The trigger uses this to see every sample, not the live view's buckets.
+        """
+        with self._lock:
+            now = (self._generation, self._rows)
+            oldest = self._rows - self._count
+            if cursor is None:
+                start = self._rows
+            elif cursor[0] != self._generation:
+                start = oldest
+            else:
+                start = max(cursor[1], oldest)
+            offset = start - oldest
+            ticks = self._window_locked(self._ticks)[offset:].copy()
+            window = self._window_locked(self._mat)
+            data = {
+                sid: window[offset:, self._col[sid]].copy()
+                for sid in signal_ids
+                if sid in self._col
+            }
+            scale_s = self._scale_s
+        ticks *= scale_s
+        return now, ticks, data
+
     def values_at(self, t_s: float, signal_ids: Iterable[str]) -> dict[str, float]:
         """
         Exact values at time `t_s` (linear between the two samples around it; clamped to
@@ -363,6 +395,7 @@ class SampleStore:
         self._time.reset()
         self._lod.reset()
         self._rows = 0
+        self._generation += 1
         self._head = 0
         self._count = 0
         self._version += 1

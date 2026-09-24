@@ -17,11 +17,8 @@ from PyQt6 import QtCore, QtWidgets
 
 from core.config import resolve_config_path
 from styles import apply_dark_theme
+from ui.app_settings import KEY_CONFIG_PATH, app_settings
 from ui.main_window import MainWindow
-
-SETTINGS_ORG = "serial-bin-plotter"
-SETTINGS_APP = "Serial Binary Plotter"
-SETTINGS_CONFIG_KEY = "config_path"
 
 
 def parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
@@ -53,15 +50,15 @@ def main() -> int:
     apply_dark_theme(app)
 
     # Pick the config file: --config, then the last used one, then the bundled default (C10).
-    settings = QtCore.QSettings(SETTINGS_ORG, SETTINGS_APP)
-    remembered = settings.value(SETTINGS_CONFIG_KEY, None, type=str)
+    settings = app_settings()
+    remembered = settings.value(KEY_CONFIG_PATH, None, type=str)
     config_path = resolve_config_path(args.config, remembered)
     try:
-        win = MainWindow(config_path)
+        win = MainWindow(config_path, settings)
     except (OSError, ValueError) as e:
         QtWidgets.QMessageBox.critical(None, "Cannot load configuration", str(e))
         return 2
-    settings.setValue(SETTINGS_CONFIG_KEY, str(config_path))
+    settings.setValue(KEY_CONFIG_PATH, str(config_path))
     win.setWindowTitle(f"Serial Binary Plotter - {config_path.name}")
     win.show()
 

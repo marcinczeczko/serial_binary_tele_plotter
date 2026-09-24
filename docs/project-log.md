@@ -6,6 +6,53 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-24 — Phase 4: record, replay, export, trigger, step response (R4.1–R4.5)
+
+- **Recording (R4.1, A3, ADR-0006).**
+  - `.sbtp` files hold the raw bytes of each transport read with a host timestamp, after a
+    JSON header with the stream config. The recorder taps the engine's byte callback on the
+    reader thread.
+  - Recording menu with Ctrl+R, auto-record on connect, and a folder setting (`QSettings`,
+    `ui/app_settings.py`).
+  - Cost: 3.3 µs per 900 B read, against ~50 µs to parse and store it.
+- **Replay (R4.2).** `ReplayTransport` runs through the same reader, parser and stores at
+  1/2/5/10×/max, with pause and a one-read step. It decodes with the current
+  `streams.json` and warns if the recorded layouts differ.
+  - Fixture `tests/fixtures/pid_sim_300.sbtp` (55 kB): 300 frames, one corrupted. The
+    replay pins 299 decoded, 1 CRC error, 1 sequence gap and 1 time gap.
+  - Bug fixed before merge: a short replay could finish before the engine had registered
+    it, and was then reported as a lost device.
+- **Export (R4.3).** The shown stream (the paused view's range, else the buffer) or all
+  streams, to CSV, or to Parquet with the new optional `parquet` extra (`pyarrow`; CI
+  installs it). Rows that are only gap markers are left out.
+- **Trigger and step response (R4.4, R4.5).**
+  - `TriggerController` checks every stored sample since arming (`SampleStore.read_since`,
+    not the drawn min/max) for a crossing: rising, falling or either, interpolated.
+  - It then freezes pre/post seconds in analysis mode, with Δ anchored at the trigger.
+  - Rise time, overshoot, settling time (±2 %) and steady-state error are shown next to
+    the previous capture's, and the previous capture is overlaid dashed.
+  - The pause button now stays enabled, so a view paused when a session ends can be
+    resumed.
+- **Test-only segfault found and fixed.** pytest-qt closes widgets with `deleteLater()`,
+  which `processEvents()` doesn't run. Unreachable windows then waited for garbage
+  collection, which could run on a later test's reader or engine thread. That destroyed
+  them off the GUI thread and left their timers registered, so a later timer event crashed
+  in `QObject::event`.
+  - Symptom: only in some test orders with faulthandler. Adding one `np.median` call
+    during a session made it appear, because it changes when garbage collection runs.
+  - Fix: an autouse fixture flushes deferred deletes and collects garbage on the GUI
+    thread after each `qt` test. The plot's `SignalProxy` and its timer are now parented.
+- `bench_pipeline.py`: parse+store unchanged (103–116k frames/s at 900 B reads, the same
+  as main in interleaved runs; ~200k at 5000 B). `bench_render.py`: 29.3–30.3 FPS, the same
+  as main in interleaved runs. This container was busier than in Phase 3, so both
+  sometimes land just under the 30 FPS target.
+- Tests: +32 (225 with Qt; 188 + 37 skipped without). They cover the file format,
+  truncation, pacing/speed/pause/step, record → replay equality, export incl. both Parquet
+  branches, trigger/`read_since`/metrics, and real-Qt record-on-connect → replay, export,
+  and live VIRTUAL trigger capture with metrics and overlay.
+
+---
+
 ## 2026-09-24 — Phase 3: plot lanes, range modes, cursor, render budget (R3.1–R3.4)
 
 - **Lanes (A4, ADR-0005).**
