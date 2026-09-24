@@ -5,8 +5,10 @@ The engine runs in its own QThread and orchestrates:
 1. Input: a `Transport` drained by a dedicated `ReaderThread` (blocking reads, P5), or
    the virtual simulator.
 2. Protocol: parsing and decoding. This happens on the reader thread under `_data_lock`.
-3. Storage: a `SampleStore` (versioned ring buffer). The GUI pulls from it at its own
-   frame rate (ADR-0002, R2.6), so the engine never pushes bulk data through Qt.
+   Every configured stream is decoded (`FrameParser` + `StreamRouter`, R2.2/R2.3); which one
+   the GUI shows is a view choice and never restarts acquisition.
+3. Storage: one `SampleStore` per stream (`StreamStores`). The GUI pulls from them at its
+   own frame rate (ADR-0002, R2.6), so the engine never pushes bulk data through Qt.
 4. GUI output: state, status and link statistics (small signals only).
 
 Threads: the reader thread uses the parser under `_data_lock`, and the engine thread
@@ -23,12 +25,14 @@ from collections.abc import Callable
 
 from PyQt6 import QtCore
 
-from core.acquisition.storage import SampleStore
+from core.acquisition.storage import StreamStores
 from core.acquisition.virtual import VirtualDevice
+from core.protocol.frame_parser import FrameParser
 from core.protocol.handler import ProtocolHandler
+from core.protocol.router import StreamRouter
 from core.protocol.stats import LinkStats, make_link_report
 from core.transport import ReaderThread, SerialTransport, Transport, TransportError
-from core.types import DecodedFrame, EngineState, SignalsConfig, StreamConfig
+from core.types import DecodedFrame, EngineState, StreamConfig
 
 logger = logging.getLogger(__name__)
 
@@ -48,16 +52,23 @@ class TelemetryEngine(QtCore.QObject):
     connection_failed = QtCore.pyqtSignal(str)
     # Emitted from the reader thread; delivered to `_on_reader_failed` on the engine thread.
     _reader_failed = QtCore.pyqtSignal(str)
+    # The set of streams (and so the StreamStores' stores) changed; re-look-up stores.
+    streams_configured = QtCore.pyqtSignal()
 
     def __init__(
-        self, sample_period_ms: float, max_samples: int, store: SampleStore | None = None
+        self, sample_period_ms: float, max_samples: int, stores: StreamStores | None = None
     ) -> None:
         super().__init__()
         self.sample_period_s: float = sample_period_ms / 1000.0
 
-        # Shared with the GUI, which reads snapshots from it directly (thread-safe).
-        self.store: SampleStore = store if store is not None else SampleStore(max_samples)
-        self.protocol: ProtocolHandler = ProtocolHandler()
+        # Shared with the GUI, which reads snapshots from them directly (thread-safe).
+        self.stores: StreamStores = stores if stores is not None else StreamStores(max_samples)
+        # Parser and router run on the reader thread under `_data_lock`.
+        self.parser = FrameParser()
+        self.router = StreamRouter(self.parser.stats)
+        self._encoder = ProtocolHandler()  # command packets only
+        self._streams: dict[str, StreamConfig] = {}
+        self._active_key: str | None = None  # the stream the virtual device simulates
 
         # 'parent=self' is crucial here! It ensures that when TelemetryEngine is moved
         # to a new QThread, the VirtualDevice (and its internal QTimer) moves with it.
@@ -72,9 +83,6 @@ class TelemetryEngine(QtCore.QObject):
         self._data_lock = threading.Lock()
         self._reader_failed.connect(self._on_reader_failed)
         self.state: EngineState = EngineState.IDLE
-        # Last successfully opened connection; used to restart after a stream switch.
-        self._port: str | None = None
-        self._baud: int = 0
 
         # --- Link statistics (C13) ---
         self.stats_timer: QtCore.QTimer = QtCore.QTimer(self)
@@ -95,11 +103,13 @@ class TelemetryEngine(QtCore.QObject):
             return
 
         # Clear buffers to prevent "time travel" artifacts
+        self.stores.clear()
         with self._data_lock:
-            self.store.clear()
-            self.protocol.reset()
-            self._stats_prev = self.protocol.stats.snapshot()
-            self._stats_prev_samples = self.store.total_stored
+            self.parser.reset()
+            self.router.stats = self.parser.stats
+            self.router.reset_counters()
+            self._stats_prev = self.parser.stats.snapshot()
+            self._stats_prev_samples = self.stores.total_stored
         self._stats_prev_ts = time.monotonic()
 
         if port_name == "VIRTUAL":
@@ -115,7 +125,6 @@ class TelemetryEngine(QtCore.QObject):
                 return
             self._transport = transport
 
-        self._port, self._baud = port_name, baudrate
         self._set_state(EngineState.RUNNING)
         self.stats_timer.start()
         self.status_msg.emit(f"Connected to {port_name}")
@@ -145,20 +154,39 @@ class TelemetryEngine(QtCore.QObject):
             transport.close()
 
     @QtCore.pyqtSlot(dict)
-    def select_stream(self, stream_cfg: StreamConfig) -> None:
+    def configure_streams(self, streams: dict[str, StreamConfig]) -> None:
         """
-        Switches to another stream definition atomically on the engine thread.
+        Sets every stream to decode (normally all valid streams in streams.json).
 
-        If acquisition is running it is stopped, reconfigured and restarted on the same
-        port, so a stream switch never leaves the engine half-configured (C5).
+        This is safe while running: the router and stores are swapped atomically, and
+        acquisition continues with the new definitions.
         """
-        was_running = self.state == EngineState.RUNNING
-        if was_running:
-            self.stop_working()
-        self.configure_signals(stream_cfg.get("signals", {}))
-        self.configure_frame(stream_cfg)
-        if was_running and self._port is not None:
-            self.start_working(self._port, self._baud)
+        try:
+            with self._data_lock:
+                self.router.configure(streams)
+        except (KeyError, ValueError) as e:
+            self.status_msg.emit(f"Stream config error: {e}")
+            return
+        self.stores.configure({key: cfg.get("signals", {}) for key, cfg in streams.items()})
+        self._streams = dict(streams)
+        self._apply_active_stream()
+        if self.state == EngineState.IDLE:
+            self._set_state(EngineState.CONFIGURED)
+        self.streams_configured.emit()
+
+    @QtCore.pyqtSlot(str)
+    def select_stream(self, key: str) -> None:
+        """
+        Marks the stream the GUI shows. Serial acquisition decodes every stream anyway, so
+        this only retargets the virtual device, and never restarts anything.
+        """
+        self._active_key = key  # may precede configure_streams() on a config reload
+        self._apply_active_stream()
+
+    def _apply_active_stream(self) -> None:
+        cfg = self._streams.get(self._active_key) if self._active_key is not None else None
+        if cfg is not None:
+            self.virtual.configure_stream(cfg.get("name", self._active_key or ""))
 
     def _set_state(self, state: EngineState) -> None:
         if state != self.state:
@@ -180,12 +208,16 @@ class TelemetryEngine(QtCore.QObject):
     def _on_bytes(self, data: bytes) -> None:
         """Reader-thread callback: parses one chunk and stores its frames."""
         with self._data_lock:
-            self.protocol.add_data(data)
-            frames = list(self.protocol.process_available_frames())
-        self.store.append(frames)
+            batches = self.router.route(self.parser.feed(data))
+        for key, records in batches.items():
+            store = self.stores.get(key)
+            if store is not None:
+                store.append_records(records)
 
     def _store_virtual_frame(self, frame: DecodedFrame) -> None:
-        self.store.append((frame,))
+        store = self.stores.get(self._active_key)
+        if store is not None:
+            store.append((frame,))
 
     @QtCore.pyqtSlot(str)
     def _on_reader_failed(self, message: str) -> None:
@@ -201,8 +233,8 @@ class TelemetryEngine(QtCore.QObject):
         """Periodic task (stats_timer): emits counters and rates since the previous report."""
         now = time.monotonic()
         with self._data_lock:
-            cur = self.protocol.stats.snapshot()
-            samples = self.store.total_stored
+            cur = self.parser.stats.snapshot()
+        samples = self.stores.total_stored
         report = make_link_report(
             self._stats_prev, cur, samples - self._stats_prev_samples, now - self._stats_prev_ts
         )
@@ -213,27 +245,8 @@ class TelemetryEngine(QtCore.QObject):
     def update_time_config(self, period_ms: float, max_samples: int) -> None:
         """Updates sampling settings and resizes buffers."""
         self.sample_period_s = period_ms / 1000.0
-        self.store.resize(max_samples)
+        self.stores.resize(max_samples)
         self.virtual.update_params(self.sample_period_s)
-
-    @QtCore.pyqtSlot(dict)
-    def configure_signals(self, signals_cfg: SignalsConfig) -> None:
-        """Configures the Data Manager with the signal definitions."""
-        self.store.configure(signals_cfg)
-        # Never demote RUNNING here: that silently stalled acquisition with the port open (C5).
-        if self.state == EngineState.IDLE:
-            self._set_state(EngineState.CONFIGURED)
-
-    @QtCore.pyqtSlot(dict)
-    def configure_frame(self, stream_cfg: StreamConfig) -> None:
-        """Configures the Protocol Handler with the binary frame structure."""
-        try:
-            with self._data_lock:
-                self.protocol.configure(stream_cfg)
-            name = stream_cfg.get("name", "Unknown")
-            self.virtual.configure_stream(name)
-        except ValueError as e:
-            self.status_msg.emit(f"Frame Config Error: {e}")
 
     @QtCore.pyqtSlot(int, int, float, float, float, float, float, float, float, float)
     def send_left_config(
@@ -282,7 +295,7 @@ class TelemetryEngine(QtCore.QObject):
         rps: float,
     ) -> None:
         """Constructs and sends a PID configuration packet to the MCU."""
-        packet = self.protocol.create_pid_packet(
+        packet = self._encoder.create_pid_packet(
             motor_id, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps
         )
         self._write(packet)
@@ -332,7 +345,7 @@ class TelemetryEngine(QtCore.QObject):
         r_alpha: float,
         r_rps: float,
     ) -> None:
-        packet = self.protocol.create_pid_packet_all_motors(
+        packet = self._encoder.create_pid_packet_all_motors(
             l_use_ramp,
             l_use_pi,
             l_kp,

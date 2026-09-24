@@ -15,7 +15,7 @@ from pathlib import Path
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.acquisition.engine import TelemetryEngine
-from core.acquisition.storage import SampleStore
+from core.acquisition.storage import StreamStores
 from core.config import DEFAULT_CONFIG_PATH, StreamConfigLoader
 from core.protocol.stats import LinkReport, format_link_report
 from core.types import EngineState, StreamConfig
@@ -108,13 +108,14 @@ class MainWindow(QtWidgets.QMainWindow):
         initial_period = self.panel.get_initial_sample_period()
         initial_samples = self.panel.get_initial_sample_count()
 
-        # The store is shared: the engine's reader thread writes it, and the GUI pulls from it.
-        self.store = SampleStore(initial_samples)
+        # One store per stream, shared: the engine's reader thread writes them, and the GUI
+        # pulls from the store of the stream it shows.
+        self.stores = StreamStores(initial_samples)
         self.engine: TelemetryEngine = TelemetryEngine(
-            initial_period, initial_samples, store=self.store
+            initial_period, initial_samples, stores=self.stores
         )
         self.live_feed = LiveFeed(
-            self.store, self.plot, lambda: self.panel.time_panel.get_period() / 1000.0, parent=self
+            None, self.plot, lambda: self.panel.time_panel.get_period() / 1000.0, parent=self
         )
 
         self.engine_thread: QtCore.QThread = QtCore.QThread(self)
@@ -145,12 +146,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.engine.status_msg.connect(self.lbl_status.setText)
         self.engine.connection_failed.connect(self._handle_connection_failed)
         self.engine.state_changed.connect(self._on_engine_state_changed)
+        self.engine.streams_configured.connect(self._bind_live_feed)
         self.engine.link_stats.connect(self._on_link_stats)
 
         # 6. Interactivity: Plot -> UI
         self.plot.cursor_moved.connect(self.lbl_cursor.setText)
 
         # --- Final Setup ---
+        self._configure_engine_streams()
         self._initial_stream_setup()
         self._report_config_problems()
 
@@ -162,6 +165,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.lbl_status.setText(f"Could not reload streams.json: {e}")
             self.lbl_status.setStyleSheet("color: #F44336; font-weight: bold;")
             return
+        self._configure_engine_streams()
         self.lbl_status.setText("Configuration reloaded from disk.")
         self.lbl_status.setToolTip("")
         self.lbl_status.setStyleSheet("")
@@ -182,6 +186,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_status.setToolTip("\n".join(str(p) for p in problems))
         self.lbl_status.setStyleSheet("color: #FFB74D; font-weight: bold;")
 
+    def _configure_engine_streams(self) -> None:
+        """Tells the engine to decode every valid stream (A1); the GUI picks one to show."""
+        QtCore.QMetaObject.invokeMethod(
+            self.engine,
+            "configure_streams",
+            QtCore.Qt.ConnectionType.QueuedConnection,
+            QtCore.Q_ARG(dict, dict(self.stream_loader.list_streams())),
+        )
+
+    def _bind_live_feed(self) -> None:
+        """Points the live feed at the shown stream's store (after stores are (re)built)."""
+        self.live_feed.set_store(self.stores.get(self.panel.current_stream_key()))
+
     def _initial_stream_setup(self) -> None:
         """Applies the stream currently selected in the panel to the plot and the engine."""
         cfg = self.panel.get_current_stream_config()
@@ -190,17 +207,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_stream_changed(self, stream_cfg: StreamConfig) -> None:
         """
-        Applies a newly selected stream. The plot updates immediately; the engine switches
-        (and restarts if it was running) on its own thread via `select_stream`.
+        Shows another stream. All streams are decoded all the time, so this is only a view
+        change: acquisition isn't restarted and the stream's history is kept. The engine
+        is told only so the virtual device simulates the shown stream.
         """
         self.plot.configure_signals(stream_cfg["signals"])
-        self.live_feed.invalidate()
-        QtCore.QMetaObject.invokeMethod(
-            self.engine,
-            "select_stream",
-            QtCore.Qt.ConnectionType.QueuedConnection,
-            QtCore.Q_ARG(dict, stream_cfg),
-        )
+        self._bind_live_feed()
+        key = self.panel.current_stream_key()
+        if key is not None:
+            QtCore.QMetaObject.invokeMethod(
+                self.engine,
+                "select_stream",
+                QtCore.Qt.ConnectionType.QueuedConnection,
+                QtCore.Q_ARG(str, key),
+            )
 
     def _handle_connection(self, port: str, baud: int) -> None:
         """

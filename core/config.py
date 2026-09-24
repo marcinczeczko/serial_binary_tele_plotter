@@ -60,6 +60,39 @@ def validate_config(data: Any) -> list[ConfigProblem]:
     problems: list[ConfigProblem] = []
     for key, stream in data["streams"].items():
         problems.extend(validate_stream(str(key), stream))
+    problems.extend(_shared_id_problems(data["streams"]))
+    return problems
+
+
+def _shared_id_problems(streams: dict[str, Any]) -> list[ConfigProblem]:
+    """
+    Streams may share a stream_id. The router tells them apart by payload size and decodes
+    identical layouts once. Two *different* layouts of the same size are ambiguous: only
+    the first is decoded.
+    """
+    problems: list[ConfigProblem] = []
+    seen: dict[tuple[int, int], tuple[str, tuple[Any, ...]]] = {}
+    for key, stream in streams.items():
+        try:
+            frame = stream["frame"]
+            fields = frame["fields"]
+            layout = (frame.get("endianness", "little"),) + tuple(f["type"] for f in fields)
+            size = struct.calcsize("<" + "".join(STRUCT_TYPE_MAP[t][0] for t in layout[1:]))
+            slot = (int(frame["stream_id"]), size)
+        except KeyError, TypeError, ValueError:
+            continue  # already reported by validate_stream
+        if slot not in seen:
+            seen[slot] = (str(key), layout)
+        elif seen[slot][1] != layout:
+            first = seen[slot][0]
+            problems.append(
+                ConfigProblem(
+                    "warning",
+                    str(key),
+                    f"shares stream_id {slot[0]} and a {size} B payload with '{first}' but has "
+                    f"a different layout; frames can't be told apart, only '{first}' is decoded",
+                )
+            )
     return problems
 
 

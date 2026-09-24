@@ -58,16 +58,14 @@ def test_engine_in_worker_thread_fills_shared_store(qtbot: Any) -> None:
     engine.moveToThread(thread)
     receiver = _Receiver()
     engine.link_stats.connect(receiver.on_stats)  # auto -> queued (different threads)
-    store = engine.store  # shared with the GUI; safe to read from this thread
+    stores = engine.stores  # shared with the GUI; safe to read from this thread
     thread.start()
     queued = QtCore.Qt.ConnectionType.QueuedConnection
     try:
         QtCore.QMetaObject.invokeMethod(
-            engine, "configure_signals", queued, QtCore.Q_ARG(dict, IMU_STREAM["signals"])
+            engine, "configure_streams", queued, QtCore.Q_ARG(dict, {"imu": IMU_STREAM})
         )
-        QtCore.QMetaObject.invokeMethod(
-            engine, "configure_frame", queued, QtCore.Q_ARG(dict, IMU_STREAM)
-        )
+        QtCore.QMetaObject.invokeMethod(engine, "select_stream", queued, QtCore.Q_ARG(str, "imu"))
         QtCore.QMetaObject.invokeMethod(
             engine,
             "start_working",
@@ -76,7 +74,9 @@ def test_engine_in_worker_thread_fills_shared_store(qtbot: Any) -> None:
             QtCore.Q_ARG(int, 115200),
         )
 
-        qtbot.waitUntil(lambda: len(store) >= 10, timeout=5000)
+        qtbot.waitUntil(lambda: len(stores.get("imu") or []) >= 10, timeout=5000)
+        store = stores.get("imu")
+        assert store is not None
         qtbot.waitUntil(lambda: any(r["samples_per_s"] > 0 for r in receiver.reports), timeout=5000)
 
         assert engine.thread() is thread
@@ -426,7 +426,7 @@ def test_engine_thread_reads_transport_and_handles_disconnect(qtbot: Any) -> Non
     queued = QtCore.Qt.ConnectionType.QueuedConnection
     try:
         QtCore.QMetaObject.invokeMethod(
-            engine, "select_stream", queued, QtCore.Q_ARG(dict, _CFG_BYTES)
+            engine, "configure_streams", queued, QtCore.Q_ARG(dict, {"a": _CFG_BYTES})
         )
         QtCore.QMetaObject.invokeMethod(
             engine, "start_working", queued, QtCore.Q_ARG(str, "COM9"), QtCore.Q_ARG(int, 1)
@@ -439,7 +439,9 @@ def test_engine_thread_reads_transport_and_handles_disconnect(qtbot: Any) -> Non
     assert failures == ["Serial error: device disconnected"]
     assert engine.state == EngineState.CONFIGURED
     assert transport.closed
-    assert engine.protocol.stats.frames_decoded == 300
+    assert engine.parser.stats.frames_decoded == 300
+    a_store = engine.stores.get("a")
+    assert a_store is not None and a_store.total_stored == 300
 
 
 # --- Live feed: GUI pulls from the store (R2.6) ---
@@ -514,3 +516,35 @@ def test_pause_freezes_all_signals_while_acquisition_continues(qtbot: Any) -> No
     feed.tick()
     assert plot.last_packet is not None
     assert plot.last_packet["time"][-1] == 49 * 0.01
+
+
+def test_switching_streams_is_a_view_change_that_keeps_history(qtbot: Any) -> None:
+    from ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    panel = win.panel
+    panel.payload_combo.setCurrentIndex(panel.payload_combo.findData("imu_6axis"))
+    conn = panel.conn_panel
+    conn.port_combo.setCurrentIndex(conn.port_combo.findText("VIRTUAL"))
+    conn.connect_btn.click()
+    qtbot.waitUntil(lambda: win.engine_state == EngineState.RUNNING, timeout=5000)
+
+    def imu_count() -> int:
+        store = win.stores.get("imu_6axis")
+        return len(store) if store is not None else 0
+
+    qtbot.waitUntil(lambda: imu_count() >= 20, timeout=5000)
+    states: list[EngineState] = []
+    win.engine.state_changed.connect(states.append)
+
+    panel.payload_combo.setCurrentIndex(panel.payload_combo.findData("pid"))
+    qtbot.wait(100)
+    kept = imu_count()
+    panel.payload_combo.setCurrentIndex(panel.payload_combo.findData("imu_6axis"))
+    qtbot.waitUntil(lambda: win.plot.last_packet is not None, timeout=5000)
+
+    assert kept >= 20  # imu history survived showing another stream
+    assert states == []  # no stop/restart on a view change
+    assert win.engine_state == EngineState.RUNNING
+    win.close()

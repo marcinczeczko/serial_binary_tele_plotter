@@ -1,13 +1,10 @@
 """
 Protocol Handler Module.
 
-This module provides the `ProtocolHandler` class, which is responsible for the
-low-level details of the binary communication protocol. It handles:
-1. Buffering incoming raw bytes.
-2. Synchronizing to the data stream (finding Magic Bytes).
-3. Validating integrity via CRC8 (Header and Payload).
-4. decoding binary payloads into Python dictionaries.
-5. Encoding configuration commands back into binary frames.
+`ProtocolHandler` is the single-stream convenience API: framing via `FrameParser`, then
+per-frame decoding into dicts for the one configured stream. It also encodes the command
+packets sent to the MCU. The engine's multi-stream path uses `FrameParser` +
+`StreamRouter` directly.
 """
 
 from __future__ import annotations
@@ -24,50 +21,42 @@ from core.protocol.constants import (
 )
 from core.protocol.crc import calculate_crc8
 from core.protocol.decoder import FrameDecoder
+from core.protocol.frame_parser import HEADER_LEN, MAX_FRAME_LEN, MIN_FRAME_LEN, FrameParser
 from core.protocol.stats import LinkStats
 from core.types import StreamConfig
 
-HEADER_LEN = 5  # MAGIC0, MAGIC1, TYPE, LEN, H_CRC
-MIN_FRAME_LEN = HEADER_LEN + 1  # empty payload + P_CRC
-MAX_FRAME_LEN = HEADER_LEN + 255 + 1
-_MAGIC = bytes([MAGIC_0, MAGIC_1])
+__all__ = ["HEADER_LEN", "MAX_FRAME_LEN", "MIN_FRAME_LEN", "ProtocolHandler"]
 
 
 class ProtocolHandler:
     """
-    Manages the binary data stream logic.
+    Feed it raw chunked bytes; it yields decoded frames of the configured stream.
 
-    It encapsulates the Receive Buffer (`rx_buffer`) and the `FrameDecoder`.
-    It acts as a stream parser: you feed it raw chunked bytes, and it yields
-    complete, validated frames.
-
-    Buffer invariant: after `process_available_frames()` has been fully consumed, the buffer
-    holds less than `MAX_FRAME_LEN` bytes (at most one incomplete frame), however large the
-    chunks passed to `add_data()` were. Nothing is ever dropped without being counted in
-    `stats`.
+    Frames of other stream IDs are counted (`stats.unknown_id_frames`), not decoded. The
+    buffer bound and "nothing dropped silently" guarantees are the `FrameParser`'s.
     """
 
     def __init__(self) -> None:
-        """Initializes the handler with an empty buffer."""
-        self.rx_buffer: bytearray = bytearray()
+        self.parser = FrameParser()
         self.decoder: FrameDecoder | None = None
         self.active_stream_id: int | None = None
-        self.stats: LinkStats = LinkStats()
         self._last_counter: int | None = None
+
+    @property
+    def stats(self) -> LinkStats:
+        return self.parser.stats
+
+    @property
+    def rx_buffer(self) -> bytearray:
+        return self.parser.rx_buffer
 
     def reset(self) -> None:
         """Drops buffered bytes and zeroes the statistics (e.g. on a new connection)."""
-        self.rx_buffer.clear()
-        self.stats = LinkStats()
+        self.parser.reset()
         self._last_counter = None
 
     def configure(self, stream_cfg: StreamConfig) -> None:
-        """
-        Configures the FrameDecoder based on the JSON stream definition.
-
-        Args:
-            stream_cfg (dict): Configuration dictionary containing the 'frame' section.
-        """
+        """Builds the decoder from the stream's `frame` section."""
         if "frame" not in stream_cfg:
             raise ValueError("Stream config missing 'frame' definition")
 
@@ -80,73 +69,15 @@ class ProtocolHandler:
         self._last_counter = None
 
     def add_data(self, data: bytes) -> None:
-        """
-        Ingests raw bytes into the internal processing buffer.
-
-        Args:
-            data (bytes): Chunk of data read from the serial port.
-        """
-        self.stats.bytes_rx += len(data)
-        self.rx_buffer.extend(data)
+        """Ingests a chunk of raw bytes read from the transport."""
+        self.parser.add_data(data)
 
     def process_available_frames(self) -> Generator[dict[str, int | float]]:
-        """
-        Parses the internal buffer and yields all complete, valid frames found.
-
-        This method implements a 'state machine' loop that:
-        1. Synchronizes to Magic Bytes (0xAA 0x55).
-        2. Validates the Header CRC.
-        3. Waits until enough bytes are available for the Payload.
-        4. Validates Payload CRC and decodes.
-
-        Yields:
-            dict: Decoded telemetry frame.
-        """
-        buf = self.rx_buffer
-        stats = self.stats
-        while True:
-            if len(buf) < MIN_FRAME_LEN:
-                break
-
-            # 1. Synchronize: jump straight to the next magic pair.
-            if buf[0] != MAGIC_0 or buf[1] != MAGIC_1:
-                magic_offset = buf.find(_MAGIC)
-                if magic_offset < 0:
-                    # Keep the last byte: it may be the 0xAA of a pair split across reads.
-                    skipped = len(buf) - 1 if buf[-1] == MAGIC_0 else len(buf)
-                    stats.discarded_bytes += skipped
-                    del buf[:skipped]
-                    break
-                stats.discarded_bytes += magic_offset
-                del buf[:magic_offset]
-                continue
-
-            # 2. Header [MAGIC0][MAGIC1][TYPE][LEN][H_CRC]: must be valid before LEN is trusted.
-            if calculate_crc8(bytes(buf[:4])) != buf[4]:
-                stats.header_crc_errors += 1
-                stats.discarded_bytes += 1
-                del buf[0]  # re-sync from the next byte
-                continue
-
-            p_len = buf[3]
-            frame_len = HEADER_LEN + p_len + 1
-            if len(buf) < frame_len:
-                break  # valid header, payload still in flight
-
-            # 3. Consume the frame before validating it, so a bad frame can't stall the parser.
-            p_type = buf[2]
-            payload = bytes(buf[HEADER_LEN : HEADER_LEN + p_len])
-            p_crc = buf[HEADER_LEN + p_len]
-            del buf[:frame_len]
-
-            if calculate_crc8(payload) != p_crc:
-                stats.payload_crc_errors += 1
-                continue
-
-            stats.frames_by_id[p_type] = stats.frames_by_id.get(p_type, 0) + 1
+        """Yields every complete, valid frame of the configured stream, decoded to a dict."""
+        for p_type, payload in self.parser.frames():
             decoded = self._decode_payload(p_type, payload)
             if decoded is not None:
-                stats.frames_decoded += 1
+                self.stats.frames_decoded += 1
                 yield decoded
 
     def _decode_payload(self, p_type: int, payload: bytes) -> dict[str, int | float] | None:

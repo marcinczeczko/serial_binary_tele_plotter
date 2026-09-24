@@ -56,9 +56,10 @@ styles.py               global dark theme (QSS)
 streams.json            stream/frame/signal definitions (single source of truth)
 core/types.py           TypedDict config shapes, PlotMode, EngineState
 core/config.py          validate_config (single source of truth) + StreamConfigLoader
-core/protocol/          wire format: constants, crc (CRC-8 poly 0x07), decoder (struct), handler (sync/CRC/encode), stats (link counters)
+core/protocol/          wire format: constants, crc (CRC-8), frame_parser (sync/CRC, all IDs), record_decoder (numpy dtype),
+                        router (multi-stream dispatch), handler (single-stream API + command encoding), stats
 core/transport/         Transport protocol, SerialTransport, ReaderThread (blocking reads, no Qt)
-core/acquisition/       engine (QThread controller), storage (SampleStore: versioned ring), virtual (simulator)
+core/acquisition/       engine (QThread controller), storage (SampleStore, StreamStores), virtual (simulator)
 ui/main_window.py       composition, thread setup, signal wiring
 ui/charts/              TelemetryPlot (pyqtgraph), LiveFeed (pulls store snapshots)
 ui/panels/              connection, stream select, PID, IMU, timing, signal visibility
@@ -83,7 +84,10 @@ Changing any of this is a firmware-visible change. Call it out explicitly.
 - **Threading.** `TelemetryEngine` lives in its own `QThread`. The GUI talks to it only
   through signals or `QMetaObject.invokeMethod(..., QueuedConnection)`. Never call engine
   methods or read engine attributes from GUI code. The engine owns its state machine
-  (`select_stream`, `start_working`, `stop_working`), and the GUI mirrors `state_changed`.
+  (`configure_streams`, `select_stream`, `start_working`, `stop_working`), and the GUI
+  mirrors `state_changed`. Every configured stream is decoded all the time, so
+  `select_stream(key)` is a view choice: it only retargets the virtual device. The GUI
+  re-looks-up stores after `streams_configured`.
   Bytes are read and parsed on a `ReaderThread`; parser and storage state are shared with
   the engine thread only under `TelemetryEngine._data_lock`. Keep those sections short.
   Reader failures reach the engine thread through a queued signal, never a direct call.

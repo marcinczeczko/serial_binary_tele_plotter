@@ -171,6 +171,10 @@ class MainControlPanel(QtWidgets.QWidget):
     def get_initial_sample_count(self) -> int:
         return self.time_panel.get_samples()
 
+    def current_stream_key(self) -> str | None:
+        key = self.payload_combo.currentData()
+        return key if isinstance(key, str) else None
+
     def get_current_stream_config(self) -> StreamConfig | None:
         idx = self.payload_combo.currentIndex()
         sid = self.payload_combo.itemData(idx)
