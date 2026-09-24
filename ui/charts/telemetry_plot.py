@@ -15,6 +15,8 @@ from PyQt6 import QtCore, QtWidgets
 
 from core.types import PlotMode, PlotPacketWithRaw, SignalsConfig, StreamSignalConfig
 
+DEFAULT_LINE_WIDTH = 1
+
 
 class _SignalView(TypedDict):
     curve: pg.PlotDataItem
@@ -60,7 +62,8 @@ class TelemetryPlot(QtWidgets.QWidget):
         self.plot.setLabel("bottom", "Time [s]")
 
         # --- PERFORMANCE CRITICAL ---
-        self.plot.setDownsampling(mode="peak")
+        # auto=True is required: mode alone leaves downsampling disabled (ds=1) (P1).
+        self.plot.setDownsampling(auto=True, mode="peak")
         self.plot.setClipToView(True)
 
         # TURN ON left axis and enable auto-scaling
@@ -118,7 +121,8 @@ class TelemetryPlot(QtWidgets.QWidget):
 
             # Create curve directly in the main window
             color = sig.get("color", "#FFFFFF")
-            width = line_cfg.get("width", 2)
+            # 1 px is the fast path in Qt's raster engine; wider pens are much slower (P4).
+            width = line_cfg.get("width", DEFAULT_LINE_WIDTH)
             c = pg.PlotDataItem(
                 pen=pg.mkPen(color=color, width=width, style=pen_style),
                 name=sig.get("label", sid),

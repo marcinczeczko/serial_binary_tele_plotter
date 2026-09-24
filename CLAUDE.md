@@ -56,7 +56,7 @@ styles.py               global dark theme (QSS)
 streams.json            stream/frame/signal definitions (single source of truth)
 core/types.py           TypedDict config shapes, PlotMode, EngineState
 core/config.py          StreamConfigLoader (load + minimal validation)
-core/protocol/          wire format: constants, crc (CRC-8 poly 0x07), decoder (struct), handler (sync/CRC/encode)
+core/protocol/          wire format: constants, crc (CRC-8 poly 0x07), decoder (struct), handler (sync/CRC/encode), stats (link counters)
 core/acquisition/       engine (QThread controller), storage (numpy ring), virtual (simulator)
 ui/main_window.py       composition, thread setup, signal wiring
 ui/charts/              TelemetryPlot (pyqtgraph)

@@ -25,6 +25,8 @@ Primary use cases:
 - Optional IMU calibration command panel.
 - Virtual device simulator (`VIRTUAL` port) for UI development without hardware.
 - Adjustable sample period and ring-buffer window size.
+- Link statistics in the status bar: throughput, samples/s, CRC errors, lost frames
+  (`loop_cntr` gaps) and bytes dropped while re-syncing. Hover for the full breakdown.
 
 ## Requirements
 
@@ -169,6 +171,8 @@ field.
 
 **Line styles:** `solid`, `dashed`, `dotted`
 
+**Line width:** pixels, default `1`. Wider lines draw much more slowly with many samples.
+
 Example — a minimal stream definition:
 
 ```json
@@ -249,6 +253,7 @@ serial_bin_plotter/
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | No serial ports appear | OS permission denied | Add user to `dialout` group (Linux) or grant Terminal serial access (macOS) |
-| Plot is flat / no data | `stream_id` or frame layout mismatch | Verify `stream_id`, field order, and types match the firmware struct exactly |
-| Data looks corrupted | Baud rate mismatch | Ensure firmware and UI baud rates are identical |
+| Plot is flat / no data | `stream_id` or frame layout mismatch | Check the status-bar tooltip: "Frames for other stream IDs" means `stream_id` differs; "Size mismatches" means the field list doesn't match the firmware struct |
+| Data looks corrupted | Baud rate mismatch | CRC errors and dropped bytes climb in the status bar; make firmware and UI baud rates identical |
+| Gaps or jumps in traces | Frames lost or MCU reset | The status bar shows "lost N" (`loop_cntr` gaps) and the tooltip shows resets |
 | `uv run pytest` picks up wrong Python | Anaconda or system `pytest` in PATH | Always use `uv run pytest`, never bare `pytest` |

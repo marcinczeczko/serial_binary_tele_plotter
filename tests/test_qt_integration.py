@@ -19,6 +19,7 @@ pytest.importorskip("PyQt6.QtWidgets", exc_type=ImportError)
 from PyQt6 import QtCore  # noqa: E402
 
 from core.acquisition.engine import TelemetryEngine  # noqa: E402
+from core.protocol.stats import LinkReport  # noqa: E402
 from core.types import EngineState, PlotPacketWithRaw, StreamConfig  # noqa: E402
 
 pytestmark = pytest.mark.qt
@@ -42,6 +43,7 @@ class _Receiver(QtCore.QObject):
     def __init__(self) -> None:
         super().__init__()
         self.packets: list[PlotPacketWithRaw] = []
+        self.reports: list[LinkReport] = []
         self.delivery_threads: list[Any] = []
 
     @QtCore.pyqtSlot(dict)
@@ -49,13 +51,19 @@ class _Receiver(QtCore.QObject):
         self.delivery_threads.append(QtCore.QThread.currentThread())
         self.packets.append(packet)
 
+    @QtCore.pyqtSlot(dict)
+    def on_stats(self, report: LinkReport) -> None:
+        self.reports.append(report)
+
 
 def test_engine_in_worker_thread_delivers_packets_to_gui_thread(qtbot: Any) -> None:
     engine = TelemetryEngine(sample_period_ms=5.0, max_samples=500)
+    engine.stats_timer.setInterval(100)
     thread = QtCore.QThread()
     engine.moveToThread(thread)
     receiver = _Receiver()
     engine.data_ready.connect(receiver.on_data)  # auto -> queued (different threads)
+    engine.link_stats.connect(receiver.on_stats)
     thread.start()
     queued = QtCore.Qt.ConnectionType.QueuedConnection
     try:
@@ -74,6 +82,7 @@ def test_engine_in_worker_thread_delivers_packets_to_gui_thread(qtbot: Any) -> N
         )
 
         qtbot.waitUntil(lambda: len(receiver.packets) >= 2, timeout=5000)
+        qtbot.waitUntil(lambda: any(r["samples_per_s"] > 0 for r in receiver.reports), timeout=5000)
 
         assert engine.thread() is thread
         app = QtCore.QCoreApplication.instance()
@@ -115,8 +124,22 @@ def test_stream_editor_round_trip_is_lossless_for_pid_stream(qtbot: Any) -> None
     assert data == original
 
 
-@pytest.mark.xfail(strict=True, reason="C4c: editor forces line width 2 on save (roadmap R1.6)")
 def test_stream_editor_round_trip_keeps_line_width(qtbot: Any) -> None:
+    from ui.config.stream_editor import StreamEditor
+
+    original = _load_stream("imu_6axis")
+    editor = StreamEditor()
+    qtbot.addWidget(editor)
+    editor.load_data("imu_6axis", copy.deepcopy(original))
+
+    _, data = editor.get_data()
+
+    widths = {k: v["line"]["width"] for k, v in data["signals"].items()}
+    assert widths == {k: v["line"]["width"] for k, v in original["signals"].items()}
+
+
+@pytest.mark.xfail(strict=True, reason="C4: editor drops keys it doesn't own, e.g. 'group' (R1.6)")
+def test_stream_editor_round_trip_keeps_unknown_signal_keys(qtbot: Any) -> None:
     from ui.config.stream_editor import StreamEditor
 
     original = _load_stream("imu_6axis")
@@ -149,3 +172,24 @@ def test_main_window_starts_switches_stream_and_closes(qtbot: Any, monkeypatch: 
 
     win.close()
     assert win.engine_thread.isFinished()
+
+
+def test_plot_downsampling_is_enabled_and_pens_default_to_1px(qtbot: Any) -> None:
+    from ui.charts.telemetry_plot import TelemetryPlot
+
+    plot = TelemetryPlot()
+    qtbot.addWidget(plot)
+    plot.configure_signals(
+        {
+            "a": {"label": "A", "field": "a", "color": "#fff"},
+            "b": {"label": "B", "field": "b", "color": "#fff", "line": {"width": 3}},
+        }
+    )
+
+    _, auto, method = plot.plot.downsampleMode()
+    assert (auto, method) == (True, "peak")
+    curve_a = plot.signal_views["a"]["curve"]
+    assert curve_a.opts["autoDownsample"] is True
+    assert curve_a.opts["clipToView"] is True
+    assert curve_a.opts["pen"].width() == 1
+    assert plot.signal_views["b"]["curve"].opts["pen"].width() == 3

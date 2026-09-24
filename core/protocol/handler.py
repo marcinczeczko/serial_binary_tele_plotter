@@ -12,11 +12,11 @@ low-level details of the binary communication protocol. It handles:
 
 from __future__ import annotations
 
-import logging
 import struct
 from collections.abc import Generator
 
 from core.protocol.constants import (
+    LOOP_CNTR_NAME,
     MAGIC_0,
     MAGIC_1,
     RTP_REQ_PID_ALL,
@@ -24,13 +24,13 @@ from core.protocol.constants import (
 )
 from core.protocol.crc import calculate_crc8
 from core.protocol.decoder import FrameDecoder
+from core.protocol.stats import LinkStats
 from core.types import StreamConfig
 
-DEBUG_DECODE = False
-TRACE_DECODE = False
-DEBUG_DECODE_PAYLOAD = False
-
-logger = logging.getLogger(__name__)
+HEADER_LEN = 5  # MAGIC0, MAGIC1, TYPE, LEN, H_CRC
+MIN_FRAME_LEN = HEADER_LEN + 1  # empty payload + P_CRC
+MAX_FRAME_LEN = HEADER_LEN + 255 + 1
+_MAGIC = bytes([MAGIC_0, MAGIC_1])
 
 
 class ProtocolHandler:
@@ -40,6 +40,11 @@ class ProtocolHandler:
     It encapsulates the Receive Buffer (`rx_buffer`) and the `FrameDecoder`.
     It acts as a stream parser: you feed it raw chunked bytes, and it yields
     complete, validated frames.
+
+    Buffer invariant: after `process_available_frames()` has been fully consumed, the buffer
+    holds less than `MAX_FRAME_LEN` bytes (at most one incomplete frame), however large the
+    chunks passed to `add_data()` were. Nothing is ever dropped without being counted in
+    `stats`.
     """
 
     def __init__(self) -> None:
@@ -47,6 +52,14 @@ class ProtocolHandler:
         self.rx_buffer: bytearray = bytearray()
         self.decoder: FrameDecoder | None = None
         self.active_stream_id: int | None = None
+        self.stats: LinkStats = LinkStats()
+        self._last_counter: int | None = None
+
+    def reset(self) -> None:
+        """Drops buffered bytes and zeroes the statistics (e.g. on a new connection)."""
+        self.rx_buffer.clear()
+        self.stats = LinkStats()
+        self._last_counter = None
 
     def configure(self, stream_cfg: StreamConfig) -> None:
         """
@@ -64,9 +77,7 @@ class ProtocolHandler:
             fields=frame["fields"],
         )
         self.active_stream_id = frame.get("stream_id")
-
-        if DEBUG_DECODE:
-            logger.debug("[PROTO] Configured Stream ID: %s", self.active_stream_id)
+        self._last_counter = None
 
     def add_data(self, data: bytes) -> None:
         """
@@ -75,8 +86,7 @@ class ProtocolHandler:
         Args:
             data (bytes): Chunk of data read from the serial port.
         """
-        if TRACE_DECODE:
-            logger.debug("[RX][BUF] +%s bytes", len(data))
+        self.stats.bytes_rx += len(data)
         self.rx_buffer.extend(data)
 
     def process_available_frames(self) -> Generator[dict[str, int | float]]:
@@ -92,108 +102,86 @@ class ProtocolHandler:
         Yields:
             dict: Decoded telemetry frame.
         """
-        # Safety: Prevent infinite memory growth if sync is never found
-        if len(self.rx_buffer) > 4096:
-            if TRACE_DECODE:
-                logger.warning("[RX] Buffer overflow (>4KB), clearing to reset sync.")
-            self.rx_buffer.clear()
-            return
-
+        buf = self.rx_buffer
+        stats = self.stats
         while True:
-            # 1. Check for minimal frame size
-            # (2 Magic + 1 Type + 1 Len + 1 HeaderCRC + 0 Payload + 1 PayloadCRC = 6 bytes)
-            if len(self.rx_buffer) < 6:
+            if len(buf) < MIN_FRAME_LEN:
                 break
 
-            # 2. Synchronization (Find Magic Bytes)
-            if self.rx_buffer[0] != MAGIC_0 or self.rx_buffer[1] != MAGIC_1:
-                # Jump directly to the next magic-byte pair instead of dropping one byte at a
-                # time — avoids up to 4096 iterations during sync loss or corruption.
-                magic_offset = self.rx_buffer.find(bytes([MAGIC_0, MAGIC_1]))
+            # 1. Synchronize: jump straight to the next magic pair.
+            if buf[0] != MAGIC_0 or buf[1] != MAGIC_1:
+                magic_offset = buf.find(_MAGIC)
                 if magic_offset < 0:
-                    # No magic bytes anywhere; keep the last byte in case it is the first half
-                    # of a split [0xAA | 0x55] sequence that arrives in the next chunk.
-                    del self.rx_buffer[:-1]
+                    # Keep the last byte: it may be the 0xAA of a pair split across reads.
+                    skipped = len(buf) - 1 if buf[-1] == MAGIC_0 else len(buf)
+                    stats.discarded_bytes += skipped
+                    del buf[:skipped]
                     break
-                del self.rx_buffer[:magic_offset]  # advance buffer to the magic pair
+                stats.discarded_bytes += magic_offset
+                del buf[:magic_offset]
                 continue
 
-            # 3. Parse Header
-            # Header structure: [MAGIC0][MAGIC1][TYPE][LEN][H_CRC]
-            p_len = self.rx_buffer[3]
-            h_crc = self.rx_buffer[4]
-
-            header = bytes(self.rx_buffer[:4])
-
-            # 4. Validate Header CRC
-            if calculate_crc8(header) != h_crc:
-                # Corrupted header: drop the first byte and try to re-sync
-                del self.rx_buffer[0]
+            # 2. Header [MAGIC0][MAGIC1][TYPE][LEN][H_CRC]: must be valid before LEN is trusted.
+            if calculate_crc8(bytes(buf[:4])) != buf[4]:
+                stats.header_crc_errors += 1
+                stats.discarded_bytes += 1
+                del buf[0]  # re-sync from the next byte
                 continue
 
-            # 5. Check Payload Availability
-            # Full frame size = 5 bytes (Header+CRC) + p_len (Payload) + 1 byte (PayloadCRC)
-            frame_len = 5 + p_len + 1
+            p_len = buf[3]
+            frame_len = HEADER_LEN + p_len + 1
+            if len(buf) < frame_len:
+                break  # valid header, payload still in flight
 
-            if len(self.rx_buffer) < frame_len:
-                # We have a valid header, but not enough data for the body yet.
-                # Stop processing and wait for the next `add_data` call.
-                break
+            # 3. Consume the frame before validating it, so a bad frame can't stall the parser.
+            p_type = buf[2]
+            payload = bytes(buf[HEADER_LEN : HEADER_LEN + p_len])
+            p_crc = buf[HEADER_LEN + p_len]
+            del buf[:frame_len]
 
-            # 6. Extract Payload
-            p_type = self.rx_buffer[2]
-            payload = bytes(self.rx_buffer[5 : 5 + p_len])
-            p_crc = self.rx_buffer[5 + p_len]
+            if calculate_crc8(payload) != p_crc:
+                stats.payload_crc_errors += 1
+                continue
 
-            # 7. Consume the bytes from the buffer
-            # Important: Remove bytes BEFORE decoding. If CRC fails, we discard the frame
-            # but we must advance the buffer to avoid getting stuck processing the same bytes.
-            del self.rx_buffer[:frame_len]
-
-            # 8. Validate Payload CRC and Decode
-            if calculate_crc8(payload) == p_crc:
-                decoded = self._decode_payload(p_type, payload)
-                if decoded is not None:
-                    yield decoded
-            elif TRACE_DECODE:
-                logger.debug("[RX][CRC] Payload CRC check failed")
+            stats.frames_by_id[p_type] = stats.frames_by_id.get(p_type, 0) + 1
+            decoded = self._decode_payload(p_type, payload)
+            if decoded is not None:
+                stats.frames_decoded += 1
+                yield decoded
 
     def _decode_payload(self, p_type: int, payload: bytes) -> dict[str, int | float] | None:
-        """
-        Decodes payload ONLY if p_type matches the active stream configuration.
-        """
-        if not self.decoder or self.active_stream_id is None:
+        """Decodes a CRC-valid payload if it belongs to the active stream; counts it otherwise."""
+        if not self.decoder or self.active_stream_id is None or p_type != self.active_stream_id:
+            self.stats.unknown_id_frames += 1
             return None
 
-        # Ensure we are processing the expected stream type
-        if p_type != self.active_stream_id:
-            return None
-
-        # Double check size (though header validation usually covers this)
         if len(payload) != self.decoder.size:
-            if DEBUG_DECODE:
-                logger.debug(
-                    "[RX][ERR] Size mismatch for ID %s. Got %s, expected %s",
-                    p_type,
-                    len(payload),
-                    self.decoder.size,
-                )
+            self.stats.size_mismatches += 1
             return None
-        else:
-            if DEBUG_DECODE:
-                logger.debug(
-                    "[RX][OK] Size match for ID %s. Got %s, expected %s",
-                    p_type,
-                    len(payload),
-                    self.decoder.size,
-                )
+
         try:
             decoded = self.decoder.decode(payload)
-            if DEBUG_DECODE_PAYLOAD:
-                logger.debug("[RX][DATA] %s", decoded)
-            return decoded
-        except struct.error:
+        except struct.error:  # unreachable while sizes match; kept as a guard
+            self.stats.size_mismatches += 1
             return None
+
+        self._track_counter(decoded)
+        return decoded
+
+    def _track_counter(self, decoded: dict[str, int | float]) -> None:
+        counter = decoded.get(LOOP_CNTR_NAME)
+        if counter is None:
+            return
+        value = int(counter)
+        last = self._last_counter
+        self._last_counter = value
+        if last is None or value == last + 1:
+            return
+        if value > last:
+            self.stats.counter_gaps += 1
+            self.stats.counter_missing += value - last - 1
+        else:
+            self.stats.counter_resets += 1
 
     def create_pid_packet(
         self,

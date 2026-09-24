@@ -15,6 +15,7 @@ from core.protocol.constants import STRUCT_TYPE_MAP
 from core.types import SignalsConfig, StreamConfig, StreamFrameField
 
 # Common UI Imports
+from ui.charts.telemetry_plot import DEFAULT_LINE_WIDTH
 from ui.common.color_button import ColorButton
 
 PANEL_TYPES = ["none", "pid", "imu", "control"]
@@ -136,7 +137,7 @@ class StreamEditor(QtWidgets.QWidget):
         self.sig_tree.setRootIsDecorated(False)
 
         # Cols: Label | Field | Color | Vis | Style
-        self.sig_cols = ["Label Name", "Field Map", "Color", "Vis", "Style"]
+        self.sig_cols = ["Label Name", "Field Map", "Color", "Vis", "Style", "Width"]
         self.sig_tree.setColumnCount(len(self.sig_cols))
         self.sig_tree.setHeaderLabels(self.sig_cols)
 
@@ -185,6 +186,7 @@ class StreamEditor(QtWidgets.QWidget):
                 "color": sdata.get("color", "#FFFFFF"),
                 "visible": sdata.get("visible", True),
                 "style": sdata.get("line", {}).get("style", "solid"),
+                "width": sdata.get("line", {}).get("width", DEFAULT_LINE_WIDTH),
             }
             self.add_signal_row(row)
 
@@ -211,6 +213,7 @@ class StreamEditor(QtWidgets.QWidget):
             vis_box = _as_widget(self.sig_tree.itemWidget(item, 3), QtWidgets.QWidget)
             vis = _as_widget(vis_box.findChild(QtWidgets.QCheckBox), QtWidgets.QCheckBox)
             style = _as_widget(self.sig_tree.itemWidget(item, 4), QtWidgets.QComboBox).currentText()
+            width = _as_widget(self.sig_tree.itemWidget(item, 5), QtWidgets.QSpinBox).value()
 
             skey = fld if fld else re.sub(r"[^a-zA-Z0-9]", "", label)
 
@@ -219,7 +222,7 @@ class StreamEditor(QtWidgets.QWidget):
                 "field": fld,
                 "color": col,
                 "visible": vis.isChecked(),
-                "line": {"style": style, "width": 2},
+                "line": {"style": style, "width": width},
             }
 
         data: StreamConfig = {
@@ -273,6 +276,7 @@ class StreamEditor(QtWidgets.QWidget):
                 "color": "#4FC3F7",
                 "visible": True,
                 "style": "solid",
+                "width": DEFAULT_LINE_WIDTH,
             }
 
         item = QtWidgets.QTreeWidgetItem(self.sig_tree)
@@ -280,7 +284,7 @@ class StreamEditor(QtWidgets.QWidget):
         item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsEditable)
 
         # Style row
-        for c in range(5):
+        for c in range(len(self.sig_cols)):
             item.setSizeHint(c, QtCore.QSize(0, 30))
             item.setForeground(c, QtGui.QBrush(QtGui.QColor("#e0e0e0")))
 
@@ -305,10 +309,16 @@ class StreamEditor(QtWidgets.QWidget):
         cb_sty.addItems(["solid", "dashed", "dotted"])
         cb_sty.setCurrentText(d["style"])
 
+        # Col 5: Line width (1 px draws fastest; see P4)
+        sb_width = QtWidgets.QSpinBox()
+        sb_width.setRange(1, 5)
+        sb_width.setValue(int(d["width"]))
+
         self.sig_tree.setItemWidget(item, 1, cb_fld)
         self.sig_tree.setItemWidget(item, 2, ColorButton(d["color"]))
         self.sig_tree.setItemWidget(item, 3, w_chk)
         self.sig_tree.setItemWidget(item, 4, cb_sty)
+        self.sig_tree.setItemWidget(item, 5, sb_width)
 
     def remove_tree_item(self) -> None:
         # Removes selected signal
