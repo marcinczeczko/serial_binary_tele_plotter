@@ -58,8 +58,14 @@ uv run python main.py
 ## Development Commands
 
 ```bash
-# Run all tests
+# Run all tests (Qt tests run headless on the offscreen platform)
 uv run pytest
+
+# Machines where Qt can't load (e.g. missing libEGL): skip the real-Qt tests
+uv run pytest -p no:pytest-qt
+
+# Parser/storage micro-benchmark
+uv run python tools/bench_pipeline.py
 
 # Lint (check only)
 uv run ruff check .
@@ -73,6 +79,8 @@ uv run ruff format .
 # Type-check
 uv run mypy .
 ```
+
+CI (`.github/workflows/ci.yml`) runs lint, format check, mypy and the tests on every PR.
 
 > **Why `uv run` and not activating the venv?**
 > `uv run <cmd>` always executes inside the project venv regardless of your shell's active

@@ -50,8 +50,7 @@ class SignalDataManager:
         self.max_samples = max(max_samples, 1)
         self._loop_arr = np.zeros(self.max_samples, dtype=np.float64)
         self._signal_arrays = {
-            sid: np.zeros(self.max_samples, dtype=np.float64)
-            for sid in old_signals
+            sid: np.zeros(self.max_samples, dtype=np.float64) for sid in old_signals
         }
         self._write_index = 0
         self._count = 0

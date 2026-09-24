@@ -47,9 +47,7 @@ def test_update_tooltip_anchor_zero(pyqt_stub):
     plot.update_hud_position = lambda: None
     plot.anchor_time = 0.0
     plot.anchor_values = {"sig": 1.0}
-    plot.signal_views = {
-        "sig": {"curve": _Curve(), "config": {"color": "#fff", "label": "Sig"}}
-    }
+    plot.signal_views = {"sig": {"curve": _Curve(), "config": {"color": "#fff", "label": "Sig"}}}
 
     ds = {
         "time": np.array([0.0, 1.0]),

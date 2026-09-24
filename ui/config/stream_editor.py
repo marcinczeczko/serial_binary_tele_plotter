@@ -6,19 +6,25 @@ Simplified Version: Flat signal list (no groups), removed Lock/Scale features.
 from __future__ import annotations
 
 import re
-from collections import OrderedDict
 from typing import Any
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 # Core Imports
 from core.protocol.constants import STRUCT_TYPE_MAP
-from core.types import StreamConfig
+from core.types import SignalsConfig, StreamConfig, StreamFrameField
 
 # Common UI Imports
 from ui.common.color_button import ColorButton
 
 PANEL_TYPES = ["none", "pid", "imu", "control"]
+
+
+def _as_widget[W: QtWidgets.QWidget](widget: QtWidgets.QWidget | None, cls: type[W]) -> W:
+    """Narrows a cell/item widget returned by Qt to the type the editor placed there."""
+    if not isinstance(widget, cls):
+        raise TypeError(f"Expected {cls.__name__}, got {type(widget).__name__}")
+    return widget
 
 
 class StreamEditor(QtWidgets.QWidget):
@@ -104,10 +110,13 @@ class StreamEditor(QtWidgets.QWidget):
         self.frame_table.setColumnCount(2)
         self.frame_table.setHorizontalHeaderLabels(["Field Name (C++)", "Data Type"])
         h = self.frame_table.horizontalHeader()
+        assert h is not None
         h.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Fixed)
         h.resizeSection(1, 150)
-        self.frame_table.verticalHeader().setVisible(False)
+        v = self.frame_table.verticalHeader()
+        assert v is not None
+        v.setVisible(False)
 
         btns = QtWidgets.QHBoxLayout()
         b_add = QtWidgets.QPushButton("+ Add")
@@ -132,6 +141,7 @@ class StreamEditor(QtWidgets.QWidget):
         self.sig_tree.setHeaderLabels(self.sig_cols)
 
         h = self.sig_tree.header()
+        assert h is not None
         h.resizeSection(0, 200)
         h.resizeSection(1, 150)
         h.resizeSection(2, 80)
@@ -179,36 +189,28 @@ class StreamEditor(QtWidgets.QWidget):
             self.add_signal_row(row)
 
     def get_data(self) -> tuple[str, StreamConfig]:
-        data = OrderedDict()
-        data["name"] = self.name_edit.text()
-        data["panel_type"] = self.panel_combo.currentText()
-
         # Frame
-        fields = []
+        fields: list[StreamFrameField] = []
         for r in range(self.frame_table.rowCount()):
-            name = self.frame_table.item(r, 0).text()
+            name = self._frame_name(r)
             if name:
-                fields.append(
-                    {"name": name, "type": self.frame_table.cellWidget(r, 1).currentData()}
-                )
-        data["frame"] = {
-            "stream_id": self.id_spin.value(),
-            "endianness": "little",
-            "packed": True,
-            "fields": fields,
-        }
+                type_combo = _as_widget(self.frame_table.cellWidget(r, 1), QtWidgets.QComboBox)
+                fields.append({"name": name, "type": type_combo.currentData()})
 
         # Signals (Flat Structure)
-        signals = {}
+        signals: SignalsConfig = {}
         root = self.sig_tree.invisibleRootItem()
+        assert root is not None
         for i in range(root.childCount()):
             item = root.child(i)
+            assert item is not None
 
             label = item.text(0)
-            fld = self.sig_tree.itemWidget(item, 1).currentText()
-            col = self.sig_tree.itemWidget(item, 2).text()
-            vis = self.sig_tree.itemWidget(item, 3).findChild(QtWidgets.QCheckBox).isChecked()
-            style = self.sig_tree.itemWidget(item, 4).currentText()
+            fld = _as_widget(self.sig_tree.itemWidget(item, 1), QtWidgets.QComboBox).currentText()
+            col = _as_widget(self.sig_tree.itemWidget(item, 2), ColorButton).text()
+            vis_box = _as_widget(self.sig_tree.itemWidget(item, 3), QtWidgets.QWidget)
+            vis = _as_widget(vis_box.findChild(QtWidgets.QCheckBox), QtWidgets.QCheckBox)
+            style = _as_widget(self.sig_tree.itemWidget(item, 4), QtWidgets.QComboBox).currentText()
 
             skey = fld if fld else re.sub(r"[^a-zA-Z0-9]", "", label)
 
@@ -216,11 +218,21 @@ class StreamEditor(QtWidgets.QWidget):
                 "label": label,
                 "field": fld,
                 "color": col,
-                "visible": vis,
+                "visible": vis.isChecked(),
                 "line": {"style": style, "width": 2},
             }
 
-        data["signals"] = signals
+        data: StreamConfig = {
+            "name": self.name_edit.text(),
+            "panel_type": self.panel_combo.currentText(),
+            "frame": {
+                "stream_id": self.id_spin.value(),
+                "endianness": "little",
+                "packed": True,
+                "fields": fields,
+            },
+            "signals": signals,
+        }
         return self.key_edit.text(), data
 
     # --- Helpers ---
@@ -238,11 +250,15 @@ class StreamEditor(QtWidgets.QWidget):
         if t.currentRow() >= 0:
             t.removeRow(t.currentRow())
 
+    def _frame_name(self, row: int) -> str:
+        item = self.frame_table.item(row, 0)
+        return item.text() if item is not None else ""
+
     def get_fields(self) -> list[str]:
         return [
-            self.frame_table.item(r, 0).text().strip()
+            self._frame_name(r).strip()
             for r in range(self.frame_table.rowCount())
-            if self.frame_table.item(r, 0).text().strip()
+            if self._frame_name(r).strip()
         ]
 
     def add_signal_item(self) -> None:

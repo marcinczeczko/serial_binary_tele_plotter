@@ -110,7 +110,10 @@ class ConfiguratorTab(QtWidgets.QWidget):
     def on_stream_selected(self, row: int) -> None:
         if row < 0:
             return
-        key = self.stream_list.item(row).text()
+        item = self.stream_list.item(row)
+        if item is None:
+            return
+        key = item.text()
         if key in self.data:
             self.editor.load_data(key, self.data[key])
 
@@ -131,20 +134,22 @@ class ConfiguratorTab(QtWidgets.QWidget):
 
     def delete_stream(self) -> None:
         r = self.stream_list.currentRow()
-        if r < 0:
+        item = self.stream_list.item(r)
+        if item is None:
             return
-        del self.data[self.stream_list.item(r).text()]
+        del self.data[item.text()]
         self.stream_list.takeItem(r)
 
     def save_current(self) -> None:
-        if self.stream_list.currentRow() < 0:
+        current = self.stream_list.currentItem()
+        if current is None:
             return
-        old_k = self.stream_list.currentItem().text()
+        old_k = current.text()
         new_k, content = self.editor.get_data()
         if old_k != new_k:
             if old_k in self.data:
                 del self.data[old_k]
-            self.stream_list.currentItem().setText(new_k)
+            current.setText(new_k)
         self.data[new_k] = content
 
     def save_to_file(self) -> None:

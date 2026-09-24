@@ -1,7 +1,7 @@
 """
 Application Entry Point.
 
-This script serves as the bootstrap for the DiffBot Telemetry Viewer.
+This script serves as the bootstrap for the Serial Binary Plotter.
 It initializes the Qt Application context, applies the global visual theme,
 sets up signal handling for graceful termination (e.g., via Ctrl+C), and
 launches the main window.

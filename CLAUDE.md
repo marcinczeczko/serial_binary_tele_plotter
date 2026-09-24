@@ -28,15 +28,25 @@ Always go through `uv`. Never run bare `python`/`pytest`.
 ```bash
 uv sync                               # install runtime + dev deps into .venv (Python 3.14)
 uv run python main.py                 # run the app (CWD must be the repo root, see C10)
-uv run pytest                         # tests (needs libEGL for pytest-qt)
-uv run pytest -p no:pytest-qt         # tests on headless machines without libEGL
+uv run pytest                         # all tests; `qt` ones use real Qt (offscreen)
+uv run pytest -p no:pytest-qt         # when Qt can't load (no libEGL): `qt` tests skip
 uv run ruff check . && uv run ruff format --check .
-uv run mypy core ui main.py           # strict; currently 40 known errors (roadmap R0.5)
+uv run mypy .                         # strict for app code and tools; must exit 0
+uv run python tools/bench_pipeline.py # parser/storage benchmark (C1 guard, snapshot cost)
 ```
 
-Headless containers (e.g. Claude Code on the web) have no display and no `libEGL.so.1`.
-Qt GUI imports fail there, so use `-p no:pytest-qt` and `QT_QPA_PLATFORM=offscreen`. The
-existing tests stub PyQt6 and pyqtgraph in `tests/conftest.py`, so they run anyway.
+CI (`.github/workflows/ci.yml`) runs exactly these on every PR. Keep them green.
+
+Headless containers (e.g. Claude Code on the web) may lack `libEGL.so.1`. Either install
+`libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 libglib2.0-0t64` with apt (what CI
+does), or run with `-p no:pytest-qt`. `tests/conftest.py` defaults `QT_QPA_PLATFORM` to
+`offscreen`.
+
+Tests come in two kinds. `qt`-marked tests (`tests/test_qt_integration.py`) use real Qt via
+`qtbot`. Older tests use the hand-written PyQt6/pyqtgraph stub (`pyqt_stub` fixture), which
+only activates when real PyQt6 isn't already imported. Write new Qt-facing tests as `qt`
+tests. Known bugs are pinned with `xfail(strict=True, reason="<finding ID> …")`. When you
+fix one, remove its xfail.
 
 ## Layout
 
@@ -52,7 +62,9 @@ ui/main_window.py       composition, thread setup, signal wiring
 ui/charts/              TelemetryPlot (pyqtgraph)
 ui/panels/              connection, stream select, PID, IMU, timing, signal visibility
 ui/config/              in-app streams.json editor
-tests/                  pytest; Qt stubbed via conftest.pyqt_stub fixture
+tests/                  pytest: pure logic, stubbed-Qt legacy tests, `qt`-marked real-Qt tests
+tools/                  dev scripts (bench_pipeline.py)
+.github/workflows/      CI
 docs/                   records (see "Start here")
 ```
 
@@ -79,16 +91,14 @@ Changing any of this is a firmware-visible change. Call it out explicitly.
   `streams.json` and the config model, not in Python constants.
 - **No silent failures in the data path.** Anything dropped (CRC, size mismatch, unknown
   ID, buffer trim) must be counted and reported (C13, R1.4).
-- **Performance claims need numbers.** Use `tools/bench_pipeline.py` (added in R0.2;
-  until then, the script in the review's Appendix A) before and after. Record the numbers
-  in `docs/project-log.md`.
+- **Performance claims need numbers.** Run `tools/bench_pipeline.py` before and after.
+  Record the numbers in `docs/project-log.md`.
 
 ## Conventions
 
 - Python 3.14, `from __future__ import annotations`, full type hints, `ruff` (line length
   100; rules E, F, I, B, UP), mypy strict.
-- English only in code, comments and UI strings. Some Polish remains; translate it when
-  you touch it.
+- English only in code, comments and UI strings.
 - Docstrings describe *why* and contracts. Don't narrate the code.
 - Tests go next to the matching area in `tests/test_<area>_*.py`. For every
   parser/storage bug fix, first add a test that reproduces the bug.

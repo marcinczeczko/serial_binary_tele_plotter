@@ -18,31 +18,31 @@ How to use this file:
 
 These let every later change be checked and measured.
 
-- [ ] **R0.1 Real parser tests** (T2, C1)
+- [x] **R0.1 Real parser tests** (T2, C1)
   Property-style tests for `ProtocolHandler`: random chunk sizes (1 B … 16 KiB), random
   garbage between frames, corrupted header/payload CRC, frames split across the magic
   bytes, max-length (255 B) payloads, several stream IDs interleaved.
   *Done when:* the test for chunks over 4 KiB **fails on current code** (reproduces C1)
   and is marked `xfail(strict=True)` until R1.1 lands.
-- [ ] **R0.2 Pipeline benchmark in repo** (P2, P6)
+- [x] **R0.2 Pipeline benchmark in repo** (P2, P6)
   Move the review's Appendix A script to `tools/bench_pipeline.py`. Print parse
   throughput, snapshot cost for 2k/20k/100k × N signals, and bytes allocated per tick.
   *Done when:* `uv run python tools/bench_pipeline.py` runs in under 10 s and the baseline
   numbers are recorded in the project log.
-- [ ] **R0.3 Real-Qt test lane** (T2)
+- [x] **R0.3 Real-Qt test lane** (T2)
   Add a `qt` marker. Tests using real Qt run under `pytest-qt` with
   `QT_QPA_PLATFORM=offscreen`. Pure-logic tests keep running without Qt. Document
   `-p no:pytest-qt` for machines without `libEGL`.
   *Done when:* one real `QThread` + queued-signal engine test passes in CI.
-- [ ] **R0.4 CI** (T3)
+- [ ] **R0.4 CI** (T3). Workflow added; tick once it's green on `main`
   GitHub Actions on ubuntu: `uv sync`, `ruff check`, `ruff format --check`, `mypy`,
   `pytest` (with `libegl1 libxkbcommon0 libfontconfig1 libdbus-1-3` installed).
   *Done when:* CI is green on `main`.
-- [ ] **R0.5 mypy honesty** (T1)
+- [x] **R0.5 mypy honesty** (T1)
   Fix the 40 app-code errors. Most are PyQt6 `| None` returns and `CollapsableSection.layout`
   shadowing `QWidget.layout()`. Put tests under a relaxed `[mypy-tests.*]` section.
   *Done when:* `uv run mypy .` exits 0.
-- [ ] **R0.6 Hygiene** (T4, T5)
+- [x] **R0.6 Hygiene** (T4, T5)
   Remove `streams.json.bak` from git and add `*.bak` to `.gitignore`. Translate the Polish
   comments and launch names. Drop "DiffBot" from generic strings (window title,
   `pyproject` description).

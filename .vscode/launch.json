@@ -2,7 +2,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Uruchom Robot Station (Main)",
+            "name": "Run Serial Binary Plotter (main.py)",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
@@ -14,7 +14,7 @@
             "justMyCode": true
         },
         {
-            "name": "Debuguj Aktualny Plik",
+            "name": "Debug Current File",
             "type": "debugpy",
             "request": "launch",
             "program": "${file}",

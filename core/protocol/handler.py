@@ -158,9 +158,7 @@ class ProtocolHandler:
             elif TRACE_DECODE:
                 logger.debug("[RX][CRC] Payload CRC check failed")
 
-    def _decode_payload(
-        self, p_type: int, payload: bytes
-    ) -> dict[str, int | float] | None:
+    def _decode_payload(self, p_type: int, payload: bytes) -> dict[str, int | float] | None:
         """
         Decodes payload ONLY if p_type matches the active stream configuration.
         """

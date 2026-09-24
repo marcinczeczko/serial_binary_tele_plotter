@@ -1,7 +1,32 @@
+"""
+Shared test configuration.
+
+Two kinds of tests live here:
+- `qt`-marked tests run against real Qt through pytest-qt. The offscreen platform is used by
+  default, so no window is shown and no display is needed.
+- Everything else is Qt-free or uses the hand-written PyQt6/pyqtgraph stub below (the
+  `pyqt_stub` fixture). The stub is only installed when real PyQt6 hasn't been imported.
+
+On machines where Qt can't load (e.g. no libEGL), run `uv run pytest -p no:pytest-qt`: the
+`qt` tests are then skipped and the rest run against the stub.
+"""
+
+import os
 import sys
 from types import ModuleType
 
 import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if config.pluginmanager.has_plugin("pytest-qt"):
+        return
+    skip_qt = pytest.mark.skip(reason="pytest-qt disabled or Qt unavailable")
+    for item in items:
+        if "qt" in item.keywords:
+            item.add_marker(skip_qt)
 
 
 class _DummySignal:

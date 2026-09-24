@@ -92,3 +92,5 @@ docs/_build/
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+# --- Editor/config backups ---
+*.bak

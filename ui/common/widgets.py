@@ -85,23 +85,23 @@ class YAxisControlWidget(QtWidgets.QWidget):
         layout.setContentsMargins(5, 2, 5, 2)
         layout.setSpacing(10)
 
-        # Checkbox widoczności
+        # Visibility checkbox
         self.enable_checkbox = QtWidgets.QCheckBox()
         self.enable_checkbox.setChecked(checked)
 
-        # Ikona koloru (mały kwadrat)
+        # Color swatch (small square)
         self.color_icon = QtWidgets.QFrame()
         self.color_icon.setFixedSize(12, 12)
         self.color_icon.setStyleSheet(f"background-color: {color}; border-radius: 2px;")
 
-        # Nazwa sygnału
+        # Signal name
         self.name_label = QtWidgets.QLabel(label)
         self.name_label.setStyleSheet("font-weight: bold; color: #ddd;")
 
         layout.addWidget(self.enable_checkbox)
         layout.addWidget(self.color_icon)
         layout.addWidget(self.name_label)
-        layout.addStretch()  # Wszystko do lewej
+        layout.addStretch()  # keep everything left-aligned
 
 
 class CollapsableSection(QtWidgets.QWidget):
@@ -110,27 +110,28 @@ class CollapsableSection(QtWidgets.QWidget):
 
         self.content = content
 
-        self.layout = QtWidgets.QVBoxLayout(self)
-        self.layout.setContentsMargins(0, 0, 0, 0)
-        self.layout.setSpacing(0)
+        self._layout = QtWidgets.QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(0)
 
-        self.header = QtWidgets.QToolButton(text=title)
+        self.header = QtWidgets.QToolButton()
+        self.header.setText(title)
         self.header.setCheckable(True)
         self.header.setChecked(False)
         self.header.setArrowType(QtCore.Qt.ArrowType.RightArrow)
         self.header.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.header.clicked.connect(self.toggle)
 
-        self.layout.addWidget(self.header)
+        self._layout.addWidget(self.header)
 
     def toggle(self) -> None:
         expanded = self.header.isChecked()
 
         if expanded:
-            self.layout.addWidget(self.content)
+            self._layout.addWidget(self.content)
             self.header.setArrowType(QtCore.Qt.ArrowType.DownArrow)
         else:
-            self.layout.removeWidget(self.content)
+            self._layout.removeWidget(self.content)
             self.content.setParent(None)
             self.header.setArrowType(QtCore.Qt.ArrowType.RightArrow)
 

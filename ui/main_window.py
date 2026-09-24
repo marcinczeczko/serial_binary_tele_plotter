@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 class MainWindow(QtWidgets.QMainWindow):
     """
-    The main window of the DiffBot Telemetry Viewer.
+    The main window of the Serial Binary Plotter.
 
     This class serves as the central hub of the application. Its responsibilities include:
     1. **Composition**: Instantiating the UI components (ControlPanel, PlotArea).
@@ -45,11 +45,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.active_baud: int = 115200
 
         # --- Window Setup ---
-        self.setWindowTitle("DiffBot Telemetry Viewer (Pro)")
+        self.setWindowTitle("Serial Binary Plotter")
         self.resize(1280, 800)
 
         # --- MAIN LAYOUT (TABS) ---
-        # Zamiast ustawiać splitter jako główne okno, tworzymy zakładki
+        # Top-level tabs: dashboard (panel + plot) and configuration editor
         self.tabs = QtWidgets.QTabWidget()
         self.setCentralWidget(self.tabs)
 
@@ -58,7 +58,7 @@ class MainWindow(QtWidgets.QMainWindow):
         dashboard_layout = QtWidgets.QVBoxLayout(self.dashboard_widget)
         dashboard_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Splitter (Panel + Wykres)
+        # Splitter (control panel + plot)
         self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
 
         # Instantiate the main view components
@@ -69,10 +69,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.splitter.addWidget(self.plot)
         self.splitter.setSizes([350, 930])
 
-        # Dodajemy splitter do layoutu zakładki
+        # Put the splitter into the dashboard tab
         dashboard_layout.addWidget(self.splitter)
 
-        # Dodajemy zakładkę do głównego widgetu
+        # Register the dashboard tab
         self.tabs.addTab(self.dashboard_widget, "📊 Dashboard")
 
         # ================= TAB 2: CONFIGURATION =================
@@ -277,7 +277,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._disconnect_data_ready()
         self.engine.data_ready.connect(self.plot.on_data_ready)
 
-    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+    def closeEvent(self, event: QtGui.QCloseEvent | None) -> None:
         """
         Handles the application close event to ensure clean thread termination.
         """
@@ -295,4 +295,5 @@ class MainWindow(QtWidgets.QMainWindow):
             self.engine_thread.terminate()
             self.engine_thread.wait()
 
-        event.accept()
+        if event is not None:
+            event.accept()
