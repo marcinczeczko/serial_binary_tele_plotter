@@ -2,7 +2,7 @@
 Stream Editor Module.
 
 Edits one stream definition. The editor is lossless (C4): it only overwrites the keys it
-shows (name, panel type, stream ID, endianness, time base, field names and types, signal
+shows (name, control panel, stream ID, endianness, time base, field names and types, signal
 label, field, color, visibility, line style and width, lane). Every other key in the stream,
 frame, time, field, signal or line object is carried through unchanged, in its original
 order. A time key is written only if it was in the file or its value differs from the
@@ -19,7 +19,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 # Core Imports
 from core.acquisition.timebase import DEFAULT_SCALE_S
-from core.config import ENDIANNESS, PANEL_TYPES
+from core.config import ENDIANNESS
 from core.protocol.constants import LOOP_CNTR_NAME, STRUCT_TYPE_MAP
 from core.types import StreamConfig, StreamFrameField
 
@@ -137,8 +137,8 @@ class StreamEditor(QtWidgets.QWidget):
         self.name_edit = QtWidgets.QLineEdit()
         self.id_spin = QtWidgets.QSpinBox()
         self.id_spin.setRange(0, 255)
-        self.panel_combo = QtWidgets.QComboBox()
-        self.panel_combo.addItems(PANEL_TYPES)
+        self.panel_combo = QtWidgets.QComboBox()  # the stream's `controls` panel (R5.2)
+        self.set_panel_choices([])
         self.endian_combo = QtWidgets.QComboBox()
         self.endian_combo.addItems(ENDIANNESS)
 
@@ -146,7 +146,7 @@ class StreamEditor(QtWidgets.QWidget):
         form.addRow("Display Name:", self.name_edit)
         form.addRow("Stream ID:", self.id_spin)
         form.addRow("Endianness:", self.endian_combo)
-        form.addRow("Panel Type:", self.panel_combo)
+        form.addRow("Control Panel:", self.panel_combo)
         layout.addWidget(grp_info)
 
         # --- Time base (R2.5) ---
@@ -237,6 +237,15 @@ class StreamEditor(QtWidgets.QWidget):
         layout.addWidget(self.sig_tree)
         layout.addLayout(btns)
 
+    def set_panel_choices(self, keys: list[str]) -> None:
+        """The document's panels a stream can show (`controls`), plus none."""
+        current = self.panel_combo.currentData()
+        self.panel_combo.clear()
+        self.panel_combo.addItem("(none)", None)
+        for key in keys:
+            self.panel_combo.addItem(key, key)
+        self.panel_combo.setCurrentIndex(max(self.panel_combo.findData(current), 0))
+
     def load_data(self, key: str, data: StreamConfig) -> None:
         self.current_stream_key = key
         self._original = copy.deepcopy(dict(data))
@@ -244,7 +253,12 @@ class StreamEditor(QtWidgets.QWidget):
 
         self.key_edit.setText(key)
         self.name_edit.setText(data.get("name", ""))
-        _select_or_add(self.panel_combo, data.get("panel_type", "none"))
+        controls = data.get("controls")
+        if isinstance(controls, str) and self.panel_combo.findData(controls) < 0:
+            self.panel_combo.addItem(controls, controls)  # an unknown panel is kept as is
+        self.panel_combo.setCurrentIndex(
+            max(self.panel_combo.findData(controls if isinstance(controls, str) else None), 0)
+        )
         _select_or_add(self.endian_combo, frame.get("endianness", "little"))
         self.id_spin.setValue(frame.get("stream_id", 0))
 
@@ -288,7 +302,11 @@ class StreamEditor(QtWidgets.QWidget):
         """Returns (key, stream): the loaded stream with the edited values overlaid."""
         data: dict[str, Any] = copy.deepcopy(self._original)
         data["name"] = self.name_edit.text()
-        data["panel_type"] = self.panel_combo.currentText()
+        controls = self.panel_combo.currentData()
+        if isinstance(controls, str):
+            data["controls"] = controls
+        else:
+            data.pop("controls", None)
 
         frame = data["frame"] if isinstance(data.get("frame"), dict) else {}
         frame["stream_id"] = self.id_spin.value()

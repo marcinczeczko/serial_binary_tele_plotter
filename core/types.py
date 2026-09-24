@@ -86,7 +86,7 @@ class StreamSimConfig(TypedDict, total=False):
 
 class StreamConfig(TypedDict, total=False):
     name: str
-    panel_type: str
+    controls: str  # the key of a panel in the document's `panels` (R5.2)
     frame: StreamFrameConfig
     time: StreamTimeConfig
     sim: StreamSimConfig

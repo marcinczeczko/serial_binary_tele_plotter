@@ -27,13 +27,15 @@ Primary use cases:
   `stream_id`: they're told apart by payload size, and identical layouts are decoded once.
 - Built-in configuration editor — edit frame fields and signal definitions in-app, save to
   `streams.json` without restarting.
-- Optional PID tuning panel: send controller gains to the MCU over the same serial connection.
-  Values may be negative (e.g. a reverse `Rps` setpoint).
-- IMU calibration panel (placeholder: its buttons are disabled until the protocol defines an
-  IMU command packet).
+- **Control panels defined in `streams.json`**: parameters (spin boxes, check boxes) and
+  buttons that send command packets to the MCU over the same serial connection. The bundled
+  PID tuning panel (two motors, signed values) is one such entry, and any other command can
+  be added the same way, without code.
+- The dashboard remembers the port and baud rate, the shown stream, each stream's signal
+  visibility and lane moves, and the panels' values between runs.
 - Device simulator (`VIRTUAL` port). It generates real protocol frames for the shown
   stream, from its definition, so everything downstream is exercised as with hardware.
-  Per-field waveforms and a PID motor model are configurable, and PID gains sent from the
+  Per-field waveforms and a PID motor model are configurable, and PID gains sent from a
   panel change the simulated response.
 - A time axis per stream, from a frame field and the stream's configured period. Counter
   wraps are unwrapped. A device reset starts a new segment, so time never runs backwards.
@@ -125,7 +127,8 @@ CI (`.github/workflows/ci.yml`) runs lint, format check, mypy and the tests on e
 1. Launch the app with `uv run python main.py`.
 2. Select a **stream** from the sidebar (populated from `streams.json`).
 3. Pick a **serial port** and **baud rate**, then click `Connect`. Use `VIRTUAL` for the
-   built-in simulator.
+   built-in simulator. Both are remembered for the next run (a port that's gone isn't
+   selected).
 4. Hover the plot for a readout of every visible signal, per lane, at the cursor time.
    Click `Pause` to enter analysis mode:
    - You can zoom and pan freely, and Auto lanes fit what's in view.
@@ -134,8 +137,11 @@ CI (`.github/workflows/ci.yml`) runs lint, format check, mypy and the tests on e
    - Next to a gap (lost frames), a value reads `n/a` rather than being interpolated
      across the gap.
 5. Toggle individual signal visibility in the **Signals Visibility** panel. The selector at
-   the end of each row moves a signal to another lane ("New lane" adds one) for this
-   session. To keep it, set the Lane column in the Configuration tab.
+   the end of each row moves a signal to another lane ("New lane" adds one).
+   - Visibility and lane moves are remembered per stream (and per config file) between
+     runs, on top of `streams.json`. **View → Reset view to streams.json** forgets them for
+     the shown stream. To change the file itself, use the Visible and Lane columns in the
+     Configuration tab.
    - Signals are drawn in lanes (see `groups` below), and a lane appears while one of its
      signals is visible.
    - Live, time follows the newest data and the mouse zooms or pans a lane's Y. That lane
@@ -146,9 +152,13 @@ CI (`.github/workflows/ci.yml`) runs lint, format check, mypy and the tests on e
    in `streams.json`. Changing it re-times that stream's whole history, for this session
    only; it turns orange while it differs from the file. Set it in the **Configuration**
    tab (Time Base) to keep it. **Samples** sets how much history every stream keeps.
-7. Use the **Configuration** tab to add/edit streams, frame fields, and signal definitions, then
-   save to update `streams.json` on disk.
-8. **Recording** menu:
+7. Use the **Configuration** tab to add/edit streams, frame fields, signal definitions and
+   each stream's **Control Panel**, then save to update `streams.json` on disk (the previous
+   file is kept as `streams.json.bak`). Commands and panels are edited in the file itself.
+8. A stream's **control panel** (e.g. PID Tuning for the `pid` streams) is in the sidebar.
+   Its buttons send commands while connected; the status bar shows what was sent, or why
+   not. Its values are remembered between runs.
+9. **Recording** menu:
    - **Record** (Ctrl+R) saves everything the port delivers, until you stop it or
      disconnect. The file goes to the recordings folder (default `~/telemetry-recordings`),
      named after the shown stream and the time, e.g. `pid_20260924-201530.sbtp`. `● REC` in
@@ -159,13 +169,13 @@ CI (`.github/workflows/ci.yml`) runs lint, format check, mypy and the tests on e
      made with different frame layouts. Choose the **Replay speed**, **Pause replay** or
      **Step replay** (one recorded read at a time) from the same menu. When the file ends,
      the session stops with "Replay finished".
-9. **File → Export shown stream…** writes every signal of the shown stream, hidden ones
+10. **File → Export shown stream…** writes every signal of the shown stream, hidden ones
    too. While paused, that's the time range in view; otherwise the whole buffer. **Export
    all streams…** writes each stream's buffer to its own file (`<name>_<stream>.csv`);
    streams without data are skipped. The time column
    (`time_s`) comes first. A value missing from a frame is an empty CSV field (a Parquet
    null), and gap markers are left out.
-10. **Trigger / Step Response** panel (sidebar):
+11. **Trigger / Step Response** panel (sidebar):
     - Pick the trigger **Signal**, **Edge**, **Level**, and how much to keep **Before** and
       **After** the crossing, then click **Arm** (while connected). At the crossing, the
       capture is frozen in analysis mode with the Δ anchor at the trigger time. Single shot:
@@ -221,20 +231,36 @@ uint8_t crc8(const uint8_t *data, size_t len) {
 }
 ```
 
-The plotter also sends PID configuration packets back to the MCU using the same framing when
-the PID tuning panel is in use.
+Commands sent to the MCU use the same framing, with `TYPE` = the command's `packet_id` and
+a payload laid out by its `fields` (see [Commands and control panels](#commands-and-control-panels)).
+The bundled PID panel sends `0x10` (`motor_id: u8`, then `kp ki k1 k2 k3 k_aw alpha rps: f32`,
+`use_ramp use_pi: u8`, 35 B) and `0x11` (those ten gains for the left motor, then the right,
+68 B).
 
 ## Configuration: `streams.json`
 
 `streams.json` is the single source of truth for all stream definitions. Edit it directly or
-use the in-app **Configuration** tab.
+use the in-app **Configuration** tab. The document has four top-level keys:
+
+| Key | Description |
+|-----|-------------|
+| `schema_version` | The file format version, currently `2` |
+| `commands` | Optional: command packets the app can send (see [Commands and control panels](#commands-and-control-panels)) |
+| `panels` | Optional: control panels that send those commands |
+| `streams` | The telemetry streams, by key |
+
+A file without `schema_version` is version 1 (before panels were configurable). It's read
+as version 2: a stream's `panel_type: "pid"` becomes `controls: "diffbot_pid"`, with the
+PID commands and panel added, and `"imu"` (which sent nothing) is dropped. The status bar
+says so, and the file changes only when you save it from the Configuration tab. A file with
+a newer version than the app knows is refused.
 
 Each stream entry:
 
 | Key | Description |
 |-----|-------------|
 | `name` | Display name shown in the sidebar |
-| `panel_type` | Control panel to show alongside the plot: `none`, `pid`, or `imu` |
+| `controls` | Optional: the key of a panel in `panels` to show in the sidebar for this stream |
 | `frame.stream_id` | Packet type byte — must match the `TYPE` field sent by the MCU |
 | `frame.endianness` | `"little"` or `"big"` — must match the MCU's byte order |
 | `frame.fields` | Ordered list of `{name, type}` matching the C struct field order |
@@ -267,8 +293,10 @@ frames, and by default it's also the X axis. It should be a `u32` and the first 
   - a signal whose `field` isn't in the frame
   - a `time.field` that isn't in the frame, or a `time.scale_s`/`time.step` that isn't a
     positive number
+- Commands and panels are checked too. One with errors is left out (and a panel that uses
+  it), never the telemetry. See [Commands and control panels](#commands-and-control-panels).
 - Warnings don't block loading. They cover:
-  - an unknown `panel_type`
+  - a `controls` panel that doesn't exist or has errors
   - a `loop_cntr` that isn't `u32` or isn't first
   - a `time.field` other than `loop_cntr` without a `time.step`
   - unknown `time` keys
@@ -289,9 +317,9 @@ and link statistics all work as they do with hardware. What each field carries:
   - `wave`: `sine`, `step` (a square wave), `noise`, `const` or `counter`
   - parameters: `amp`, `freq_hz`, `offset`, `phase_deg`, `noise` (standard deviation)
 - `"model": "pid_motor"` fills `left_*`/`right_*` PID fields from a simulated
-  feedforward + PI loop on a DC motor. PID gains sent from the panel change it: `Kp`,
-  `Ki`, `Kaw`, `Alpha` (measurement filter), `Rps` (target amplitude), `useRamp` and
-  `usePI`. `K1` is the feedforward gain and `K2` the friction offset; `K3` is ignored.
+  feedforward + PI loop on a DC motor. PID gains sent from a panel change it: `kp`,
+  `ki`, `k_aw`, `alpha` (measurement filter), `rps` (target amplitude), `use_ramp` and
+  `use_pi`. `k1` is the feedforward gain and `k2` the friction offset; `k3` is ignored.
 - Any other field gets a default sine, distinct per field.
 
 ```json
@@ -305,6 +333,62 @@ and link statistics all work as they do with hardware. What each field carries:
 
 Problems in `sim` are only warnings: they affect `VIRTUAL`, never real data.
 
+### Commands and control panels
+
+A **command** is a packet the app sends: an ID and a packed payload, laid out like a frame.
+A **panel** is a grid of parameters with buttons that send commands. A stream shows a panel
+with `"controls": "<panel key>"`.
+
+```json
+"commands": {
+  "set_speed": {
+    "label": "Speed setpoint",
+    "packet_id": 32,
+    "endianness": "little",
+    "fields": [
+      {"name": "motor_id", "type": "u8"},
+      {"name": "rps", "type": "f32", "param": "rps"},
+      {"name": "ramp", "type": "u8", "param": "ramp"},
+      {"name": "version", "type": "u8", "value": 1}
+    ]
+  },
+  "zero_gyro": {"label": "Zero gyroscope", "packet_id": 33, "fields": []}
+},
+"panels": {
+  "drive": {
+    "title": "Drive",
+    "columns": ["Left", "Right"],
+    "parameters": {
+      "rps": {"label": "Speed [rps]", "kind": "float", "default": 0.5,
+              "min": -20, "max": 20, "step": 0.1, "decimals": 2},
+      "ramp": {"label": "Ramp", "kind": "bool", "default": true}
+    },
+    "buttons": [
+      {"label": "Send left", "command": "set_speed", "column": "Left", "values": {"motor_id": 0}},
+      {"label": "Send right", "command": "set_speed", "column": "Right", "values": {"motor_id": 1}}
+    ]
+  },
+  "imu": {"title": "IMU", "buttons": [{"label": "Zero gyroscope", "command": "zero_gyro"}]}
+}
+```
+
+- **Command fields** are `{name, type}` like frame fields (payload ≤ 255 B, `LEN` may be
+  0). A field's value comes from, in this order: the pressed button's `values`; the
+  field's constant `value`; the panel parameter named by `param`, from the field's
+  `column` or else the button's.
+- **Parameters** have a `kind`: `float` (spin box with `decimals` and `step`), `int` or
+  `bool` (check box, sent as 1/0), with `default`, `min` and `max` (defaults ±1000).
+- **Columns** are optional. With them, each parameter has one value per column, and a
+  button placed in a column sits under it and sends that column's values. A button with no
+  column spans the panel; its command's fields then name their `column` (like the bundled
+  `pid_both`, which sends both motors in one packet).
+- A value that doesn't fit its field (300 in a `u8`, 1.5 in an integer) is refused with a
+  message, never truncated or wrapped.
+- Errors (unknown command, a field that gets no value, a bad type or ID) leave that command
+  or panel out; the telemetry still loads. On `VIRTUAL`, the simulator decodes commands with
+  these layouts, and the PID motor model applies any fields named like its gains (`kp`,
+  `ki`, …, `use_pi`), for the motor in `motor_id` or with `left_`/`right_` prefixes.
+
 **Supported field types:** `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`, `f32`, `f64`
 
 **Line styles:** `solid`, `dashed`, `dotted`
@@ -315,10 +399,10 @@ Example — a minimal stream definition:
 
 ```json
 {
+  "schema_version": 2,
   "streams": {
     "my_sensor": {
       "name": "Sensor Data",
-      "panel_type": "none",
       "frame": {
         "stream_id": 1,
         "endianness": "little",
@@ -365,9 +449,10 @@ serial_binary_tele_plotter/
 ├── styles.py                  # Global dark theme
 ├── core/                      # protocol/, transport/, simulation/ are Qt-free
 │   ├── types.py               # Shared TypedDicts and Enums
-│   ├── config.py              # streams.json validation and loader
+│   ├── config/                # streams.json: document (load, migrate, validate, save),
+│   │                          #   streams, controls (commands, panels), schema migrations
 │   ├── protocol/              # Wire format: CRC-8, FrameParser, RecordDecoder (numpy),
-│   │                          #   StreamRouter (multi-stream), stats, command encoding
+│   │                          #   StreamRouter (multi-stream), stats, commands (encoding)
 │   ├── transport/             # Transport interface, SerialTransport, SimTransport,
 │   │                          #   ReplayTransport, ReaderThread
 │   ├── simulation/            # Frame synthesis from `sim` config, PID motor model
@@ -381,9 +466,11 @@ serial_binary_tele_plotter/
 ├── ui/
 │   ├── main_window.py         # Composition, engine thread, signal wiring, menus
 │   ├── app_settings.py        # QSettings keys (config path, recording options)
+│   ├── ui_state.py            # Remembered port, stream, view overrides, panel values
 │   ├── charts/                # TelemetryPlot (lanes), LiveFeed (pulls the store's overview),
 │   │                          #   TriggerController, lanes/series (Qt-free logic)
-│   ├── panels/                # Connection, PID, IMU, signals, time window, trigger panels
+│   ├── panels/                # Connection, generated control panels, signals, time window,
+│   │                          #   trigger panels
 │   └── config/                # Stream configuration editor tab
 ├── tests/                     # pytest; `qt`-marked tests use real Qt
 ├── tools/                     # bench_pipeline.py (parser/storage), bench_render.py (GUI FPS)

@@ -58,11 +58,12 @@ fix one, remove its xfail.
 ```
 main.py                 QApplication bootstrap, SIGINT handling
 styles.py               global dark theme (QSS)
-streams.json            stream/frame/signal definitions (single source of truth)
+streams.json            schema 2: streams, commands, panels (single source of truth; ADR-0007)
 core/types.py           TypedDict config shapes, PlotMode, EngineState
-core/config.py          validate_config (single source of truth) + StreamConfigLoader
+core/config/            document (load -> migrate -> validate -> save, StreamConfigLoader), streams (stream
+                        validation), controls (CommandDef/PanelDef parsing), migrate (schema versions)
 core/protocol/          wire format: constants, crc (CRC-8), frame_parser (sync/CRC, all IDs), record_decoder (numpy dtype),
-                        router (multi-stream dispatch), handler (single-stream API + command encoding), stats
+                        router (multi-stream dispatch), handler (single-stream API), commands (encode/decode), stats
 core/transport/         Transport protocol, SerialTransport, SimTransport (the VIRTUAL port), ReplayTransport
                         (plays an .sbtp file), ReaderThread (no Qt)
 core/recording/         .sbtp raw recordings (ADR-0006): RecordingWriter/Reader; no Qt
@@ -73,10 +74,12 @@ core/acquisition/       engine (QThread controller), storage (SampleStore, Strea
                         detail for live frames, summarised lazily on read)
 ui/main_window.py       composition, thread setup, signal wiring, File/Recording menus
 ui/app_settings.py      QSettings keys (config path, recording options)
+ui/ui_state.py          remembered port, stream, view overrides and panel values (per config file)
 ui/charts/              TelemetryPlot (lanes = signals[*].group, per-lane Y modes, cursor/Δ), LiveFeed (pulls the
                         store's overview), lanes.py + series.py (Qt-free layout, range, decimation, readout),
                         trigger_controller (arms on the shown store, emits captures)
-ui/panels/              connection, stream select, PID, IMU, timing, signal visibility, trigger/step response
+ui/panels/              connection, stream select, command_panel (generated from `panels`), timing, signal
+                        visibility, trigger/step response
 ui/config/              in-app streams.json editor
 tests/                  pytest: pure logic, stubbed-Qt legacy tests, `qt`-marked real-Qt tests
 tools/                  dev scripts (bench_pipeline.py)
@@ -90,9 +93,10 @@ docs/                   records (see "Start here")
 CRC-8 uses poly 0x07 and init 0x00. The payload is the packed struct of `frame.fields`,
 in order, with the configured endianness. `LEN` ≤ 255. A stream's X axis is its
 `time.field` (default `loop_cntr`), unwrapped, times `time.scale_s` (ADR-0003). The MCU's
-loop period is config, not a UI knob. Host → MCU PID commands use IDs `0x10` (single motor) and
-`0x11` (both), with layouts in `core/protocol/constants.py` (the simulator parses them too).
-Changing any of this is a firmware-visible change. Call it out explicitly. `.sbtp` recordings
+loop period is config, not a UI knob. Host → MCU commands are framed the same way; their IDs and
+layouts are `commands` in `streams.json` (ADR-0007), encoded by `core/protocol/commands.py` and
+decoded by the simulator. The bundled PID panel sends `0x10` (single motor) and `0x11` (both);
+a test pins them byte-for-byte. Changing any of this is a firmware-visible change. Call it out explicitly. `.sbtp` recordings
 hold these bytes verbatim (ADR-0006), so a wire change also affects replaying old recordings.
 
 ## Architecture rules
@@ -120,7 +124,10 @@ hold these bytes verbatim (ADR-0006), so a wire change also affects replaying ol
 - **The protocol and decoding layers (`core/protocol`) must not import Qt.** Keep them
   pure and unit-testable.
 - **Config-driven over hard-coded.** New stream or command shapes belong in
-  `streams.json` and the config model, not in Python constants.
+  `streams.json` and the config model, not in Python constants. A command's panel is a
+  `panels` entry; the GUI encodes a press and hands the engine a finished packet
+  (`send_packet(bytes)`). A change to the file format needs a `schema_version` bump, a
+  step in `core/config/migrate.py` and a test that the previous version still loads.
 - **No silent failures in the data path.** Anything dropped (CRC, size mismatch, unknown
   ID, buffer trim) must be counted and reported (C13, R1.4).
 - **Performance claims need numbers.** Run `tools/bench_pipeline.py` before and after.

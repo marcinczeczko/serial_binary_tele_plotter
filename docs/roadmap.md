@@ -235,15 +235,27 @@ PRs that each keep the app working. Measure with `tools/bench_pipeline.py` befor
 
 ## Phase 5: generic commands and config model (A5, C8)
 
-- [ ] **R5.1 Typed config model**: dataclasses (or pydantic) with `schema_version`,
+- [x] **R5.1 Typed config model**: dataclasses (or pydantic) with `schema_version`,
   `load/validate/save`, and migration from the current format. The editor binds to the
   model, not to raw dicts.
-- [ ] **R5.2 Command definitions in config**: `commands: {name, packet_id, fields[], ui:
+  *Done (ADR-0007): `core/config` package with load → migrate → validate → save
+  (`save_document`: validated, `.bak`, atomic write) and `schema_version: 2`. Version 1
+  files are migrated in memory. Scope change: streams stay plain JSON objects
+  (`StreamConfig`), because the editor round-trips them losslessly (C4). Commands and
+  panels are the dataclasses, and the editor saves through the document model.*
+- [x] **R5.2 Command definitions in config**: `commands: {name, packet_id, fields[], ui:
   {min,max,step,decimals,default}}`. A generic parameter panel is generated from them,
   and a generic encoder reuses the frame dtype code. The DiffBot PID panel becomes one
   config entry. The 20-argument signals are removed.
-- [ ] **R5.3 Persist UI state**: last port, baud, stream, lane layout, visibility and PID
+  *Done, with the UI split out: `commands` hold the packet layout (field values from a
+  constant, a button or a panel parameter), and `panels` hold parameters by column plus
+  buttons. A stream picks one with `controls`. Packets are byte-identical to the old
+  hard-coded ones. The engine takes finished packets (`send_packet(bytes)`). The IMU
+  placeholder is gone: it's a config entry now if firmware defines the packet.*
+- [x] **R5.3 Persist UI state**: last port, baud, stream, lane layout, visibility and PID
   values via `QSettings` or per-config sidecar.
+  *Done: `QSettings`, per config file. Visibility and lanes are overrides on top of
+  streams.json, and View → "Reset view to streams.json" forgets them.*
 
 ---
 

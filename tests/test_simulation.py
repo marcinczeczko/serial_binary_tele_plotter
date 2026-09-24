@@ -11,8 +11,8 @@ import numpy as np
 import pytest
 
 from core.config import StreamConfigLoader, validate_stream
+from core.protocol.commands import CommandDef, encode_command
 from core.protocol.frame_parser import FrameParser
-from core.protocol.handler import ProtocolHandler
 from core.protocol.router import StreamRouter
 from core.simulation.synth import FrameSynth, Wave
 from core.transport import SimTransport, TransportError
@@ -141,38 +141,58 @@ def test_pid_model_tracks_the_target_within_limits() -> None:
     assert records["left_target_setpoint"][900] == pytest.approx(-0.3)  # 4.5 s: reverse
 
 
+def _commands() -> dict[str, CommandDef]:
+    """The bundled streams.json commands (R5.2): pid_single (0x10) and pid_both (0x11)."""
+    return StreamConfigLoader(REPO_STREAMS).commands
+
+
+def _gains(*values: float, prefix: str = "") -> dict[str, float]:
+    """use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps (the old argument order)."""
+    names = ("use_ramp", "use_pi", "kp", "ki", "k1", "k2", "k3", "k_aw", "alpha", "rps")
+    return {prefix + n: v for n, v in zip(names, values, strict=True)}
+
+
+def _pid_single(motor_id: int, *gains: float) -> bytes:
+    return encode_command(_commands()["pid_single"], {"motor_id": motor_id, **_gains(*gains)})
+
+
 def test_pid_commands_change_the_simulated_response() -> None:
     stream = _pid_stream()
     synth = FrameSynth(stream, seed=1)
-    handler = ProtocolHandler()
-    left_only = handler.create_pid_packet(0, 0, 0, 1.0, 1.0, 26.5, 8.0, 0.0, 1.0, 0.5, 1.2)
-    both = handler.create_pid_packet_all_motors(
-        *(1, 1, 2.0, 3.0, 26.5, 8.0, 0.0, 1.0, 0.5, 0.8),
-        *(1, 1, 2.0, 3.0, 26.5, 8.0, 0, 1, 0.5, 0.9),
+    commands = tuple(_commands().values())
+    left_only = _pid_single(0, 0, 0, 1.0, 1.0, 26.5, 8.0, 0.0, 1.0, 0.5, 1.2)
+    both = encode_command(
+        _commands()["pid_both"],
+        {
+            **_gains(1, 1, 2.0, 3.0, 26.5, 8.0, 0.0, 1.0, 0.5, 0.8, prefix="left_"),
+            **_gains(1, 1, 2.0, 3.0, 26.5, 8.0, 0, 1, 0.5, 0.9, prefix="right_"),
+        },
     )
     parser = FrameParser()
 
     for packet_id, payload in parser.feed(left_only):
-        assert synth.apply_command(packet_id, payload)
+        assert synth.apply_command(packet_id, payload, commands)
     records, _ = _decode({"pid": stream}, "pid", synth.frames(0, 100))
     assert (records["left_u_pi"] == 0).all()  # use_pi = 0
     assert records["left_target_setpoint"][50] == pytest.approx(1.2)
     assert records["right_target_setpoint"][50] == pytest.approx(0.3 * 1.05)  # untouched
 
     for packet_id, payload in parser.feed(both):
-        assert synth.apply_command(packet_id, payload)
+        assert synth.apply_command(packet_id, payload, commands)
     assert synth.model is not None
     assert synth.model.gains("left").rps == pytest.approx(0.8)
     assert synth.model.gains("right").ki == pytest.approx(3.0)
-    assert not synth.apply_command(0x42, b"\x00")  # other packets are ignored
+    assert not synth.apply_command(0x42, b"\x00", commands)  # other packets are ignored
+    assert not synth.apply_command(0x10, b"\x00", commands)  # wrong size for pid_single
+    assert not synth.apply_command(0x10, left_only[5:-1], ())  # no layouts configured
 
 
 def test_saturation_engages_anti_windup() -> None:
     stream = _pid_stream()
     synth = FrameSynth(stream, seed=1)
-    packet = ProtocolHandler().create_pid_packet(0, 0, 1, 5.0, 2.0, 26.5, 8.0, 0, 1.0, 0.5, 5.0)
+    packet = _pid_single(0, 0, 1, 5.0, 2.0, 26.5, 8.0, 0, 1.0, 0.5, 5.0)
     for packet_id, payload in FrameParser().feed(packet):
-        synth.apply_command(packet_id, payload)
+        synth.apply_command(packet_id, payload, tuple(_commands().values()))
 
     records, _ = _decode({"pid": stream}, "pid", synth.frames(0, 400))
 
@@ -249,8 +269,12 @@ def test_sim_transport_retargets_and_continues_counting() -> None:
 def test_sim_transport_lifecycle_and_commands() -> None:
     clock = _Clock()
     sim = _transport(_pid_stream(), clock)
-    sim.write(ProtocolHandler().create_pid_packet(1, 1, 1, 4.0, 0.5, 26.5, 8.0, 0, 1.0, 0.5, 0.7))
-    assert sim.synth.model is not None and sim.synth.model.gains("right").kp == 4.0
+    packet = _pid_single(1, 1, 1, 4.0, 0.5, 26.5, 8.0, 0, 1.0, 0.5, 0.7)
+    sim.write(packet)
+    assert sim.synth.model is not None and sim.synth.model.gains("right").kp == 0.1  # no layouts
+    sim.set_commands(tuple(_commands().values()))
+    sim.write(packet)
+    assert sim.synth.model.gains("right").kp == 4.0
     assert sim.name == "VIRTUAL"
     sim.close()
     with pytest.raises(TransportError):

@@ -131,6 +131,19 @@ class ConnectionPanel(QtWidgets.QGroupBox):
         self.pause_btn.blockSignals(False)
         self._style_pause(paused)
 
+    def select(self, port: str, baud: int) -> None:
+        """
+        Pre-selects a remembered port and baud rate (R5.3). A port that isn't present now
+        (a USB adapter unplugged) is left unselected rather than invented.
+        """
+        idx = self.port_combo.findText(port)
+        if idx >= 0:
+            self.port_combo.setCurrentIndex(idx)
+        if baud > 0:
+            if self.baud_combo.findText(str(baud)) < 0:
+                self.baud_combo.addItem(str(baud))
+            self.baud_combo.setCurrentText(str(baud))
+
     def refresh_ports(self) -> None:
         """
         Refreshes the list of available COM ports via PySerial.

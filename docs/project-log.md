@@ -6,6 +6,44 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-24 — Phase 5: config schema 2, commands and panels in config, remembered UI (R5.1–R5.3)
+
+- **Schema 2 (R5.1, A5, ADR-0007).**
+  - `streams.json` has a `schema_version`. `core/config` is a package: document (load →
+    migrate → validate → save), streams, controls, migrate.
+  - Version 1 files are migrated in memory: `panel_type: "pid"` becomes
+    `controls: "diffbot_pid"` plus the PID commands and panel, and `"imu"` is dropped. The
+    status bar says so.
+  - Saving goes through `save_document`: it's validated, the old file is kept as `.bak`,
+    and the new one is written to a temporary file and renamed. The bundled file was
+    migrated with the code itself; `tests/fixtures/streams_v1.json` must migrate to it
+    exactly.
+- **Commands in config (R5.2, C8).**
+  - `commands` (packet ID, fields; values from a button, a constant or a panel parameter)
+    and `panels` (parameters by column, plus buttons). One generic encoder reuses
+    `frame_dtype`, and it refuses values that don't fit instead of wrapping them.
+  - `CommandPanel` replaces `PidTuningPanel` and the IMU placeholder. The 10- and
+    20-argument signals are gone: the engine gets `send_packet(bytes)`.
+  - The simulator decodes commands with the configured layouts, and the motor model
+    applies fields by gain name.
+  - **Firmware-visible: nothing.** A test pins the bundled `0x10`/`0x11` packets
+    byte-for-byte against the old `struct` formats.
+- **Remembered UI (R5.3).** `QSettings`, per config file:
+  - globally: the port and baud rate
+  - per config file: the shown stream, visibility and lane moves (overrides on top of
+    streams.json, which View → "Reset view to streams.json" forgets), and panel values
+- A broken command or panel only leaves itself out, never the telemetry.
+- Benchmarks: the data path is unchanged. `bench_pipeline`: 104k frames/s at 900 B reads,
+  207k at 5000 B. `bench_render`: 30.3 FPS, 0 lost.
+- Tests: +42 (267 with Qt; 225 + 42 skipped without). They cover:
+  - byte compatibility, encoding and range errors, value resolution, decoding
+  - migration (fixture, idempotent, user commands kept, newer versions refused)
+  - command and panel validation, saving (refused, `.bak`, byte-identical)
+  - real Qt: the generated panel sending on VIRTUAL, refused values, state restored in a
+    new window plus the reset, a missing port, and saving a version 1 file as version 2
+
+---
+
 ## 2026-09-24 — Phase 4: record, replay, export, trigger, step response (R4.1–R4.5)
 
 - **Recording (R4.1, A3, ADR-0006).**

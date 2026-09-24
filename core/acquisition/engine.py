@@ -26,8 +26,8 @@ from collections.abc import Callable
 from PyQt6 import QtCore
 
 from core.acquisition.storage import StreamStores
+from core.protocol.commands import CommandDef
 from core.protocol.frame_parser import FrameParser
-from core.protocol.handler import ProtocolHandler
 from core.protocol.router import StreamRouter
 from core.protocol.stats import LinkStats, make_link_report
 from core.recording.sbtp import RecordingError, RecordingWriter
@@ -77,7 +77,7 @@ class TelemetryEngine(QtCore.QObject):
         # Parser and router run on the reader thread under `_data_lock`.
         self.parser = FrameParser()
         self.router = StreamRouter(self.parser.stats)
-        self._encoder = ProtocolHandler()  # command packets only
+        self._commands: tuple[CommandDef, ...] = ()  # for the simulator (R5.2)
         self._streams: dict[str, StreamConfig] = {}
         self._active_key: str | None = None  # the stream the simulator produces
 
@@ -116,6 +116,7 @@ class TelemetryEngine(QtCore.QObject):
                 self.status_msg.emit("No valid stream to simulate")
                 return
             self._sim = self.sim_factory(self._sim_stream())
+            self._sim.set_commands(self._commands)
             if not self._start(self._sim, port_name):
                 self._sim = None
         else:
@@ -403,123 +404,17 @@ class TelemetryEngine(QtCore.QObject):
         if store is not None:
             store.set_time_scale(scale_s)
 
-    @QtCore.pyqtSlot(int, int, float, float, float, float, float, float, float, float)
-    def send_left_config(
-        self,
-        use_ramp: int,
-        use_pi: int,
-        kp: float,
-        ki: float,
-        k1: float,
-        k2: float,
-        k3: float,
-        k_aw: float,
-        alpha: float,
-        rps: float,
-    ) -> None:
-        self._send_motor_config(0, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps)
+    @QtCore.pyqtSlot(object)
+    def configure_commands(self, commands: tuple[CommandDef, ...]) -> None:
+        """The document's command layouts, so the simulator can parse what it's sent (R5.2)."""
+        self._commands = tuple(commands)
+        if self._sim is not None:
+            self._sim.set_commands(self._commands)
 
-    @QtCore.pyqtSlot(int, int, float, float, float, float, float, float, float, float)
-    def send_right_config(
-        self,
-        use_ramp: int,
-        use_pi: int,
-        kp: float,
-        ki: float,
-        k1: float,
-        k2: float,
-        k3: float,
-        k_aw: float,
-        alpha: float,
-        rps: float,
-    ) -> None:
-        self._send_motor_config(1, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps)
-
-    def _send_motor_config(
-        self,
-        motor_id: int,
-        use_ramp: int,
-        use_pi: int,
-        kp: float,
-        ki: float,
-        k1: float,
-        k2: float,
-        k3: float,
-        k_aw: float,
-        alpha: float,
-        rps: float,
-    ) -> None:
-        """Constructs and sends a PID configuration packet to the MCU."""
-        packet = self._encoder.create_pid_packet(
-            motor_id, use_ramp, use_pi, kp, ki, k1, k2, k3, k_aw, alpha, rps
-        )
-        self._write(packet)
-
-    @QtCore.pyqtSlot(
-        int,
-        int,
-        float,
-        float,
-        float,
-        float,
-        float,
-        float,
-        float,
-        float,
-        int,
-        int,
-        float,
-        float,
-        float,
-        float,
-        float,
-        float,
-        float,
-        float,
-    )
-    def send_all_config(
-        self,
-        l_use_ramp: int,
-        l_use_pi: int,
-        l_kp: float,
-        l_ki: float,
-        l_k1: float,
-        l_k2: float,
-        l_k3: float,
-        l_k_aw: float,
-        l_alpha: float,
-        l_rps: float,
-        r_use_ramp: int,
-        r_use_pi: int,
-        r_kp: float,
-        r_ki: float,
-        r_k1: float,
-        r_k2: float,
-        r_k3: float,
-        r_k_aw: float,
-        r_alpha: float,
-        r_rps: float,
-    ) -> None:
-        packet = self._encoder.create_pid_packet_all_motors(
-            l_use_ramp,
-            l_use_pi,
-            l_kp,
-            l_ki,
-            l_k1,
-            l_k2,
-            l_k3,
-            l_k_aw,
-            l_alpha,
-            l_rps,
-            r_use_ramp,
-            r_use_pi,
-            r_kp,
-            r_ki,
-            r_k1,
-            r_k2,
-            r_k3,
-            r_k_aw,
-            r_alpha,
-            r_rps,
-        )
+    @QtCore.pyqtSlot(bytes)
+    def send_packet(self, packet: bytes) -> None:
+        """
+        Writes one command packet, encoded by the GUI from a config-defined command (R5.2).
+        Only complete packets travel through the queue, never partial writes.
+        """
         self._write(packet)
