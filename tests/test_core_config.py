@@ -162,3 +162,25 @@ def test_loader_does_not_mutate_the_raw_document(tmp_path):
 
     assert loader.list_streams()["s"]["panel_type"] == "none"
     assert "panel_type" not in loader.data["streams"]["s"]
+
+
+def test_shared_stream_id_with_ambiguous_layout_is_a_warning():
+    same = _stream()
+    other_size = _stream()
+    other_size["frame"]["fields"] = [
+        {"name": "loop_cntr", "type": "u32"},
+        {"name": "y", "type": "f64"},
+    ]
+    other_size["signals"] = {}
+    ambiguous = _stream()
+    ambiguous["frame"]["fields"] = [
+        {"name": "loop_cntr", "type": "u32"},
+        {"name": "x", "type": "i32"},
+    ]
+
+    problems = validate_config(
+        {"streams": {"a": _stream(), "b": same, "c": other_size, "d": ambiguous}}
+    )
+
+    assert [(p.severity, p.stream) for p in problems] == [("warning", "d")]
+    assert "only 'a' is decoded" in problems[0].message

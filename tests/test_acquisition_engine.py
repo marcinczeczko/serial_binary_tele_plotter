@@ -1,3 +1,4 @@
+import struct
 import time
 from unittest import mock
 
@@ -6,105 +7,16 @@ import serial
 from tests.fakes import FakeTransport, wait_for
 
 
-def test_configure_and_start_virtual(pyqt_stub):
-    from core.acquisition.engine import TelemetryEngine
-
-    engine = TelemetryEngine(sample_period_ms=10.0, max_samples=100)
-    engine.configure_signals({"sig": {"field": "value"}})
-    cfg = {
-        "name": "IMU 6-Axis",
-        "frame": {"stream_id": 1, "fields": []},
-    }
-    engine.configure_frame(cfg)
-    assert engine.virtual._stream_type == "imu"
-
-    with mock.patch.object(engine.virtual, "start") as vstart:
-        engine.start_working("VIRTUAL", 115200)
-        vstart.assert_called_once()
-        assert engine.state.name == "RUNNING"
-
-
-def test_serial_open_failure_emits_error(pyqt_stub):
-    from core.acquisition.engine import TelemetryEngine
-
-    engine = TelemetryEngine(sample_period_ms=10.0, max_samples=100)
-    engine.configure_signals({"sig": {"field": "value"}})
-
-    status_msgs = []
-    fail_msgs = []
-    engine.status_msg.connect(status_msgs.append)
-    engine.connection_failed.connect(fail_msgs.append)
-
-    with mock.patch("serial.Serial", side_effect=serial.SerialException("boom")):
-        engine.start_working("COM_FAIL", 115200)
-
-    assert engine.state.name == "CONFIGURED"
-    assert status_msgs
-    assert fail_msgs
-
-
-def test_link_stats_report_counts_bytes_and_samples(pyqt_stub):
-    from core.acquisition.engine import TelemetryEngine
+def _frame(stream_id, payload):
     from core.protocol.crc import calculate_crc8
 
-    engine = TelemetryEngine(sample_period_ms=10.0, max_samples=100)
-    engine.configure_signals({"v": {"field": "v"}})
-    engine.configure_frame(
-        {
-            "name": "t",
-            "frame": {
-                "stream_id": 1,
-                "fields": [{"name": "loop_cntr", "type": "u8"}, {"name": "v", "type": "u8"}],
-            },
-        }
-    )
-    engine._stats_prev_ts = time.monotonic() - 1.0  # previous report 1 s ago
-
-    header = bytes([0xAA, 0x55, 1, 2])
-    for i in range(10):
-        payload = bytes([i, 7])
-        frame = (
-            header + bytes([calculate_crc8(header)]) + payload + bytes([calculate_crc8(payload)])
-        )
-        engine.protocol.add_data(frame)
-    engine.store.append(engine.protocol.process_available_frames())
-
-    reports = []
-    engine.link_stats.connect(reports.append)
-    engine._emit_link_stats()
-
-    assert len(reports) == 1
-    report = reports[0]
-    assert report["frames_decoded"] == 10
-    assert report["bytes_rx"] == 80
-    assert 0 < report["samples_per_s"] <= 10.0
-    assert report["counter_missing"] == 0
+    header = bytes([0xAA, 0x55, stream_id, len(payload)])
+    return header + bytes([calculate_crc8(header)]) + payload + bytes([calculate_crc8(payload)])
 
 
-_CFG_A = {"name": "A", "frame": {"stream_id": 1, "fields": []}, "signals": {"a": {"field": "a"}}}
-_CFG_B = {"name": "B", "frame": {"stream_id": 2, "fields": []}, "signals": {"b": {"field": "b"}}}
-
-
-def _running_virtual_engine():
-    from core.acquisition.engine import TelemetryEngine
-
-    engine = TelemetryEngine(sample_period_ms=10.0, max_samples=100)
-    states = []
-    engine.state_changed.connect(states.append)
-    engine.select_stream(_CFG_A)
-    engine.start_working("VIRTUAL", 115200)
-    return engine, states
-
-
-def _frames(n):
-    from core.protocol.crc import calculate_crc8
-
-    header = bytes([0xAA, 0x55, 1, 2])
-    out = b""
-    for i in range(n):
-        payload = bytes([i % 256, 7])
-        out += header + bytes([calculate_crc8(header)]) + payload + bytes([calculate_crc8(payload)])
-    return out
+def _frames(n, stream_id=1):
+    """n frames of stream A (u8 loop_cntr, u8 v)."""
+    return b"".join(_frame(stream_id, bytes([i % 256, 7])) for i in range(n))
 
 
 _CFG_BYTES = {
@@ -115,15 +27,94 @@ _CFG_BYTES = {
     },
     "signals": {"v": {"field": "v"}},
 }
+_CFG_B = {
+    "name": "B",
+    "frame": {
+        "stream_id": 2,
+        "fields": [{"name": "loop_cntr", "type": "u8"}, {"name": "w", "type": "i16"}],
+    },
+    "signals": {"w": {"field": "w"}},
+}
+# Same ID and layout as A, different signal selection: decoded once, fed to both.
+_CFG_A_VIEW = {**_CFG_BYTES, "name": "A view", "signals": {"counter": {"field": "loop_cntr"}}}
+_CFG_IMU = {
+    "name": "IMU sim",  # "imu" in the name selects the IMU waveform in VirtualDevice
+    "frame": {
+        "stream_id": 3,
+        "fields": [{"name": "loop_cntr", "type": "u32"}, {"name": "acc_x", "type": "f32"}],
+    },
+    "signals": {"ax": {"field": "acc_x"}},
+}
+STREAMS = {"a": _CFG_BYTES, "b": _CFG_B, "a_view": _CFG_A_VIEW, "imu": _CFG_IMU}
 
 
-def _engine_with(transport):
+def _engine(transport=None):
     from core.acquisition.engine import TelemetryEngine
 
     engine = TelemetryEngine(sample_period_ms=10.0, max_samples=500)
-    engine.transport_factory = lambda port, baud: transport
-    engine.select_stream(_CFG_BYTES)
+    if transport is not None:
+        engine.transport_factory = lambda port, baud: transport
     return engine
+
+
+def _engine_with(transport):
+    engine = _engine(transport)
+    engine.configure_streams(STREAMS)
+    engine.select_stream("a")
+    return engine
+
+
+def test_configure_streams_builds_a_store_per_stream(pyqt_stub):
+    engine = _engine()
+    states, configured = [], []
+    engine.state_changed.connect(states.append)
+    engine.streams_configured.connect(lambda: configured.append(True))
+
+    engine.configure_streams(STREAMS)
+
+    assert [s.name for s in states] == ["CONFIGURED"]
+    assert configured == [True]
+    assert sorted(engine.stores.keys()) == sorted(STREAMS)
+
+
+def test_start_before_configuring_is_refused(pyqt_stub):
+    engine = _engine()
+    msgs = []
+    engine.status_msg.connect(msgs.append)
+    engine.start_working("VIRTUAL", 115200)
+    assert msgs == ["No stream configured yet"]
+    assert engine.state.name == "IDLE"
+
+
+def test_virtual_device_feeds_the_selected_stream(pyqt_stub):
+    engine = _engine()
+    engine.configure_streams(STREAMS)
+    engine.select_stream("imu")
+    assert engine.virtual._stream_type == "imu"
+
+    with mock.patch.object(engine.virtual, "start") as vstart:
+        engine.start_working("VIRTUAL", 115200)
+    vstart.assert_called_once()
+    assert engine.state.name == "RUNNING"
+
+    engine.virtual._step()
+    engine.virtual._step()
+    assert len(engine.stores.get("imu")) == 2
+    assert len(engine.stores.get("a")) == 0
+
+
+def test_serial_open_failure_emits_error(pyqt_stub):
+    engine = _engine()
+    engine.configure_streams(STREAMS)
+    status_msgs, fail_msgs = [], []
+    engine.status_msg.connect(status_msgs.append)
+    engine.connection_failed.connect(fail_msgs.append)
+
+    with mock.patch("serial.Serial", side_effect=serial.SerialException("boom")):
+        engine.start_working("COM_FAIL", 115200)
+
+    assert engine.state.name == "CONFIGURED"
+    assert status_msgs and fail_msgs
 
 
 def test_serial_data_is_read_on_reader_thread_and_stored(pyqt_stub):
@@ -138,12 +129,98 @@ def test_serial_data_is_read_on_reader_thread_and_stored(pyqt_stub):
     try:
         assert engine.state.name == "RUNNING"
         assert msgs[-1] == "Connected to COM7"
-        assert wait_for(lambda: engine.store.total_stored == 200)
-        assert engine.protocol.stats.bytes_rx == len(blob)
+        store = engine.stores.get("a")
+        assert wait_for(lambda: store.total_stored == 200)
+        snap = store.snapshot()
+        assert list(snap.signals["v"][:3]) == [7, 7, 7]
+        assert engine.parser.stats.bytes_rx == len(blob)
     finally:
         engine.stop_working()
     assert transport.closed
     assert engine._reader is None
+
+
+def test_every_configured_stream_is_decoded_at_once(pyqt_stub):
+    parts = []
+    for i in range(30):
+        parts.append(_frame(1, bytes([i, 5])))
+        parts.append(_frame(2, bytes([i]) + struct.pack("<h", -i)))
+        parts.append(_frame(9, b"\x00\x01\x02"))  # nobody decodes ID 9
+    transport = FakeTransport([b"".join(parts)])
+    engine = _engine_with(transport)
+
+    engine.start_working("COM7", 115200)
+    try:
+        assert wait_for(lambda: engine.stores.get("b").total_stored == 30)
+        a = engine.stores.get("a").snapshot()
+        view = engine.stores.get("a_view").snapshot()
+        b = engine.stores.get("b").snapshot()
+        assert list(a.signals["v"]) == [5] * 30
+        assert list(view.signals["counter"]) == list(range(30))  # same frames, other signals
+        assert list(b.signals["w"]) == [-i for i in range(30)]
+        stats = engine.parser.stats
+        assert stats.unknown_id_frames == 30
+        assert stats.frames_decoded == 60  # A and "A view" share one decode
+        assert stats.counter_gaps == 0
+    finally:
+        engine.stop_working()
+
+
+def test_select_stream_while_running_does_not_restart(pyqt_stub):
+    transport = FakeTransport()
+    engine = _engine_with(transport)
+    engine.start_working("COM7", 115200)
+    reader = engine._reader
+    states = []
+    engine.state_changed.connect(states.append)
+    try:
+        engine.select_stream("b")
+        assert engine.state.name == "RUNNING"
+        assert engine._reader is reader  # same session, history kept
+        assert states == []
+    finally:
+        engine.stop_working()
+
+
+def test_configure_streams_while_running_keeps_running(pyqt_stub):
+    # C5 analogue: reconfiguring must never demote RUNNING and stall acquisition.
+    transport = FakeTransport()
+    engine = _engine_with(transport)
+    engine.start_working("COM7", 115200)
+    try:
+        engine.configure_streams({"b": _CFG_B})
+        assert engine.state.name == "RUNNING"
+        assert engine.stores.keys() == ["b"]
+    finally:
+        engine.stop_working()
+
+
+def test_start_when_running_reports_already_running(pyqt_stub):
+    engine = _engine_with(FakeTransport())
+    engine.start_working("COM7", 115200)
+    msgs = []
+    engine.status_msg.connect(msgs.append)
+    try:
+        engine.start_working("COM7", 115200)
+        assert msgs == ["Already running"]
+    finally:
+        engine.stop_working()
+
+
+def test_link_stats_report_counts_bytes_and_samples(pyqt_stub):
+    engine = _engine_with(FakeTransport())
+    engine._stats_prev_ts = time.monotonic() - 1.0  # previous report 1 s ago
+    engine._on_bytes(_frames(10))
+
+    reports = []
+    engine.link_stats.connect(reports.append)
+    engine._emit_link_stats()
+
+    (report,) = reports
+    assert report["frames_decoded"] == 10
+    assert report["bytes_rx"] == 80
+    assert 0 < report["samples_per_s"] <= 25.0  # 10 in "a" + 10 in "a_view", over ~1 s
+    assert report["counter_missing"] == 0
 
 
 def test_transport_failure_stops_engine_and_reports(pyqt_stub):
@@ -191,39 +268,3 @@ def test_command_without_connection_is_reported(pyqt_stub):
     engine.status_msg.connect(msgs.append)
     engine.send_left_config(1, 0, 0.1, 0.02, 1.0, 2.0, 3.0, 1.0, 0.2, 0.3)
     assert msgs == ["Not connected to a serial port: command not sent"]
-
-
-def test_select_stream_while_running_restarts_on_same_port(pyqt_stub):
-    engine, states = _running_virtual_engine()
-    with mock.patch.object(engine.virtual, "start") as vstart:
-        engine.select_stream(_CFG_B)
-
-    vstart.assert_called_once()
-    assert engine.state.name == "RUNNING"
-    assert engine.store._fields == ["b"]
-    assert engine.protocol.active_stream_id == 2
-    assert [s.name for s in states] == ["CONFIGURED", "RUNNING", "CONFIGURED", "RUNNING"]
-
-
-def test_select_stream_when_stopped_does_not_start(pyqt_stub):
-    engine, _ = _running_virtual_engine()
-    engine.stop_working()
-    with mock.patch.object(engine.virtual, "start") as vstart:
-        engine.select_stream(_CFG_B)
-    vstart.assert_not_called()
-    assert engine.state.name == "CONFIGURED"
-
-
-def test_configure_signals_does_not_demote_running_engine(pyqt_stub):
-    # C5 regression: this used to force CONFIGURED and silently stall acquisition.
-    engine, _ = _running_virtual_engine()
-    engine.configure_signals(_CFG_B["signals"])
-    assert engine.state.name == "RUNNING"
-
-
-def test_start_when_running_reports_already_running(pyqt_stub):
-    engine, _ = _running_virtual_engine()
-    msgs = []
-    engine.status_msg.connect(msgs.append)
-    engine.start_working("VIRTUAL", 115200)
-    assert msgs == ["Already running"]

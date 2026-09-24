@@ -21,13 +21,13 @@ class LinkStats:
     frames_by_id: dict[int, int] = field(default_factory=dict)
     """Frames with valid header and payload CRC, per stream ID (any ID)."""
     frames_decoded: int = 0
-    """Frames of the active stream that decoded and were yielded."""
+    """Frames decoded into at least one stream."""
     unknown_id_frames: int = 0
-    """Valid frames whose stream ID is not the active stream."""
+    """Valid frames whose stream ID no configured stream uses."""
     header_crc_errors: int = 0
     payload_crc_errors: int = 0
     size_mismatches: int = 0
-    """Active-stream frames whose LEN doesn't match the configured layout."""
+    """Frames of a configured stream ID whose LEN matches none of its layouts."""
     discarded_bytes: int = 0
     """Bytes skipped while searching for sync (garbage, corrupted headers)."""
     counter_gaps: int = 0
@@ -86,7 +86,7 @@ def make_link_report(
 def format_link_report(report: LinkReport) -> tuple[str, str, bool]:
     """Returns (status-bar text, tooltip, has_problems) for a report."""
     crc = report["header_crc_errors"] + report["payload_crc_errors"]
-    # Frames for other stream IDs are not a problem by themselves: the MCU may multiplex.
+    # Unconfigured stream IDs aren't flagged: the MCU may send streams nobody plots.
     problems = (
         crc
         + report["size_mismatches"]
@@ -106,7 +106,7 @@ def format_link_report(report: LinkReport) -> tuple[str, str, bool]:
             f"Header CRC errors: {report['header_crc_errors']}",
             f"Payload CRC errors: {report['payload_crc_errors']}",
             f"Size mismatches (LEN != frame layout): {report['size_mismatches']}",
-            f"Frames for other stream IDs: {report['unknown_id_frames']}",
+            f"Frames with unconfigured stream IDs: {report['unknown_id_frames']}",
             f"Bytes discarded while syncing: {report['discarded_bytes']}",
             f"loop_cntr gaps: {report['counter_gaps']} ({report['counter_missing']} missing)",
             f"loop_cntr resets/wraps: {report['counter_resets']}",

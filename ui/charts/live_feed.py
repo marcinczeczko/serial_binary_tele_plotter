@@ -27,7 +27,7 @@ def to_packet(snapshot: Snapshot) -> PlotPacketWithBounds:
 class LiveFeed(QtCore.QObject):
     def __init__(
         self,
-        store: SampleStore,
+        store: SampleStore | None,
         plot: TelemetryPlot,
         sample_period_s: Callable[[], float],
         fps: int = LIVE_FPS,
@@ -44,12 +44,17 @@ class LiveFeed(QtCore.QObject):
         self.timer.timeout.connect(self.tick)
         self.timer.start()
 
+    def set_store(self, store: SampleStore | None) -> None:
+        """Shows another stream's store (or nothing); the next tick redraws."""
+        self._store = store
+        self.invalidate()
+
     def invalidate(self) -> None:
         """Forces the next tick to redraw (visible signals, stream or time base changed)."""
         self._version = None
 
     def tick(self) -> None:
-        if self._plot.mode == PlotMode.ANALYSIS:
+        if self._plot.mode == PlotMode.ANALYSIS or self._store is None:
             return
         snapshot = self._store.snapshot(
             self._plot.visible_signal_ids(), self._version, self._sample_period_s()
@@ -66,5 +71,7 @@ class LiveFeed(QtCore.QObject):
 
     def freeze(self) -> PlotPacketWithBounds | None:
         """A snapshot of *all* signals, for analysis mode (so hidden ones can be shown)."""
+        if self._store is None:
+            return None
         snapshot = self._store.snapshot(None, None, self._sample_period_s())
         return to_packet(snapshot) if snapshot is not None else None

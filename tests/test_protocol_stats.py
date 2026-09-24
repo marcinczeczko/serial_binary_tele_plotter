@@ -19,7 +19,7 @@ def test_format_flags_problems_but_not_other_stream_ids() -> None:
     text, tooltip, problems = format_link_report(clean)
     assert not problems
     assert "CRC err 0" in text
-    assert "other stream IDs: 5" in tooltip
+    assert "unconfigured stream IDs: 5" in tooltip
 
     bad = make_link_report(LinkStats(), LinkStats(header_crc_errors=1, discarded_bytes=7), 0, 1.0)
     text, _, problems = format_link_report(bad)

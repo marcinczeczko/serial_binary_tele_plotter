@@ -18,7 +18,10 @@ Primary use cases:
 - Serial connection management with port scanning and baud rate selection.
 - Analysis mode: pause the plot, scrub with the cursor, click to set an anchor for delta (Δ)
   readouts across all signals.
-- Multiple named streams, each with its own frame layout and signal set, selectable at runtime.
+- Multiple named streams, each with its own frame layout and signal set. **All streams are
+  decoded at the same time**; the selector only chooses which one to show, so switching
+  keeps each stream's history and never interrupts acquisition. Streams may share a
+  `stream_id`: they're told apart by payload size, and identical layouts are decoded once.
 - Built-in configuration editor — edit frame fields and signal definitions in-app, save to
   `streams.json` without restarting.
 - Optional PID tuning panel: send controller gains to the MCU over the same serial connection.
@@ -263,8 +266,9 @@ serial_bin_plotter/
 - **Threading:** a dedicated reader thread does blocking serial reads and parses them, so
   the OS buffer is drained however busy the GUI is. `TelemetryEngine` runs in its own
   `QThread`. The GUI talks to it only through Qt signals and queued calls.
-- **Data flow:** `SerialTransport` → `ReaderThread` → `ProtocolHandler` → `SampleStore`
-  (a versioned ring buffer shared between threads). `LiveFeed` then pulls snapshots of the
+- **Data flow:** `SerialTransport` → `ReaderThread` → `FrameParser` (sync, CRC, all IDs) →
+  `StreamRouter` (numpy batch decode per layout) → one `SampleStore` per stream (a versioned
+  ring buffer shared between threads). `LiveFeed` then pulls snapshots of the
   visible signals into `TelemetryPlot` at up to 30 FPS, only when there's new data, and
   backs off when frames are expensive. See `docs/adr/0002-target-acquisition-pipeline.md`.
 - **Performance:** hidden signals are never copied or drawn. Pausing freezes one full
@@ -276,7 +280,7 @@ serial_bin_plotter/
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | No serial ports appear | OS permission denied | Add user to `dialout` group (Linux) or grant Terminal serial access (macOS) |
-| Plot is flat / no data | `stream_id` or frame layout mismatch | Check the status-bar tooltip: "Frames for other stream IDs" means `stream_id` differs; "Size mismatches" means the field list doesn't match the firmware struct |
+| Plot is flat / no data | `stream_id` or frame layout mismatch | Check the status-bar tooltip: "Frames with unconfigured stream IDs" means no stream in `streams.json` uses the ID the MCU sends; "Size mismatches" means the field list doesn't match the firmware struct |
 | Data looks corrupted | Baud rate mismatch | CRC errors and dropped bytes climb in the status bar; make firmware and UI baud rates identical |
 | Gaps or jumps in traces | Frames lost or MCU reset | The status bar shows "lost N" (`loop_cntr` gaps) and the tooltip shows resets |
 | `uv run pytest` picks up wrong Python | Anaconda or system `pytest` in PATH | Always use `uv run pytest`, never bare `pytest` |

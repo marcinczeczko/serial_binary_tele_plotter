@@ -112,14 +112,26 @@ PRs that each keep the app working. Measure with `tools/bench_pipeline.py` befor
   `open/close/read(timeout)->bytes/write(bytes)`, implemented by `SerialTransport`
   (pyserial, write timeout) and later by `ReplayTransport` and `SimTransport`. Reads run on
   a dedicated reader thread doing blocking reads (P5). No `QTimer` polling.
-- [ ] **R2.2 Multi-stream `FrameParser` + `StreamRouter`** (A1)
+- [x] **R2.2 Multi-stream `FrameParser` + `StreamRouter`** (A1)
   The parser yields `(stream_id, payload, host_rx_time)` for *all* IDs. The router
   dispatches to one decoder per configured stream. Unknown IDs are counted, not dropped
   silently.
-- [ ] **R2.3 Vectorised decoder**
+  *Scope notes:*
+  - Frames carry no host timestamp yet; that arrives with recording (R4.1).
+  - Streams sharing a `stream_id` are routed by payload size. Identical layouts are decoded
+    once; an ambiguous same-size layout is a validation warning.
+  - Stream selection in the GUI is now a view change: no engine restart, and history is
+    kept per stream (`StreamStores`).
+- [x] **R2.3 Vectorised decoder**
   A numpy structured dtype per stream, built from `frame.fields` + endianness. Payloads are
   decoded in batches (`np.frombuffer` over concatenated payloads) straight into the store.
   Target: 5× or better throughput vs. the R0.2 baseline.
+  *Outcome:* 2.3–2.4× at 5000 B reads (66.8k → 152–159k frames/s) and 1.2× at 900 B reads
+  (82–84k). Batches grow with read size, and the reader drains everything buffered, so
+  heavier load gets bigger batches. The target isn't met because the rest is per-frame
+  Python framing and payload CRC. Beating it would need a compiled CRC and framing loop
+  (a C extension or numba, i.e. a new dependency). That isn't justified: this is about 20×
+  what 921600 baud can deliver.
 - [x] **R2.4 `SampleStore` per stream** (P2, P3)
   A double-write ring buffer, so the chronological window is always a contiguous zero-copy
   slice. It has a monotonic `version`, a short `threading.Lock` around write and read, and

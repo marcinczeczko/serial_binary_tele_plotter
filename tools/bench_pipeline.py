@@ -2,7 +2,9 @@
 Acquisition pipeline micro-benchmark.
 
 Measures the Qt-free hot paths so performance work can be compared before/after:
-  1. parse + store throughput (ProtocolHandler -> SampleStore) at a typical read size
+  1. parse + store throughput at a typical read size, via the engine's vectorised path
+     (FrameParser -> StreamRouter -> SampleStore.append_records) and via the per-frame
+     dict path (ProtocolHandler -> SampleStore.append) for comparison
   2. decode ratio for large reads (regression guard for review finding C1)
   3. CRC-8 cost per frame
   4. GUI snapshot cost (SampleStore.snapshot) for several buffer sizes: all signals, only
@@ -20,6 +22,7 @@ import argparse
 import struct
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -28,7 +31,9 @@ from core.acquisition.storage import SampleStore  # noqa: E402
 from core.config import StreamConfigLoader  # noqa: E402
 from core.protocol.constants import MAGIC_0, MAGIC_1, STRUCT_TYPE_MAP  # noqa: E402
 from core.protocol.crc import calculate_crc8  # noqa: E402
+from core.protocol.frame_parser import FrameParser  # noqa: E402
 from core.protocol.handler import ProtocolHandler  # noqa: E402
+from core.protocol.router import StreamRouter  # noqa: E402
 from core.types import StreamConfig  # noqa: E402
 
 N_FRAMES = 20_000
@@ -55,7 +60,36 @@ def build_stream(cfg: StreamConfig, n: int) -> tuple[bytes, int]:
     return b"".join(frames), len(frames[0])
 
 
+def best_of(
+    fn: Callable[[StreamConfig, bytes, int], tuple[int, float]],
+    cfg: StreamConfig,
+    blob: bytes,
+    chunk: int,
+    runs: int = 3,
+) -> tuple[int, float]:
+    """Fastest of a few runs: throughput numbers on a shared machine are noisy."""
+    results = [fn(cfg, blob, chunk) for _ in range(runs)]
+    return min(results, key=lambda r: r[1])
+
+
 def parse_and_store(cfg: StreamConfig, blob: bytes, chunk: int) -> tuple[int, float]:
+    """The engine's path: FrameParser -> StreamRouter -> append_records (R2.2/R2.3)."""
+    parser = FrameParser()
+    router = StreamRouter(parser.stats)
+    router.configure({"s": cfg})
+    store = SampleStore(2_000)
+    store.configure(cfg.get("signals", {}))
+    decoded = 0
+    t0 = time.perf_counter()
+    for off in range(0, len(blob), chunk):
+        batches = router.route(parser.feed(blob[off : off + chunk]))
+        if "s" in batches:
+            decoded += store.append_records(batches["s"])
+    return decoded, time.perf_counter() - t0
+
+
+def parse_and_store_dicts(cfg: StreamConfig, blob: bytes, chunk: int) -> tuple[int, float]:
+    """The single-stream per-frame path (struct.unpack -> dict), for comparison."""
     handler = ProtocolHandler()
     handler.configure(cfg)
     store = SampleStore(2_000)
@@ -111,13 +145,17 @@ def main() -> int:
     blob, frame_len = build_stream(cfg, N_FRAMES)
     print(f"stream '{args.stream}': {frame_len} B/frame, {n_signals} signals, {N_FRAMES} frames")
 
-    decoded, dt = parse_and_store(cfg, blob, 900)
+    for label, fn in (("vectorised", parse_and_store), ("per-frame dicts", parse_and_store_dicts)):
+        decoded, dt = best_of(fn, cfg, blob, 900)
+        print(
+            f"parse+store, {label:>15} (900 B reads): {decoded / dt:>10,.0f} frames/s  "
+            f"{len(blob) / dt / 1e6:6.2f} MB/s  ({decoded}/{N_FRAMES} decoded)"
+        )
+    decoded, dt = best_of(parse_and_store, cfg, blob, 5_000)
     print(
-        f"parse+store (900 B reads):   {decoded / dt:>10,.0f} frames/s  "
-        f"{len(blob) / dt / 1e6:6.2f} MB/s  ({decoded}/{N_FRAMES} decoded)"
+        f"parse+store,      vectorised (5000 B reads): {decoded / dt:>9,.0f} frames/s  "
+        f"({decoded}/{N_FRAMES} decoded)  [C1 guard; bigger reads = bigger batches]"
     )
-    decoded, _ = parse_and_store(cfg, blob, 5_000)
-    print(f"large reads (5000 B):        {decoded}/{N_FRAMES} decoded  [C1 guard]")
 
     payload = blob[5 : frame_len - 1]
     t0 = time.perf_counter()

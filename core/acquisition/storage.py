@@ -50,6 +50,9 @@ class SampleStore:
         self._capacity = max(int(capacity), 1)
         self._ids: list[str] = []  # column order
         self._fields: list[str] = []  # frame field per column
+        self._unique_fields: list[str] = []
+        self._float_dtype = np.dtype([])
+        self._expand: list[int] | None = None
         self._col: dict[str, int] = {}
         self._loop = self._alloc_loop()
         self._mat = self._alloc_matrix()
@@ -76,6 +79,20 @@ class SampleStore:
         with self._lock:
             self._ids = list(signals_cfg)
             self._fields = [sig["field"] for sig in signals_cfg.values()]
+            # Fast path of append_records: cast the *unique* fields once, then expand columns
+            # (two signals may map to the same field).
+            self._unique_fields = list(dict.fromkeys(self._fields))
+            self._float_dtype = np.dtype(
+                {
+                    "names": [f"c{k}" for k in range(len(self._unique_fields))],
+                    "formats": [np.float64] * len(self._unique_fields),
+                }
+            )
+            self._expand = (
+                [self._unique_fields.index(f) for f in self._fields]
+                if len(self._unique_fields) != len(self._fields)
+                else None
+            )
             self._col = {sid: k for k, sid in enumerate(self._ids)}
             self._mat = self._alloc_matrix()
             self._reset_locked()
@@ -115,12 +132,47 @@ class SampleStore:
         values = np.asarray(rows, dtype=np.float64).reshape(len(rows), len(fields))
         loop = np.asarray(counters, dtype=np.float64)
         with self._lock:
-            if len(fields) != self._mat.shape[1]:
+            if fields is not self._fields:
                 return 0  # reconfigured while this batch was being prepared
             self._write_locked(loop, values)
             self.total_stored += len(rows)
             self._version += 1
         return len(rows)
+
+    def append_records(self, records: np.ndarray) -> int:
+        """
+        Stores a structured array from `RecordDecoder` (one record per frame).
+
+        This is the fast path: one column copy per signal instead of a dict lookup per
+        value. Fields a signal maps to but the records lack become NaN.
+        """
+        n = len(records)
+        if not n:
+            return 0
+        names = records.dtype.names or ()
+        loop = (
+            records[LOOP_CNTR_NAME].astype(np.float64)
+            if LOOP_CNTR_NAME in names
+            else np.full(n, math.nan)
+        )
+        fields = self._fields
+        unique = self._unique_fields
+        if unique and all(name in names for name in unique):
+            # One C-level cast of the selected fields to all-float64, viewed as an n x U matrix.
+            values = records[unique].astype(self._float_dtype).view(np.float64).reshape(n, -1)
+            if self._expand is not None:
+                values = values[:, self._expand]
+        else:
+            values = np.empty((n, len(fields)), dtype=np.float64)
+            for k, name in enumerate(fields):
+                values[:, k] = records[name] if name in names else math.nan
+        with self._lock:
+            if fields is not self._fields:
+                return 0  # reconfigured while this batch was being prepared
+            self._write_locked(loop, values)
+            self.total_stored += n
+            self._version += 1
+        return n
 
     # --- reader side -------------------------------------------------------------------
 
@@ -191,3 +243,53 @@ class SampleStore:
         """Chronological view (oldest..newest) of the valid samples; no copy."""
         end = self._head + self._capacity
         return buf[end - self._count : end]
+
+
+class StreamStores:
+    """
+    One `SampleStore` per configured stream, keyed by stream key (R2.2).
+
+    Shared between threads: the engine configures it and the reader thread appends. The
+    GUI looks up the store of the stream it shows. `configure()` replaces every store, so
+    holders must look stores up again afterwards (the engine signals `streams_configured`).
+    """
+
+    def __init__(self, capacity: int) -> None:
+        self._lock = threading.Lock()
+        self._capacity = max(int(capacity), 1)
+        self._stores: dict[str, SampleStore] = {}
+
+    def configure(self, streams: dict[str, SignalsConfig]) -> None:
+        """`streams` maps stream key -> that stream's signals config."""
+        stores = {}
+        for key, signals in streams.items():
+            store = SampleStore(self._capacity)
+            store.configure(signals)
+            stores[key] = store
+        with self._lock:
+            self._stores = stores
+
+    def get(self, key: str | None) -> SampleStore | None:
+        with self._lock:
+            return self._stores.get(key) if key is not None else None
+
+    def keys(self) -> list[str]:
+        with self._lock:
+            return list(self._stores)
+
+    def _all(self) -> list[SampleStore]:
+        with self._lock:
+            return list(self._stores.values())
+
+    def resize(self, capacity: int) -> None:
+        self._capacity = max(int(capacity), 1)
+        for store in self._all():
+            store.resize(self._capacity)
+
+    def clear(self) -> None:
+        for store in self._all():
+            store.clear()
+
+    @property
+    def total_stored(self) -> int:
+        return sum(store.total_stored for store in self._all())

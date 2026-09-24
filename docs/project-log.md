@@ -6,6 +6,38 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-24 — Multi-stream decoding + vectorised decoder (R2.2, R2.3)
+
+- New `core/protocol/`:
+  - `frame_parser.FrameParser`: sync and CRC for all IDs; memoised header CRC.
+  - `record_decoder.RecordDecoder`: packed numpy dtype, `np.frombuffer` per batch.
+  - `router.StreamRouter`: routes by ID and payload size; identical layouts decoded once;
+    unknown IDs and size mismatches counted; counter gaps tracked per route.
+  - `ProtocolHandler` is now the single-stream API plus command encoding, on top of
+    `FrameParser`.
+- Engine: `configure_streams(all valid streams)`. `StreamStores` holds one `SampleStore`
+  per stream. `select_stream(key)` is view-only: no restart, and each stream's history
+  survives switching. The GUI re-binds `LiveFeed` on `streams_configured`.
+- `SampleStore.append_records`: one C-level cast of the unique fields to float64 (two
+  signals may share a field).
+- Validation warns when two streams share a `stream_id` with different layouts of the same
+  size (ambiguous; the first wins).
+- Bench (`pid`, best of 3; before → after):
+  - parse+store at 900 B reads: 62–67k → **82–84k frames/s** (per-frame dict path now
+    70–72k)
+  - at 5000 B reads: **152–159k**; at 50 kB reads: ~183k
+  - vs the R0.2 baseline of 66.8k: 1.2× (small reads) to 2.4–2.7× (large reads). The 5×
+    target isn't met: per-frame Python framing and CRC remain (see roadmap note).
+- Tests (+11, 127 with Qt; 108 + 19 skipped without):
+  - decoder vs `struct`, both endiannesses and 64-bit types
+  - **the vectorised path equals the per-frame decoder on a noisy 3000-frame stream**, with
+    all counters identical
+  - size dispatch and shared decode, ambiguous layouts, counter tracking across batches
+  - the engine decodes interleaved streams at once
+  - switching streams keeps history with no state change (real Qt)
+
+---
+
 ## 2026-09-24 — SampleStore + GUI pull model (R2.4, R2.6)
 
 - `core/acquisition/storage.SampleStore` replaces `SignalDataManager`:
