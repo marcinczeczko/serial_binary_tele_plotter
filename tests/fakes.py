@@ -56,6 +56,11 @@ class FakeTransport:
         time.sleep(timeout_s)
         return b""
 
+    def push(self, *chunks: bytes) -> None:
+        """Queues more data for the reader (thread-safe), as if it had just arrived."""
+        with self._lock:
+            self._chunks.extend(chunks)
+
     def write(self, data: bytes) -> None:
         if self.fail_writes:
             raise TransportError("write timeout")

@@ -15,6 +15,10 @@ dependencies = [
   "pyserial",
 ]
 
+[project.optional-dependencies]
+# Parquet export (R4.3). CSV export needs nothing extra.
+parquet = ["pyarrow"]
+
 [project.scripts]
 serial-bin-plotter = "main:main"
 

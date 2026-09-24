@@ -10,22 +10,53 @@ lifecycle, and global events.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.acquisition.engine import TelemetryEngine
 from core.acquisition.storage import StreamStores
 from core.acquisition.timebase import time_base_config
+from core.analysis.export import ExportError, export_table, parquet_available
+from core.analysis.step_response import StepMetrics, step_metrics
+from core.analysis.trigger import TriggerSpec
 from core.config import DEFAULT_CONFIG_PATH, StreamConfigLoader
 from core.protocol.stats import LinkReport, format_link_report
-from core.types import EngineState, StreamConfig
+from core.recording.sbtp import SUFFIX as RECORDING_SUFFIX
+from core.recording.sbtp import recording_name
+from core.types import EngineState, PlotMode, PlotPacketWithBounds, StreamConfig
+from ui.app_settings import (
+    DEFAULT_RECORDINGS_DIR,
+    KEY_RECORD_ON_CONNECT,
+    KEY_RECORDINGS_DIR,
+    app_settings,
+)
 from ui.charts.live_feed import LiveFeed
 from ui.charts.telemetry_plot import TelemetryPlot
+from ui.charts.trigger_controller import TriggerController
 from ui.config.tab import ConfiguratorTab
 from ui.panels.container import MainControlPanel
 
 logger = logging.getLogger(__name__)
+
+
+def _action(
+    menu: QtWidgets.QMenu,
+    text: str,
+    slot: Callable[..., Any],
+    checkable: bool = False,
+    on_toggle: bool | None = None,
+) -> QtGui.QAction:
+    """A menu action; checkable ones call `slot(checked)` on every toggle unless told not to."""
+    act = menu.addAction(text)
+    assert act is not None
+    act.setCheckable(checkable)
+    (act.toggled if (checkable if on_toggle is None else on_toggle) else act.triggered).connect(
+        slot
+    )
+    return act
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -40,14 +71,20 @@ class MainWindow(QtWidgets.QMainWindow):
     4. **Lifecycle**: Managing startup configuration and safe shutdown sequences.
     """
 
-    def __init__(self, config_path: Path = DEFAULT_CONFIG_PATH) -> None:
+    def __init__(
+        self,
+        config_path: Path = DEFAULT_CONFIG_PATH,
+        settings: QtCore.QSettings | None = None,
+    ) -> None:
         """
         Initializes the main window, UI layout, and background engine.
 
         `config_path` is the streams.json to use; one loader for it is shared by the
-        dashboard and the Configuration tab.
+        dashboard and the Configuration tab. `settings` holds what's remembered between
+        runs (tests pass a private one).
         """
         super().__init__()
+        self.settings = settings if settings is not None else app_settings()
         self.stream_loader = StreamConfigLoader(config_path)
 
         # --- State Tracking ---
@@ -57,6 +94,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._shut_down = False
         # Per-stream Period overrides for this session (seconds per tick), R2.5.
         self._scale_overrides: dict[str, float] = {}
+        self._session_label = ""  # port or replay being run ("" when idle)
+        self._replaying = False
+        self._recording_path = ""
+        # Trigger captures (R4.4/R4.5): the previous one, for metrics and the overlay.
+        self._last_capture: tuple[PlotPacketWithBounds, float] | None = None
+        self._last_metrics: StepMetrics | None = None
 
         # --- Window Setup ---
         self.setWindowTitle("Serial Binary Plotter")
@@ -101,8 +144,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_status = QtWidgets.QLabel("Ready")
         self.lbl_cursor = QtWidgets.QLabel("")
         self.lbl_link = QtWidgets.QLabel("")
+        self.lbl_rec = QtWidgets.QLabel("")
+        self.lbl_rec.setStyleSheet("color: #F44336; font-weight: bold;")
 
         self.status_bar.addWidget(self.lbl_status)
+        self.status_bar.addPermanentWidget(self.lbl_rec)
         self.status_bar.addPermanentWidget(self.lbl_link)
         self.status_bar.addPermanentWidget(self.lbl_cursor)
 
@@ -115,6 +161,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stores = StreamStores(initial_samples)
         self.engine: TelemetryEngine = TelemetryEngine(initial_samples, stores=self.stores)
         self.live_feed = LiveFeed(None, self.plot, parent=self)
+        self.trigger = TriggerController(self)
 
         self.engine_thread: QtCore.QThread = QtCore.QThread(self)
         self.engine.moveToThread(self.engine_thread)
@@ -147,9 +194,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.engine.state_changed.connect(self._on_engine_state_changed)
         self.engine.streams_configured.connect(self._bind_live_feed)
         self.engine.link_stats.connect(self._on_link_stats)
+        self.engine.session_ended.connect(self._on_session_ended)
+        self.engine.recording_changed.connect(self._on_recording_changed)
+
+        # 5. Trigger capture and step response (R4.4, R4.5)
+        trigger_panel = self.panel.trigger_panel
+        trigger_panel.arm_requested.connect(self._arm_trigger)
+        trigger_panel.disarm_requested.connect(self.trigger.disarm)
+        self.trigger.state_changed.connect(trigger_panel.show_state)
+        self.trigger.captured.connect(self._on_trigger_captured)
 
         # 6. Interactivity: Plot -> UI
         self.plot.cursor_moved.connect(self.lbl_cursor.setText)
+
+        self._build_menus()
 
         # --- Final Setup ---
         self._configure_engine_streams()
@@ -199,7 +257,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _bind_live_feed(self) -> None:
         """Points the live feed at the shown stream's store (after stores are (re)built)."""
-        self.live_feed.set_store(self.stores.get(self.panel.current_stream_key()))
+        store = self.stores.get(self.panel.current_stream_key())
+        self.live_feed.set_store(store)
+        self.trigger.set_store(store)
 
     def _initial_stream_setup(self) -> None:
         """Applies the stream currently selected in the panel to the plot and the engine."""
@@ -258,6 +318,8 @@ class MainWindow(QtWidgets.QMainWindow):
         Handles connection requests triggered by the Control Panel.
         """
         if port != "STOP":
+            self._session_label = port
+            self._replaying = False
             QtCore.QMetaObject.invokeMethod(
                 self.engine,
                 "start_working",
@@ -278,8 +340,22 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_engine_state_changed(self, state: EngineState) -> None:
         self.engine_state = state
-        if state == EngineState.RUNNING:
+        running = state == EngineState.RUNNING
+        # The Connect button mirrors the engine, however the session started (menu replay).
+        self.panel.conn_panel.set_connected(running)
+        self._update_menus()
+        if running:
             self.lbl_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
+            if self.act_record_on_connect.isChecked() and not self._replaying:
+                self._start_recording()
+        else:
+            self._replaying = False
+            self._update_menus()
+
+    def _on_session_ended(self, message: str) -> None:
+        """A replay reached its end: the data stays for analysis."""
+        self.lbl_status.setText(message)
+        self.lbl_status.setStyleSheet("")
 
     def _handle_connection_failed(self, message: str) -> None:
         """
@@ -304,11 +380,243 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _set_pause_state(self, paused: bool, update_status: bool) -> None:
         # Pausing freezes a copy of *all* signals; acquisition keeps running underneath.
+        self.panel.conn_panel.set_paused(paused)  # when not from the button itself
         self.plot.set_paused(paused, self.live_feed.freeze() if paused else None)
         if not paused:
             self.live_feed.invalidate()
         if update_status:
             self.lbl_status.setText("PAUSED" if paused else "Connected")
+
+    # --- menus: recording, replay, export (R4.1-R4.3) -----------------------------------
+
+    def _build_menus(self) -> None:
+        bar = self.menuBar()
+        assert bar is not None
+        file_menu = bar.addMenu("&File")
+        rec_menu = bar.addMenu("&Recording")
+        assert file_menu is not None and rec_menu is not None
+
+        self.act_export_shown = _action(file_menu, "Export shown stream…", self._export_shown)
+        self.act_export_all = _action(file_menu, "Export all streams…", self._export_all)
+
+        self.act_record = _action(rec_menu, "Record", self._toggle_recording, checkable=True)
+        self.act_record.setShortcut(QtGui.QKeySequence("Ctrl+R"))
+        self.act_record_on_connect = _action(
+            rec_menu, "Record automatically on connect", self._save_record_on_connect, True
+        )
+        self.act_record_on_connect.setChecked(
+            self.settings.value(KEY_RECORD_ON_CONNECT, False, type=bool)
+        )
+        _action(rec_menu, "Recordings folder…", self._choose_recordings_dir)
+        rec_menu.addSeparator()
+        self.act_replay = _action(rec_menu, "Replay a recording…", self._choose_replay)
+        speed_menu = rec_menu.addMenu("Replay speed")
+        assert speed_menu is not None
+        self.speed_group = QtGui.QActionGroup(speed_menu)
+        self.speed_actions: dict[float, QtGui.QAction] = {}
+        for speed, label in ((1.0, "1×"), (2.0, "2×"), (5.0, "5×"), (10.0, "10×"), (0.0, "Max")):
+            # triggered, not toggled: in an exclusive group the old choice toggles off too
+            act = _action(
+                speed_menu, label, lambda _=False, v=speed: self._set_speed(v), True, False
+            )
+            self.speed_group.addAction(act)
+            self.speed_actions[speed] = act
+        self.speed_actions[1.0].setChecked(True)
+        self.act_replay_pause = _action(
+            rec_menu, "Pause replay", self._toggle_replay_pause, checkable=True
+        )
+        self.act_replay_step = _action(rec_menu, "Step replay (one read)", self._replay_step)
+        self._update_menus()
+
+    def _update_menus(self) -> None:
+        running = self.engine_state == EngineState.RUNNING
+        self.act_record.setEnabled(running or bool(self._recording_path))
+        self.act_replay_pause.setEnabled(running and self._replaying)
+        self.act_replay_step.setEnabled(running and self._replaying)
+        if not (running and self._replaying):
+            self.act_replay_pause.setChecked(False)
+
+    def _invoke(self, method: str, *args: QtCore.QGenericArgument) -> None:
+        QtCore.QMetaObject.invokeMethod(
+            self.engine, method, QtCore.Qt.ConnectionType.QueuedConnection, *args
+        )
+
+    def recordings_dir(self) -> Path:
+        stored = self.settings.value(KEY_RECORDINGS_DIR, "", type=str)
+        return Path(stored) if stored else DEFAULT_RECORDINGS_DIR
+
+    def _start_recording(self) -> None:
+        label = self.panel.current_stream_key() or self._session_label or "recording"
+        path = self.recordings_dir() / recording_name(label)
+        self._invoke("start_recording", QtCore.Q_ARG(str, str(path)))
+
+    def _toggle_recording(self, checked: bool) -> None:
+        if checked:
+            self._start_recording()
+        else:
+            self._invoke("stop_recording")
+
+    def _on_recording_changed(self, path: str) -> None:
+        self._recording_path = path
+        self.act_record.blockSignals(True)
+        self.act_record.setChecked(bool(path))
+        self.act_record.blockSignals(False)
+        self.lbl_rec.setText(f"● REC {Path(path).name}" if path else "")
+        self.lbl_rec.setToolTip(path)
+        self._update_menus()
+
+    def _save_record_on_connect(self, checked: bool) -> None:
+        self.settings.setValue(KEY_RECORD_ON_CONNECT, checked)
+
+    def _choose_recordings_dir(self) -> None:
+        folder = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Recordings folder", str(self.recordings_dir())
+        )
+        if folder:
+            self.settings.setValue(KEY_RECORDINGS_DIR, folder)
+
+    def _choose_replay(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Replay a recording",
+            str(self.recordings_dir()),
+            f"Recordings (*{RECORDING_SUFFIX});;All files (*)",
+        )
+        if path:
+            self.start_replay(path)
+
+    def start_replay(self, path: str) -> None:
+        """Stops any session and plays `path` through the pipeline at the chosen speed."""
+        speed = next((v for v, a in self.speed_actions.items() if a.isChecked()), 1.0)
+        self._set_pause_state(False, update_status=False)
+        self._session_label = Path(path).name
+        self._replaying = True
+        self._invoke("stop_working")
+        self._invoke("start_replay", QtCore.Q_ARG(str, path), QtCore.Q_ARG(float, speed))
+        self.lbl_status.setText(f"Replaying {Path(path).name}…")
+        self.lbl_status.setStyleSheet("")
+
+    def _set_speed(self, speed: float) -> None:
+        self._invoke("set_replay_speed", QtCore.Q_ARG(float, speed))
+
+    def _toggle_replay_pause(self, paused: bool) -> None:
+        self._invoke("set_replay_paused", QtCore.Q_ARG(bool, paused))
+
+    def _replay_step(self) -> None:
+        self._invoke("replay_step")
+
+    def _export_packet(self) -> tuple[PlotPacketWithBounds | None, tuple[float, float] | None]:
+        """The shown stream's data to export: the paused view's time range, else the window."""
+        if self.plot.mode == PlotMode.ANALYSIS and self.plot.analysis_packet is not None:
+            (x0, x1), _ = self.plot.plot.viewRange()
+            return self.plot.analysis_packet, (float(x0), float(x1))
+        return self.live_feed.freeze(), None
+
+    def _export_filter(self) -> str:
+        filters = ["CSV (*.csv)"]
+        if parquet_available():
+            filters.append("Parquet (*.parquet)")
+        return ";;".join(filters)
+
+    def _ask_export_path(self, title: str, suggested: str) -> Path | None:
+        path, chosen = QtWidgets.QFileDialog.getSaveFileName(
+            self, title, str(self.recordings_dir() / suggested), self._export_filter()
+        )
+        if not path:
+            return None
+        target = Path(path)
+        if target.suffix.lower() not in (".csv", ".parquet"):
+            target = target.with_suffix(".parquet" if "parquet" in chosen.lower() else ".csv")
+        return target
+
+    def _export_shown(self) -> None:
+        key = self.panel.current_stream_key() or "stream"
+        target = self._ask_export_path("Export shown stream", f"{key}.csv")
+        if target is not None:
+            self.export_shown(target)
+
+    def export_shown(self, target: Path) -> int:
+        """Writes the shown stream (the paused view's range, or the window); returns rows."""
+        packet, x_range = self._export_packet()
+        if packet is None:
+            self._report_export("Nothing to export yet")
+            return 0
+        try:
+            rows = export_table(target, packet["time"], packet["signals"], x_range)
+        except ExportError as e:
+            self._report_export(f"Export failed: {e}")
+            return 0
+        scope = f"{x_range[0]:.3f}-{x_range[1]:.3f} s" if x_range else "the whole window"
+        self._report_export(f"Exported {rows} rows ({scope}) to {target}")
+        return rows
+
+    def _export_all(self) -> None:
+        target = self._ask_export_path("Export all streams (one file each)", "telemetry.csv")
+        if target is not None:
+            self.export_all(target)
+
+    def export_all(self, target: Path) -> list[Path]:
+        """Writes every stream's window to `<stem>_<stream><suffix>`; returns the files."""
+        written: list[Path] = []
+        for key in self.stores.keys():
+            store = self.stores.get(key)
+            snapshot = store.snapshot(None, None) if store is not None else None
+            if snapshot is None:
+                continue
+            path = target.with_name(f"{target.stem}_{key}{target.suffix}")
+            try:
+                export_table(path, snapshot.time, snapshot.signals)
+            except ExportError as e:
+                self._report_export(f"Export failed: {e}")
+                return written
+            written.append(path)
+        self._report_export(
+            f"Exported {len(written)} stream(s) to {target.parent}"
+            if written
+            else "Nothing to export yet"
+        )
+        return written
+
+    def _report_export(self, message: str) -> None:
+        self.lbl_status.setText(message)
+        self.lbl_status.setStyleSheet("")
+
+    # --- trigger capture and step response (R4.4, R4.5) ---------------------------------
+
+    def _arm_trigger(self, spec: TriggerSpec) -> None:
+        if self.engine_state != EngineState.RUNNING:
+            self.panel.trigger_panel.set_armed(False)
+            self.lbl_status.setText("Connect first: the trigger watches live data")
+            return
+        if self.plot.mode == PlotMode.ANALYSIS:  # watch live data again
+            self._set_pause_state(False, update_status=False)
+        self.trigger.arm(spec)
+
+    def _on_trigger_captured(self, packet: PlotPacketWithBounds, t_trig: float, note: str) -> None:
+        """Freezes the capture for analysis, Δ anchored at the trigger, with metrics."""
+        self.panel.conn_panel.set_paused(True)
+        self.plot.set_paused(True, packet)
+        t = packet["time"]
+        if len(t):
+            self.plot.plot.setXRange(float(t[0]), float(t[-1]), padding=0.02)
+        self.plot.set_anchor(t_trig)
+
+        panel = self.panel.trigger_panel
+        metrics = None
+        pair = panel.step_signals()
+        if pair is not None and pair[0] in packet["signals"] and pair[1] in packet["signals"]:
+            metrics = step_metrics(
+                t, packet["signals"][pair[0]], packet["signals"][pair[1]], t_trig
+            )
+        panel.show_metrics(metrics, self._last_metrics)
+        previous = self._last_capture
+        if previous is not None and panel.overlay_chk.isChecked():
+            self.plot.set_reference(previous[0], t_trig - previous[1])
+        self._last_capture = (packet, t_trig)
+        self._last_metrics = metrics
+        text = f"Triggered at {t_trig:.3f} s (paused; Resume for live view)"
+        self.lbl_status.setText(text + (f": {note}" if note else ""))
+        self.lbl_status.setStyleSheet("color: #FFB74D; font-weight: bold;")
 
     def closeEvent(self, event: QtGui.QCloseEvent | None) -> None:
         """

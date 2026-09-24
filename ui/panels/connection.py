@@ -98,10 +98,10 @@ class ConnectionPanel(QtWidgets.QGroupBox):
         )
         self.connect_btn.toggled.connect(self._on_connect_toggled)
 
-        # 2. Pause Button
+        # 2. Pause Button. Always available: pausing freezes whatever is in the buffers, so
+        # a finished replay or a stopped session can still be analysed.
         self.pause_btn = QtWidgets.QPushButton("Pause")
         self.pause_btn.setCheckable(True)
-        self.pause_btn.setEnabled(False)  # Disabled until connected
         self.pause_btn.toggled.connect(self._on_pause_toggled)
 
         btn_layout.addWidget(self.connect_btn)
@@ -115,26 +115,21 @@ class ConnectionPanel(QtWidgets.QGroupBox):
 
     def _set_connected_ui(self, checked: bool) -> None:
         """Updates UI state without emitting connection signals."""
-        if checked:
-            # Entering Connected State
-            self.connect_btn.setText("Disconnect")
-            self.pause_btn.setEnabled(True)
-        else:
-            # Entering Disconnected State
-            self.connect_btn.setText("Connect")
-
-            # Reset Pause button state
-            self.pause_btn.setChecked(False)
-            self.pause_btn.setEnabled(False)
+        self.connect_btn.setText("Disconnect" if checked else "Connect")
 
     def set_connected(self, connected: bool) -> None:
         """Programmatically updates connection UI without emitting signals."""
         self.connect_btn.blockSignals(True)
-        self.pause_btn.blockSignals(True)
         self.connect_btn.setChecked(connected)
         self._set_connected_ui(connected)
-        self.pause_btn.blockSignals(False)
         self.connect_btn.blockSignals(False)
+
+    def set_paused(self, paused: bool) -> None:
+        """Shows the paused state (e.g. after a trigger capture) without emitting."""
+        self.pause_btn.blockSignals(True)
+        self.pause_btn.setChecked(paused)
+        self.pause_btn.blockSignals(False)
+        self._style_pause(paused)
 
     def refresh_ports(self) -> None:
         """
@@ -188,15 +183,12 @@ class ConnectionPanel(QtWidgets.QGroupBox):
         Args:
             checked (bool): True if paused (Analysis Mode), False if Live.
         """
-        self.pause_btn.setText("Resume" if checked else "Pause")
-
-        if checked:
-            # Highlight button when paused to indicate non-live state
-            self.pause_btn.setStyleSheet(
-                "background-color: #F57F17; color: black; font-weight: bold;"
-            )
-        else:
-            # Reset to default style
-            self.pause_btn.setStyleSheet("")
-
+        self._style_pause(checked)
         self.pause_requested.emit(checked)
+
+    def _style_pause(self, paused: bool) -> None:
+        self.pause_btn.setText("Resume" if paused else "Pause")
+        # Highlight the button while paused, to show the view is not live.
+        self.pause_btn.setStyleSheet(
+            "background-color: #F57F17; color: black; font-weight: bold;" if paused else ""
+        )

@@ -42,6 +42,15 @@ Primary use cases:
   the session.
 - Link statistics in the status bar: throughput, samples/s, CRC errors, lost frames
   (`loop_cntr` gaps) and bytes dropped while re-syncing. Hover for the full breakdown.
+- **Recording and replay.** A session's raw bytes are saved to an `.sbtp` file, on demand or
+  automatically on connect. A replay goes through the same decoding as a live session,
+  errors included, at 1×–10× or maximum speed, and can be paused or stepped.
+- **Export** of the shown stream (the paused view, or its whole buffer) or of every stream,
+  to CSV or Parquet, with the time column first.
+- **Trigger capture**, oscilloscope style: when a signal crosses a level (rising, falling or
+  either), the time before and after is frozen for analysis. **Step-response metrics** (rise
+  time, overshoot, settling time, steady-state error) are shown next to the previous
+  capture's, whose traces are overlaid, e.g. before and after a gain change.
 
 ## Requirements
 
@@ -65,6 +74,9 @@ uv sync
 `uv sync` installs everything — runtime deps (`PyQt6`, `numpy`, `pyqtgraph`, `pyserial`) and
 dev tools (`pytest`, `ruff`, `mypy`) — into an isolated `.venv` in one step. No manual
 `pip install` or `venv` activation needed.
+
+Parquet export needs `pyarrow`, an optional extra: `uv sync --extra parquet` (or
+`--all-extras`). CSV export works without it.
 
 ## Running
 
@@ -136,6 +148,36 @@ CI (`.github/workflows/ci.yml`) runs lint, format check, mypy and the tests on e
    tab (Time Base) to keep it. **Samples** sets how much history every stream keeps.
 7. Use the **Configuration** tab to add/edit streams, frame fields, and signal definitions, then
    save to update `streams.json` on disk.
+8. **Recording** menu:
+   - **Record** (Ctrl+R) saves everything the port delivers, until you stop it or
+     disconnect. The file goes to the recordings folder (default `~/telemetry-recordings`),
+     named after the shown stream and the time, e.g. `pid_20260924-201530.sbtp`. `● REC` in
+     the status bar shows it's running.
+   - **Record automatically on connect** records every session (not replays).
+   - **Replay a recording…** plays a file through the normal pipeline: every stream is
+     decoded with the current `streams.json`, and the status bar warns if the recording was
+     made with different frame layouts. Choose the **Replay speed**, **Pause replay** or
+     **Step replay** (one recorded read at a time) from the same menu. When the file ends,
+     the session stops with "Replay finished".
+9. **File → Export shown stream…** writes every signal of the shown stream, hidden ones
+   too. While paused, that's the time range in view; otherwise the whole buffer. **Export
+   all streams…** writes each stream's buffer to its own file (`<name>_<stream>.csv`);
+   streams without data are skipped. The time column
+   (`time_s`) comes first. A value missing from a frame is an empty CSV field (a Parquet
+   null), and gap markers are left out.
+10. **Trigger / Step Response** panel (sidebar):
+    - Pick the trigger **Signal**, **Edge**, **Level**, and how much to keep **Before** and
+      **After** the crossing, then click **Arm** (while connected). At the crossing, the
+      capture is frozen in analysis mode with the Δ anchor at the trigger time. Single shot:
+      arm again for the next capture.
+    - If the buffer holds less than **Before**, the status bar says how much there was:
+      raise **Samples** to keep more.
+    - Choose the **Setpoint** and **Measurement** signals for the metrics: rise time
+      (10–90 %), overshoot, settling time (±2 %) and steady-state error. With **Overlay the
+      previous capture** on, the previous capture's traces are drawn dashed, lined up at
+      its trigger, and its metrics are listed below.
+    - `Resume` (the pause button, available even after a session ended) returns to the
+      live view and removes the overlay.
 
 ## Connecting Your MCU
 
@@ -326,18 +368,22 @@ serial_binary_tele_plotter/
 │   ├── config.py              # streams.json validation and loader
 │   ├── protocol/              # Wire format: CRC-8, FrameParser, RecordDecoder (numpy),
 │   │                          #   StreamRouter (multi-stream), stats, command encoding
-│   ├── transport/             # Transport interface, SerialTransport, SimTransport, ReaderThread
+│   ├── transport/             # Transport interface, SerialTransport, SimTransport,
+│   │                          #   ReplayTransport, ReaderThread
 │   ├── simulation/            # Frame synthesis from `sim` config, PID motor model
+│   ├── recording/             # .sbtp raw recordings: writer and reader
+│   ├── analysis/              # Export (CSV/Parquet), trigger detection, step-response metrics
 │   └── acquisition/
 │       ├── engine.py          # TelemetryEngine: lifecycle state machine (QThread)
 │       ├── storage.py         # SampleStore: versioned ring buffer per stream
 │       ├── lod.py             # Incremental min/max level of detail for live drawing
 │       └── timebase.py        # Per-stream time: unwrap, resets, gap markers
 ├── ui/
-│   ├── main_window.py         # Composition, engine thread, signal wiring
+│   ├── main_window.py         # Composition, engine thread, signal wiring, menus
+│   ├── app_settings.py        # QSettings keys (config path, recording options)
 │   ├── charts/                # TelemetryPlot (lanes), LiveFeed (pulls the store's overview),
-│   │                          #   lanes/series (Qt-free layout, range and decimation logic)
-│   ├── panels/                # Connection, PID, IMU, signals, time window panels
+│   │                          #   TriggerController, lanes/series (Qt-free logic)
+│   ├── panels/                # Connection, PID, IMU, signals, time window, trigger panels
 │   └── config/                # Stream configuration editor tab
 ├── tests/                     # pytest; `qt`-marked tests use real Qt
 ├── tools/                     # bench_pipeline.py (parser/storage), bench_render.py (GUI FPS)
@@ -349,11 +395,14 @@ serial_binary_tele_plotter/
 - **Threading:** a dedicated reader thread does blocking serial reads and parses them, so
   the OS buffer is drained however busy the GUI is. `TelemetryEngine` runs in its own
   `QThread`. The GUI talks to it only through Qt signals and queued calls.
-- **Data flow:** `SerialTransport` or `SimTransport` → `ReaderThread` → `FrameParser` (sync, CRC, all IDs) →
+- **Data flow:** `SerialTransport`, `SimTransport` or `ReplayTransport` → `ReaderThread` → `FrameParser` (sync, CRC, all IDs) →
   `StreamRouter` (numpy batch decode per layout) → one `SampleStore` per stream (a versioned
   ring buffer shared between threads). `LiveFeed` then pulls snapshots of the
   visible signals into `TelemetryPlot` at up to 30 FPS, only when there's new data, and
   backs off when frames are expensive. See `docs/adr/0002-target-acquisition-pipeline.md`.
+- **Recordings** keep the raw bytes of each read, with host timestamps, after a JSON header
+  holding the stream config. So a replay reproduces the session, and old recordings can be
+  decoded again after a config or decoder fix. Format: `docs/adr/0006-raw-recording-and-replay.md`.
 - **Performance:** hidden signals are never copied or drawn. The store keeps an incremental
   min/max summary of its buffer, so a live frame reads ~1000 points per signal whatever the
   buffer size. The live cursor readout still asks the store for exact values. Pausing
@@ -370,4 +419,6 @@ serial_binary_tele_plotter/
 | Gaps in traces | Frames lost | The status bar shows "lost N" (`loop_cntr` gaps); each loss is drawn as a gap in the trace |
 | Time axis runs too fast or slow | `time.scale_s` doesn't match the MCU loop period | Correct **Period** on the dashboard to check, then set it in Configuration → Time Base |
 | "Time counter went backwards" | The MCU restarted (or the time field reset) | Expected after a reset; the new data continues on a new segment after a gap |
+| "recorded with different frame layouts" | `streams.json` changed since the recording | The replay decodes with the current config; restore the old layout (the recording's header has it) to decode it as recorded |
+| Parquet isn't offered when exporting | `pyarrow` isn't installed | `uv sync --extra parquet` |
 | `uv run pytest` picks up wrong Python | Anaconda or system `pytest` in PATH | Always use `uv run pytest`, never bare `pytest` |
