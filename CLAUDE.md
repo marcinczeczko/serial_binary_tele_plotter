@@ -17,6 +17,8 @@ so you can work without hardware.
 3. `docs/reviews/2026-09-24-architecture-review.md`: known defects, with stable IDs
    (`C*` correctness, `P*` performance, `A*` architecture, `T*` tooling).
 4. `docs/adr/`: design decisions. ADR-0002 is the target pipeline.
+5. `docs/specs/`: working specs for the next roadmap items. **Next up: R8.3, then R8.4:
+   text-line streams, fully specified in `docs/specs/phase8-text-lines.md`.**
 
 Before starting non-trivial work, check whether a roadmap item or finding already covers
 it, and reference its ID in commits and PRs.
@@ -39,7 +41,10 @@ uv run python tools/bench_render.py   # GUI render budget (R3.4): 34 signals x 1
 CI (`.github/workflows/ci.yml`) runs exactly these on every PR. Keep them green. The two benchmarks
 are informational there (`bench_render` may not reach 30 FPS on a shared runner).
 
-Headless containers (e.g. Claude Code on the web) may lack `libEGL.so.1`. Either install
+On Claude Code on the web, `.claude/hooks/session-start.sh` (a SessionStart hook) installs
+those libraries and runs `uv sync --all-extras`, so the commands above work at once.
+
+Other headless containers may lack `libEGL.so.1`. Either install
 `libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 libglib2.0-0t64` with apt (what CI
 does), or run with `-p no:pytest-qt`. `tests/conftest.py` defaults `QT_QPA_PLATFORM` to
 `offscreen`.
@@ -95,7 +100,8 @@ ui/config/              streams.json editor (ADR-0009): tab (toolbar, stream tab
 tests/                  pytest: pure logic, stubbed-Qt legacy tests, `qt`-marked real-Qt tests
 tools/                  dev scripts (bench_pipeline.py)
 .github/workflows/      CI
-docs/                   records (see "Start here")
+.claude/                settings (read denies for secrets) and the web SessionStart hook
+docs/                   records and specs (see "Start here")
 ```
 
 ## Wire protocol (must stay compatible with firmware)
@@ -166,6 +172,21 @@ hold these bytes verbatim (ADR-0006), so a wire change also affects replaying ol
   parser/storage bug fix, first add a test that reproduces the bug.
 - Keep `README.md` in sync with behaviour. Supported types, protocol and config keys are
   user-facing.
+
+## How we work
+
+- **One PR per roadmap item** (or a small, related group), on the session's branch, with
+  the item ID in the title. The PR body lists what changed, the numbers and the checks run.
+- **The owner merges by saying "Merge".** Never merge on your own. On "Merge": squash-merge,
+  then restart the branch from the new `main` for the next item.
+- **Spike before building UI.** Design new screens as a canvas first and iterate with the
+  owner. They want the oscilloscope look, little text, and nothing "AI-bloated".
+- **Before pushing:** ruff, format, mypy and the full `uv run pytest` (with real Qt) all
+  clean. For a performance-sensitive change, run the benchmark on `main` and on the
+  branch, **interleaved** (a worktree helps). A single run on a shared container is noisy.
+- **Qt tests:** see "Commands" (`qtbot.addWidget`, parents for every QObject). If a crash
+  happens once, rerun the suite many times before calling it a flake. Record it in the
+  log either way.
 
 ## Keeping the records up to date (required)
 

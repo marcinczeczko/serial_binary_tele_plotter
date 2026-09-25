@@ -6,6 +6,20 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — Handoff: R8.3/R8.4 spec, web session hook
+
+- `docs/specs/phase8-text-lines.md`: the working spec for text-line streams (R8.3
+  decoder, R8.4 editor). It covers the config shape, pattern grammar, matching and
+  counting, the line-number X axis (`_line`), the simulator, the inference algorithm,
+  the canvas screens, acceptance tests and a PR split. The roadmap and CLAUDE.md point
+  to it, so a fresh session can pick up R8.3.
+- CLAUDE.md gains a "How we work" section: one PR per item, merge on the owner's
+  "Merge", spike before UI, interleaved benchmarks.
+- `.claude/hooks/session-start.sh` (SessionStart, web only) installs the Qt libraries
+  CI installs and runs `uv sync --all-extras`.
+
+---
+
 ## 2026-09-25 — R8.2 Device profiles
 
 - **Profiles (ADR-0010).** A config file is a device profile: schema 3 adds an optional

@@ -321,6 +321,10 @@ layout) instead of binary frames. Binary or text is a property of the device, so
 choice lives in a named **device profile** picked before connecting, and each text stream
 is a **line pattern** inferred from pasted console output.
 
+**Next: R8.3, then R8.4.** Both are specified in detail (config shape, pattern grammar,
+matching, inference, editor screens, acceptance tests) in
+[`docs/specs/phase8-text-lines.md`](specs/phase8-text-lines.md).
+
 - [x] **R8.1 Decoder slot**: the receive path's byte-to-records step becomes a
   `LinkDecoder` interface. Today's `FrameParser` + `StreamRouter` sit behind it as
   `BinaryFrameDecoder`; the engine only knows the interface.
