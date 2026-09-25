@@ -18,7 +18,8 @@ Primary use cases:
   each with its own Y axis. Each lane's Y range can be auto, auto-grow or manual. 34
   signals × 100k samples stay at 30 FPS.
 - One window, laid out like a bench scope: one top bar (profile, port, RUN/STOP, the streams
-  as tabs with a data indicator, messages, history, rate, trigger, REC, link health), a
+  as tabs with a data indicator, messages, Window, Trigger; REC and link problems only
+  while they're true), a
   Signals pane (legend, visibility, lanes and the cursor readout in
   one list) and a Controls / Step response pane, each opened and closed from a tab on the
   window's edge. Which panes are open and their widths are remembered per profile.
@@ -58,10 +59,11 @@ Primary use cases:
   Lost frames are drawn as gaps, never bridged by a line.
 - Adjustable ring-buffer window size, and a per-stream **Period** that can be overridden for
   the session.
-- Link health at the right end of the top bar: the throughput, and in amber only when
-  something was dropped (`CRC 3  LOST 12`: CRC errors, size mismatches, bytes dropped while
-  re-syncing, lost frames from `loop_cntr` gaps, counter resets). Hover for the full
-  breakdown and samples/s.
+- Link problems at the right end of the top bar, in amber and in words, only while
+  something was dropped (`3 CRC errors · 12 lost`: CRC errors, size mismatches, bytes
+  dropped while re-syncing, lost frames from `loop_cntr` gaps, counter resets; a text
+  profile: lines too long, bad values, lost, resets). **View → Link statistics** shows
+  every counter, the throughput and samples/s, live.
 - **Recording and replay.** A session's raw bytes are saved to an `.sbtp` file, on demand or
   automatically on connect. A replay goes through the same decoding as a live session,
   errors included, at 1×–10× or maximum speed, and can be paused or stepped.
@@ -143,8 +145,8 @@ CI (`.github/workflows/ci.yml`) runs lint, format check, mypy and the tests on e
 ## Usage
 
 The window has one **top bar**, left to right: the profile, the port and `Connect`, the
-`RUN`/`STOP` box, the stream tabs, a short message, `H` (the history shown), the rate and
-points, `T` (the trigger), `REC` and the link health. Below it, the **Signals** pane on the left and the **Tune** / **Step response** pane on the
+`RUN`/`STOP` box, the stream tabs, a short message, **Window** (the time the plot shows) and
+**Trigger**. `REC` and link problems appear only while they're true. Below it, the **Signals** pane on the left and the **Tune** / **Step response** pane on the
 right. The tabs on the window's edges (`SIGNALS`; `TUNE` and `STEP`, or `TERMINAL` for a
 text profile) are always there: a lit tab closes its pane, an unlit one opens it. Keys: `[`
 toggles Signals, `]` the right pane, `\` both (plot only); a text field you're typing in
@@ -161,13 +163,12 @@ profile; drag the edge between a pane and the plot to resize it.
    baud; a profile's `baud` is used until you pick another one for it.
 3. Pick a **serial port** (the list is re-read each time it opens) and, for a real port, the
    **baud rate**, then click `Connect`. Use `VIRTUAL` for the built-in simulator (it has no
-   baud). Both are remembered for the next run (a port that's gone isn't selected). The bar's
-   right end shows the link health. Messages (what was sent, a file saved) fade after a few
+   baud). Both are remembered for the next run (a port that's gone isn't selected). If data
+   is dropped, the bar's right end says so in amber. Messages (what was sent, a file saved) fade after a few
    seconds; warnings and errors stay until the next message.
 4. Pick a **stream tab** in the top bar. Every stream is decoded all the time, so a tab is
    only a view. The square before each name is green while its frames arrive and hollow when
-   none do (check its `stream_id` and layout); the rate is in the tab's tooltip. The shown
-   stream's rate is also next to `H` (`200 Hz` over `2.00k pts`).
+   none do (check its `stream_id` and layout); the rate is in the tab's tooltip.
 5. **Signals** pane: the shown stream's signals, grouped by lane (`SPEED rps`).
    - A left/right pair is one row: its name, then an **L** and an **R** swatch in the
      traces' colours. Pairs are found by the label prefix `L: ` / `R: `, else by the key
@@ -195,7 +196,7 @@ profile; drag the edge between a pane and the plot to resize it.
    view). A click drops the Δ anchor **B** (drag it to move it), and the Signals pane shows
    A, B and ΔT, and each signal's Δ in its tooltip. `STOP` again (or Space) returns to the live view; it works even after a session ended
    (disconnected, the box shows `—`).
-7. The **`H`** item (`H 10.0 s`, the history shown: period × samples) opens the
+7. **Window** (`Window 10 s`, the time the plot shows: period × samples) opens the
    **Period** of the shown stream (the time between two frames, from its `time` block) and
    the **Samples** of history every stream keeps. Changing the period re-times that
    stream's whole history for this session; the value turns amber while it differs from
@@ -274,7 +275,8 @@ profile; drag the edge between a pane and the plot to resize it.
      stream's size and its first problem as you edit. Saving updates `streams.json` (the
      previous file is kept as `streams.json.bak`); a file with errors isn't saved.
      Commands and panels are edited in the file itself.
-10. **Recording** menu (and the top bar's `REC`, which turns red with the elapsed time):
+10. **Recording** menu (while recording, the top bar shows a red `REC 02:14`; click it to
+    stop):
    - **Record** (Ctrl+R) saves everything the port delivers, until you stop it or
      disconnect. The file goes to the recordings folder (default `~/telemetry-recordings`),
      named after the shown stream and the time, e.g. `pid_20260924-201530.sbtp`. `REC`'s
@@ -291,10 +293,11 @@ profile; drag the edge between a pane and the plot to resize it.
     streams without data are skipped. The time column (`time_s`) comes first. A value
     missing from a frame is an empty CSV field (a Parquet null), and gap markers are left
     out.
-12. **Trigger** (`T` in the top bar):
+12. **Trigger** (in the top bar):
     - Pick the trigger **Signal**, **Edge**, **Level**, and how much to keep **Before** and
-      **After** the crossing, then click **Arm** (while connected). While armed, `T` turns
-      orange and shows the source's colour, the edge and the level (`╲ 0.15 ARMED`; the
+      **After** the crossing, then click **Arm** (while connected). While armed, **Trigger**
+      turns orange and shows the source's colour, the edge and the level (`Trigger ╲ 0.15
+      ARMED`; the
       tooltip says `↘ L: Target Setpoint < 0.15`), and the level is a
       dashed line on the plot: drag it to change the level.
     - At the crossing, the capture is frozen in analysis mode with the Δ anchor at the
@@ -482,7 +485,7 @@ For this profile the firmware prints, for example,
 and blank lines are skipped. Each line is tried against the streams in file order, and
 the first full match wins. A line that matches no pattern (a boot banner, a debug print)
 is counted as *unmatched*. A line longer than 1024 bytes is dropped and counted. The
-link health's tooltip shows these counts for a text profile.
+**View → Link statistics** shows these counts for a text profile; bad values, lines too long, lost and resets also show in the top bar while non-zero.
 
 **X axis.** `time.field` works as for binary streams. Without one, it's `loop_cntr` if the
 pattern has that slot, otherwise the stream's **line number** (`_line`): each matched
@@ -677,7 +680,7 @@ serial_binary_tele_plotter/
 │   │                          #   presets, Live mode, window layout
 │   ├── charts/                # TelemetryPlot (lanes, markers, trigger line), LiveFeed (pulls
 │   │                          #   the store's overview), TriggerController, lanes/series
-│   ├── panels/                # Top bar (connection, RUN/STOP, stream tabs, H/T/REC), Signals
+│   ├── panels/                # Top bar (connection, RUN/STOP, stream tabs, Window, Trigger), Signals
 │   │                          #   (legend + readout), control panels + send log, time window,
 │   │                          #   trigger
 │   └── config/                # Stream editor (File → Edit profile): frame view,
@@ -712,9 +715,9 @@ serial_binary_tele_plotter/
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | No serial ports appear | OS permission denied | Add user to `dialout` group (Linux) or grant Terminal serial access (macOS) |
-| Plot is flat / no data | `stream_id` or frame layout mismatch | Check the link health's tooltip (top bar, right): "Frames with unconfigured stream IDs" means no stream in `streams.json` uses the ID the MCU sends; "Size mismatches" means the field list doesn't match the firmware struct |
-| Data looks corrupted | Baud rate mismatch | The link health turns amber with `CRC` and `SYNC` counts; make firmware and UI baud rates identical |
-| Gaps in traces | Frames lost | The link health shows `LOST N` (`loop_cntr` gaps); each loss is drawn as a gap in the trace |
+| Plot is flat / no data | `stream_id` or frame layout mismatch | Check **View → Link statistics**: "Frames with unconfigured stream IDs" means no stream in `streams.json` uses the ID the MCU sends; "Size mismatches" means the field list doesn't match the firmware struct |
+| Data looks corrupted | Baud rate mismatch | The top bar shows `CRC errors` and `bytes dropped` in amber; make firmware and UI baud rates identical |
+| Gaps in traces | Frames lost | The top bar shows `N lost` (`loop_cntr` gaps); each loss is drawn as a gap in the trace |
 | Time axis runs too fast or slow | `time.scale_s` doesn't match the MCU loop period | Correct the **Period** (time window button) to check, then set it in the stream editor → Time Base |
 | "Time counter went backwards" | The MCU restarted (or the time field reset) | Expected after a reset; the new data continues on a new segment after a gap |
 | "recorded with different frame layouts" | `streams.json` changed since the recording | The replay decodes with the current config; restore the old layout (the recording's header has it) to decode it as recorded |

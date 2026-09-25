@@ -81,6 +81,13 @@ item a box separated by 1 px dividers:
 10. **Link health**: `29 kB/s` dim. When anything was dropped: `CRC 3  LOST 12` in black on an amber
     block. The full breakdown stays in the tooltip.
 
+*Changed after R9.5 (owner, 2026-09-25): too many numbers.* Items 6–10 became: `Window 10 s`
+(words, no `H`), `Trigger` (words, no `T`; orange with its source, edge, level and ARMED while
+armed), and, only while true, `REC 02:14` and link problems in words (`3 CRC errors · 12 lost`;
+a text profile: `2 bad values · 1 line too long`). Rate and points are gone (the rate is in
+the stream tab's tooltip, the points in the Window popup); every link counter is in View → Link
+statistics. No status bar comes back: an empty-by-default row was finding 17.
+
 ### Panes and edge tabs (R9.3)
 
 - The docks go. The window is a horizontal splitter: Signals pane, plot, right pane.

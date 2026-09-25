@@ -31,7 +31,7 @@ from core.protocol.stats import LinkReport, format_link_report
 from core.recording.sbtp import SUFFIX as RECORDING_SUFFIX
 from core.recording.sbtp import recording_name
 from core.types import EngineState, PlotMode, PlotPacketWithBounds, StreamConfig
-from styles import AMBER, ORANGE, RED, TEXT, TEXT_MUTED
+from styles import AMBER, ORANGE, RED, TEXT, TEXT_DIM
 from ui.app_settings import (
     DEFAULT_RECORDINGS_DIR,
     KEY_CONFIG_PATH,
@@ -52,11 +52,9 @@ from ui.panels.command_panel import CommandPanel, SendRequest
 from ui.panels.container import MainControlPanel
 from ui.panels.profile_dialog import ProfileDialog
 from ui.panels.top_bar import (
-    Badge,
     LinkHealth,
     MessageLabel,
     PartsButton,
-    RatePoints,
     Square,
     Text,
     TopBar,
@@ -161,10 +159,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.top_bar = TopBar()
         self.lbl_status = MessageLabel()
         self.time_btn = _popup_button(self.panel.time_panel)
-        self.rate_points = RatePoints()
         self.trigger_btn = _popup_button(self.panel.trigger_panel.setup)
         self.record_btn = PartsButton()
         self.lbl_link = LinkHealth()
+        self._link_dialog: QtWidgets.QDialog | None = None
+        self._link_dialog_text = QtWidgets.QLabel()
 
         # --- Panes (R9.3, ADR-0012): Signals | plot | Tune or Step, opened from edge tabs ---
         self.command_log = CommandLog()
@@ -530,21 +529,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_time_button()
 
     def _update_time_button(self) -> None:
-        """`H 10.0 s`: the history shown (period × samples), amber while the period is
-        overridden; the rate/points item beside it, for the shown stream."""
+        """`Window 10 s`: the time the plot shows (period × samples); amber while the
+        period is overridden. Click: the period and samples."""
         tp = self.panel.time_panel
         period_ms, samples = tp.get_period(), tp.get_samples()
         color = AMBER if tp.is_overridden() else TEXT
         self.time_btn.set_parts(
-            [Badge("H"), Text(format_duration(period_ms * samples / 1000), color)]
+            [
+                Text("Window", TEXT_DIM, number=False),
+                Text(format_duration(period_ms * samples / 1000), color),
+            ]
         )
         self.time_btn.setToolTip(
-            f"History: period {format_number(period_ms)} ms × {samples} samples"
+            f"Time shown: period {format_number(period_ms)} ms × {samples} samples"
             + (" (period overridden for this session)" if tp.is_overridden() else "")
-        )
-        self.rate_points.set_points(samples)
-        self.rate_points.set_rate(
-            self.panel.stream_tabs.rate(self.panel.current_stream_key() or "")
+            + ". Click to change."
         )
 
     def _on_period_changed(self, period_ms: float) -> None:
@@ -608,7 +607,6 @@ class MainWindow(QtWidgets.QMainWindow):
             self._activity = None
             for key in self.stores.keys():
                 self.panel.stream_tabs.set_activity(key, None)
-            self.rate_points.set_rate(None)
             self._update_menus()
 
     def _on_session_ended(self, message: str) -> None:
@@ -625,6 +623,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_link_stats(self, report: LinkReport) -> None:
         self.lbl_link.show_report(*format_link_report(report))
+        self.top_bar.set_shown(self.lbl_link, self.lbl_link.has_problems)
+        if self._link_dialog is not None:
+            self._link_dialog_text.setText(self._link_statistics_text())
         if report["format"] == "text":  # the editor's Line view shows the newest lines
             self.configurator.set_last_lines(report["last_lines"], report["last_unmatched"])
             if report["replies"] or report["replies_dropped"]:  # the terminal's (R8.5)
@@ -648,9 +649,6 @@ class MainWindow(QtWidgets.QMainWindow):
         for key, total in totals.items():
             rate = (total - previous[1].get(key, total)) / dt
             self.panel.stream_tabs.set_activity(key, rate)
-        self.rate_points.set_rate(
-            self.panel.stream_tabs.rate(self.panel.current_stream_key() or "")
-        )
         self._update_record_button()
 
     def _handle_pause(self, paused: bool) -> None:
@@ -856,6 +854,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_plot_only = _action(view_menu, "Plot only (both panes)", self.toggle_both_panes)
         self.act_plot_only.setShortcut(QtGui.QKeySequence("\\"))
         view_menu.addSeparator()
+        self.act_link_stats = _action(view_menu, "Link statistics", self.show_link_statistics)
+        view_menu.addSeparator()
         self.act_reset_view = _action(view_menu, "Reset view to the profile", self.panel.reset_view)
 
         self.act_new_profile = _action(file_menu, "New profile…", self.new_profile)
@@ -897,8 +897,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_top_bar(self) -> None:
         """
-        One row of boxed labels (R9.2, ADR-0012): profile | port, Connect | RUN/STOP |
-        stream tabs | message | H window | rate/points | T trigger | REC | link health.
+        One row (R9.2, ADR-0012): profile | port, Connect | RUN/STOP | stream tabs |
+        message | Window | Trigger, then REC and link problems only while they're true.
         """
         conn = self.panel.conn_panel
         bar = self.top_bar
@@ -908,14 +908,12 @@ class MainWindow(QtWidgets.QMainWindow):
         bar.add(self.panel.stream_tabs)
         bar.add_stretch(self.lbl_status)
         bar.add_divider()
-        self.time_btn.setToolTip("History shown (period × samples); click to change")
         bar.add(self.time_btn)
-        bar.add(self.rate_points)
-        bar.add(self.trigger_btn)
+        bar.add(self.trigger_btn, divider=False)
         self.record_btn.setCheckable(True)
         self.record_btn.clicked.connect(lambda _=False: self.act_record.trigger())
-        bar.add(self.record_btn)
-        bar.add(self.lbl_link, divider=False)
+        bar.add_optional(self.record_btn)
+        bar.add_optional(self.lbl_link)
         conn.setParent(bar)  # the owner of the moved widgets; never shown itself
         conn.hide()
         self._update_record_button()
@@ -923,14 +921,37 @@ class MainWindow(QtWidgets.QMainWindow):
         pause = QtGui.QShortcut(QtGui.QKeySequence("Space"), self)
         pause.activated.connect(self.panel.conn_panel.pause_btn.click)
 
+    def _link_statistics_text(self) -> str:
+        link = self.lbl_link
+        if not link.rate:
+            return "No data yet: connect to see the link's statistics."
+        return f"{link.rate}\n{link.details}"
+
+    def show_link_statistics(self) -> None:
+        """View → Link statistics: every counter, live while the window is open."""
+        if self._link_dialog is None:
+            dialog = QtWidgets.QDialog(self)
+            dialog.setWindowTitle("Link statistics")
+            layout = QtWidgets.QVBoxLayout(dialog)
+            self._link_dialog_text = QtWidgets.QLabel()
+            self._link_dialog_text.setTextInteractionFlags(
+                QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            layout.addWidget(self._link_dialog_text)
+            self._link_dialog = dialog
+        self._link_dialog_text.setText(self._link_statistics_text())
+        self._link_dialog.show()
+        self._link_dialog.raise_()
+
     def show_configuration(self) -> None:
         self.config_window.show()
         self.config_window.raise_()
         self.config_window.activateWindow()
 
     def _update_record_button(self) -> None:
-        """REC: a hollow square; recording: a red one and the time so far."""
+        """REC, only while recording: a red square and the time so far (click stops)."""
         recording = bool(self._recording_path)
+        self.top_bar.set_shown(self.record_btn, recording)
         self.record_btn.setChecked(recording)
         self.record_btn.setEnabled(self.act_record.isEnabled())
         if recording and self._rec_started is not None:
@@ -940,12 +961,12 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             self.record_btn.setToolTip(f"Recording to {self._recording_path} (Ctrl+R stops)")
         else:
-            self.record_btn.set_parts([Square(TEXT_MUTED, filled=False), Text("REC", px=12)])
+            self.record_btn.set_parts([Text("REC", number=False, px=12)])  # hidden
             self.record_btn.setToolTip("Record the session's raw bytes (Ctrl+R)")
 
     def _update_trigger_ui(self) -> None:
         """
-        The bar's `T`: `—` when idle; armed, an orange T, the source's colour, the edge and
+        The bar's `Trigger`; armed, in orange with the source's colour, the edge and
         level, then ARMED. The level line shows on the plot while armed.
         """
         panel = self.panel.trigger_panel
@@ -957,16 +978,20 @@ class MainWindow(QtWidgets.QMainWindow):
             word = "ARMED" if state == "armed" else "CAPTURE"
             self.trigger_btn.set_parts(
                 [
-                    Badge("T", ORANGE, "#000"),
                     Square(str(sig.get("color", TEXT)), size=10),
-                    Text(f"{EDGE_GLYPHS.get(spec.edge, '')} {format_number(spec.level)}"),
-                    Text(word, ORANGE, bold=True, px=11),
+                    Text("Trigger", ORANGE, number=False, bold=True),
+                    Text(
+                        f"{EDGE_GLYPHS.get(spec.edge, '')} {format_number(spec.level)}",
+                        ORANGE,
+                        bold=True,
+                    ),
+                    Text(word, ORANGE, number=False, bold=True, px=12),
                 ]
             )
             self.trigger_btn.setToolTip(f"{panel.summary()} · {word}")
             self.plot.set_trigger_level(spec.signal, spec.level)
         else:
-            self.trigger_btn.set_parts([Badge("T"), Text("—", TEXT_MUTED)])
+            self.trigger_btn.set_parts([Text("Trigger", number=False)])
             self.trigger_btn.setToolTip("Trigger: capture a step (a signal crossing a level)")
             self.plot.set_trigger_level(None)
 

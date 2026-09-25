@@ -3,8 +3,11 @@ The top bar (R9.2, ADR-0012 decision 1): one 36 px row of boxed labels, as on a 
 in place of the toolbar, the stream-tabs row and the status bar.
 
 Left to right: profile | port and Connect | RUN/STOP | stream tabs | a transient message |
-`H` window | rate / points | `T` trigger | REC | link health. The widgets here only draw;
-`MainWindow` fills them from the engine's reports and the panels' state.
+`Window 10 s` | `Trigger`, and only while they're true: REC with its time, and link
+problems in words (`3 CRC errors · 12 lost`). Idle state isn't shown: the owner found the
+scope letters (`H`, `T`), the rate and points and an idle `30 kB/s` more noise than help
+(after R9.5). The widgets here only draw; `MainWindow` fills them from the engine's
+reports and the panels' state.
 """
 
 from __future__ import annotations
@@ -50,22 +53,17 @@ def _sig3(value: float) -> str:
     return f"{value:.{decimals}f}"
 
 
+def _trim(text: str) -> str:
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
 def format_duration(seconds: float) -> str:
-    """A time span in the unit that keeps it readable: `10.0 s`, `500 ms`, `250 µs`."""
+    """A time span in the unit that keeps it readable: `10 s`, `2.5 s`, `500 ms`, `250 µs`."""
     if seconds >= 1:
-        return f"{_sig3(seconds)} s"
+        return f"{_trim(_sig3(seconds))} s"
     if seconds >= 1e-3:
-        return f"{_sig3(seconds * 1e3)} ms"
-    return f"{_sig3(seconds * 1e6)} µs"
-
-
-def format_count(n: int) -> str:
-    """A point count as a memory-depth label: `500`, `2.00k`, `100k`, `1.00M`."""
-    if n < 1000:
-        return str(n)
-    if n < 1_000_000:
-        return f"{_sig3(n / 1e3)}k"
-    return f"{_sig3(n / 1e6)}M"
+        return f"{_trim(_sig3(seconds * 1e3))} ms"
+    return f"{_trim(_sig3(seconds * 1e6))} µs"
 
 
 # --- painted parts ----------------------------------------------------------------------
@@ -273,54 +271,33 @@ class MessageLabel(QtWidgets.QLabel):
         self.setToolTip("")
 
 
-class RatePoints(QtWidgets.QLabel):
-    """Two small lines, like a scope's sample rate over memory depth: `200 Hz` / `2.00k pts`."""
-
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
-        self.setContentsMargins(12, 0, 12, 0)
-        self.setStyleSheet(f"color: {TEXT_DIM}; {NUMBER_CSS} font-size: 10.5px;")
-        self._rate: float | None = None
-        self._points = 0
-        self._show()
-
-    def set_rate(self, rate_hz: float | None) -> None:
-        self._rate = rate_hz
-        self._show()
-
-    def set_points(self, points: int) -> None:
-        self._points = points
-        self._show()
-
-    def _show(self) -> None:
-        rate = f"{self._rate:.0f} Hz" if self._rate else "— Hz"
-        self.setText(f"{rate}\n{format_count(self._points)} pts")
-        self.setToolTip("Samples per second of the shown stream, and the points kept per signal")
-
-
 class LinkHealth(QtWidgets.QLabel):
-    """`29 kB/s`, dim; anything dropped: black on an amber block. Details in the tooltip."""
+    """
+    Link problems in words, black on amber (`3 CRC errors · 12 lost`); nothing while the
+    link is clean (`has_problems` false, and the owner hides the item). Every counter and
+    the byte rate stay in the tooltip and in View → Link statistics.
+    """
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.problems = ""
+        self.setStyleSheet(
+            f"background: {AMBER}; color: #000; font-size: 12px; font-weight: bold;"
+            " padding: 0 12px; margin: 4px 0;"
+        )
+        self.rate = ""
+        self.details = ""
         self.show_report("", "", "")
 
+    @property
+    def has_problems(self) -> bool:
+        return bool(self.text())
+
     def show_report(self, rate: str, problems: str, tooltip: str) -> None:
-        self.problems = problems
-        self.setText(f"{problems}" if problems else rate)
+        self.rate = rate
+        self.details = tooltip
+        self.setText(problems)
         self.setToolTip(f"{rate}\n{tooltip}".strip())
-        if problems:
-            self.setStyleSheet(
-                f"background: {AMBER}; color: #000; {NUMBER_CSS} font-size: 12px;"
-                " font-weight: bold; padding: 0 12px;"
-            )
-        else:
-            self.setStyleSheet(
-                f"color: {TEXT_MUTED}; {NUMBER_CSS} font-size: 12px; padding: 0 12px;"
-            )
 
 
 class TopBar(QtWidgets.QFrame):
@@ -339,6 +316,7 @@ class TopBar(QtWidgets.QFrame):
         self._layout = QtWidgets.QHBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 1)
         self._layout.setSpacing(0)
+        self._optional: dict[QtWidgets.QWidget, QtWidgets.QFrame] = {}
 
     def add(self, *widgets: QtWidgets.QWidget, divider: bool = True, spacing: int = 0) -> None:
         """One item: its widgets side by side, then a divider."""
@@ -363,3 +341,19 @@ class TopBar(QtWidgets.QFrame):
 
     def add_stretch(self, widget: QtWidgets.QWidget) -> None:
         self._layout.addWidget(widget, 1)
+
+    def add_optional(self, widget: QtWidgets.QWidget) -> None:
+        """An item shown only while it has something to say, with a divider before it."""
+        line = QtWidgets.QFrame()
+        line.setObjectName("top_divider")
+        line.setFixedWidth(1)
+        self._layout.addWidget(line)
+        self._layout.addWidget(widget)
+        self._optional[widget] = line
+        self.set_shown(widget, False)
+
+    def set_shown(self, widget: QtWidgets.QWidget, shown: bool) -> None:
+        widget.setVisible(shown)
+        line = self._optional.get(widget)
+        if line is not None:
+            line.setVisible(shown)
