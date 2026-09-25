@@ -146,6 +146,11 @@ Step:
   letter markers can't be drawn as fixed-size symbols without that, put them in the axis gutters as
   widgets. Check with `tools/bench_render.py`, interleaved against `main`.
 
+*As built (R9.6):* the trigger-time `T` is on the top lane only, and the `A` / `B` flags sit one
+row below it (A right of its line, B left) so all three stay readable when they coincide
+right after a capture. The X unit goes on the last label that fits; labels after it are
+left blank.
+
 ## Items
 
 | Item | What | Main files |

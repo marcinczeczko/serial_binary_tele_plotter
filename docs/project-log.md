@@ -6,6 +6,23 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — R9.6 Graticule and markers: Phase 9 complete
+
+- `ui/charts/graticule.py`: per lane, a `Graticule` behind the traces (1 px frame, 10 dotted
+  divisions, dotted lines at the Y ticks with a brighter zero, a centre crosshair with 5
+  minor ticks per division) and `LaneMarkers` in front (the trigger `T` on the right edge at
+  the level and at the top at the trigger time; cursor `A` filled / `B` outlined flags on the
+  top lane with the A–B span shaded). Both are parented to the ViewBox, in its pixels; their
+  rect changes only on resize, never in `paint()`, so no second paint (R3.4).
+- pyqtgraph's axis grid is off. `TimeAxis` puts ` s` on the last X label that fits and blanks
+  any after it (no `Time [s]` row). Lane names dim, small caps (`SPEED rps`). Cursor A solid,
+  B dashed, both light grey.
+- `bench_render.py` interleaved, 3 × 6 s: main paint 9.0/8.9/8.8 ms mean, branch 8.5/8.4/8.5
+  ms (the axis grid cost more than the graticule); 30.3 FPS and one paint per frame on both;
+  nothing lost. `tests/test_qt_graticule.py` (4). 479 tests pass (3 runs).
+
+---
+
 ## 2026-09-25 — Quieter top bar: words, and only what's true
 
 - The owner found the bar's right end unreadable (`H 10.0 s | 202 Hz 2.00k pts | T — | □ REC |

@@ -14,6 +14,9 @@ Primary use cases:
 
 ## Features
 
+- Each lane looks like a scope screen: a framed graticule (10 dotted divisions, dotted lines
+  at the Y ticks with a brighter zero, a centre crosshair with minor ticks), the lane's name
+  in small caps up its left edge, and the time unit on the last X label (`2.5 s`).
 - Live multi-signal plotting via pyqtgraph, in **lanes**: stacked plots on one time axis,
   each with its own Y axis. Each lane's Y range can be auto, auto-grow or manual. 34
   signals × 100k samples stay at 30 FPS.
@@ -194,7 +197,9 @@ profile; drag the edge between a pane and the plot to resize it.
      data in view), Auto-grow (only widens) or Manual, and whether zero is always included.
 6. The `RUN` box (or Space) turns to `STOP` and enters analysis mode: zoom and pan freely (Auto lanes fit what's in
    view). A click drops the Δ anchor **B** (drag it to move it), and the Signals pane shows
-   A, B and ΔT, and each signal's Δ in its tooltip. `STOP` again (or Space) returns to the live view; it works even after a session ended
+   A, B and ΔT, and each signal's Δ in its tooltip. On the plot, A (the mouse) is a solid
+   light-grey line and B a dashed one, the span between them is faintly shaded, and the top
+   lane carries their `A` / `B` flags. `STOP` again (or Space) returns to the live view; it works even after a session ended
    (disconnected, the box shows `—`).
 7. **Window** (`Window 10 s`, the time the plot shows: period × samples) opens the
    **Period** of the shown stream (the time between two frames, from its `time` block) and
@@ -299,9 +304,11 @@ profile; drag the edge between a pane and the plot to resize it.
       turns orange and shows the source's colour, the edge and the level (`Trigger ╲ 0.15
       ARMED`; the
       tooltip says `↘ L: Target Setpoint < 0.15`), and the level is a
-      dashed line on the plot: drag it to change the level.
+      dashed orange line on the plot with an orange `T` on the lane's right edge: drag the
+      line to change the level.
     - At the crossing, the capture is frozen in analysis mode with the Δ anchor at the
-      trigger time, and the time before it is shaded. Single shot: arm again for the next
+      trigger time (an orange `T` at the top of the plot), and the time before it is
+      shaded. Single shot: arm again for the next
       capture. If the buffer holds less than **Before**, the top bar says how much there
       was: raise **Samples** to keep more.
     - The **Step** pane (it comes forward on a capture): a table of rise time (10–90 %),

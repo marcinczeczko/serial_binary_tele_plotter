@@ -1185,7 +1185,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if spec is not None:  # shade what came before the trigger
             self.plot.set_capture_window((t_trig - spec.pre_s, t_trig))
         self.show_right_view("step")
-        text = f"Triggered at {t_trig:.3f} s (paused; Resume for live view)"
+        text = f"Triggered at {t_trig:.3f} s (stopped; RUN for live view)"
         self._say(text + (f": {note}" if note else ""), "warn")
 
     def closeEvent(self, event: QtGui.QCloseEvent | None) -> None:

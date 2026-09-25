@@ -66,7 +66,7 @@ def test_signals_are_drawn_in_their_groups_lanes(qtbot: Any) -> None:
     plot = _plot(qtbot)
 
     assert plot.shown_lanes() == ["slow", "big"]  # "extra" holds only a hidden signal
-    assert plot.lanes["slow"].plot.getAxis("left").labelText == "Speed [rps]"
+    assert plot.lanes["slow"].plot.getAxis("left").labelText == "SPEED rps"  # small caps (R9.6)
     plot.set_signal_visible("hidden", True)
     assert plot.shown_lanes() == ["slow", "big", "extra"]
     plot.set_signal_visible("pwm", False)

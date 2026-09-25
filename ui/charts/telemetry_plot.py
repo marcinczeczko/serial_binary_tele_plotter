@@ -18,6 +18,11 @@ The cursor readout is emitted (`readout_changed`) and shown in the Signals panel
 on the plot (R6.2): a visible `TextItem` costs a second paint per frame. Overlays are plain
 lines and regions for the same reason: command markers (R6.3), and the trigger's level line
 and capture window (R6.5).
+
+Scope look (R9.6): each lane is a framed graticule with the trigger `T` and cursor `A`/`B`
+markers (`graticule.py`: painted items that never move during paint), the lane's name dim
+in small caps up its Y gutter, and the time unit on the last X tick instead of a `Time [s]`
+row. Cursor A (the mouse) is a solid light-grey line, B (the Δ anchor) a dashed one.
 """
 
 from __future__ import annotations
@@ -38,8 +43,10 @@ from core.types import (
     StreamConfig,
     StreamSignalConfig,
 )
+from ui.charts.graticule import CURSOR, FRAME, Graticule, LaneMarkers
 from ui.charts.lanes import DEFAULT_LANE, Y_MODES, LaneSpec, lane_layout, target_y_range, union
 from ui.charts.series import DrawData, Interpolator, Readout, finite_bounds, prepare_draw
+from ui.panels.signal_rows import lane_title
 
 DEFAULT_LINE_WIDTH = 1
 AXIS_WIDTH = 64  # px: equal left-axis widths keep the lanes' time axes aligned
@@ -48,6 +55,9 @@ MIN_BUCKETS = 300  # before the view has a real width
 CURSOR_RATE_HZ = 60  # mouse-move readout updates per second (P7)
 MARKER_COLOR = "#FFB000"
 TRIGGER_COLOR = "#FF9A1A"
+TICK_TEXT = "#8a8a8a"
+LANE_NAME = "#777777"
+TIME_UNIT = "s"
 MODE_LABELS = {"auto": "Auto (fit view)", "auto-grow": "Auto-grow", "manual": "Manual"}
 
 _PEN_STYLES = {
@@ -64,6 +74,33 @@ class _SignalView(TypedDict):
     visible: bool  # the user's choice; curve.isVisible() is also False in a hidden lane
 
 
+class TimeAxis(pg.AxisItem):  # type: ignore[misc]  # pyqtgraph is untyped
+    """Time ticks; the last one carries the unit (`2.5 s`), so there's no `Time [s]` row."""
+
+    def tickStrings(  # noqa: N802
+        self, values: list[float], scale: float, spacing: float
+    ) -> list[str]:
+        strings: list[str] = super().tickStrings(values, scale, spacing)
+        # The last tick whose label fits: pyqtgraph skips a label that would cross the
+        # axis's end, so a unit on that one would never be seen.
+        lo, hi = sorted(self.range)
+        length = float(self.geometry().width())
+        metrics = QtGui.QFontMetrics(self.style.get("tickFont") or self.font())
+        fits = []
+        for i, v in enumerate(values):
+            x = (v * scale - lo) / (hi - lo) * length if hi > lo else 0.0
+            half = metrics.horizontalAdvance(f"{strings[i]} {TIME_UNIT}") / 2
+            if half <= x <= length - half:
+                fits.append(i)
+        if fits:
+            last = max(fits, key=lambda i: values[i])
+            strings[last] = f"{strings[last]} {TIME_UNIT}"
+            for i, v in enumerate(values):  # the unit's label is the last one shown
+                if v > values[last]:
+                    strings[i] = ""
+        return strings
+
+
 class Lane:
     """One stacked plot: its curves' Y axis, range mode, cursor lines and readout."""
 
@@ -77,33 +114,40 @@ class Lane:
         # A manual lane without configured bounds takes its first data range, then holds.
         self._manual_set = spec.manual is not None
 
-        self.plot = pg.PlotItem()
-        self.plot.showGrid(x=True, y=True, alpha=0.3)
+        self.plot = pg.PlotItem(axisItems={"bottom": TimeAxis(orientation="bottom")})
         for name in ("left", "bottom"):
             axis = self.plot.getAxis(name)
-            # Grid lines at major ticks only: all three tick levels cost ~70 ms of paint
-            # per frame at 4 lanes (software raster), major only ~7 ms (R3.4).
+            # Major ticks only: all three tick levels cost ~70 ms of paint per frame at
+            # 4 lanes (software raster), major only ~7 ms (R3.4). The graticule draws the
+            # grid (R9.6), not the axes.
             axis.setStyle(maxTickLevel=0)
             # Values as sent: no "(x0.001)" rescaling next to a label that has units.
             axis.enableAutoSIPrefix(False)
+            axis.setPen(pg.mkPen(FRAME))
+            axis.setTextPen(pg.mkPen(TICK_TEXT))
         # auto=True is required: mode alone leaves downsampling disabled (ds=1) (P1).
         self.plot.setDownsampling(auto=True, mode="peak")
         self.plot.setClipToView(True)
         self.plot.getAxis("left").setWidth(AXIS_WIDTH)
         self.plot.hideButtons()  # pyqtgraph's "A" auto-range would fight the lane's mode
         if spec.label:
-            self.plot.setLabel("left", spec.label)
+            self.plot.setLabel("left", lane_title(spec.label), color=LANE_NAME, size="10px")
         self.vb: pg.ViewBox = self.plot.getViewBox()
+        self.graticule = Graticule(self.vb, self._y_ticks)
+        self.markers = LaneMarkers(self.vb)
+        self.vb.sigRangeChanged.connect(self._on_range_changed)
         self.vb.disableAutoRange()
         if spec.manual is not None:
             self.vb.setYRange(*spec.manual, padding=0)
 
-        self.cursor = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen("#888", width=1))
+        # Cursor A follows the mouse (solid); B is the Δ anchor, dropped by a click (dashed).
+        self.cursor = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen(CURSOR, width=1))
         self.cursor.setVisible(False)  # until the mouse is over the plot
         self.anchor = pg.InfiniteLine(
             angle=90,
             movable=True,
-            pen=pg.mkPen("#C8C8C8", style=QtCore.Qt.PenStyle.DashLine, width=2),
+            pen=pg.mkPen(CURSOR, style=QtCore.Qt.PenStyle.DashLine, width=1),
+            hoverPen=pg.mkPen(CURSOR, style=QtCore.Qt.PenStyle.DashLine, width=2),
         )
         self.anchor.setVisible(False)
         for item in (self.cursor, self.anchor):
@@ -112,6 +156,18 @@ class Lane:
         self.anchor.sigPositionChanged.connect(lambda line: owner.set_anchor(line.value()))
         self.vb.sigRangeChangedManually.connect(self._on_manual_range)
         self._build_menu()
+
+    # --- graticule ---
+
+    def _y_ticks(self) -> list[float]:
+        """The left axis's major tick values in view: the graticule's horizontal lines."""
+        lo, hi = self.vb.viewRange()[1]
+        levels = self.plot.getAxis("left").tickValues(lo, hi, max(self.vb.height(), 1.0))
+        return list(levels[0][1]) if levels else []
+
+    def _on_range_changed(self, *_: object) -> None:
+        self.graticule.update()
+        self.markers.update()
 
     # --- range mode ---
 
@@ -334,8 +390,8 @@ class TelemetryPlot(QtWidgets.QWidget):
                 lane.plot.setXLink(master)
             last = key == order[-1]
             lane.plot.getAxis("bottom").setStyle(showValues=last)
-            lane.plot.setLabel("bottom", "Time [s]" if last else None)
         self._apply_mouse_mode()
+        self._update_markers()
         self.refresh_ranges()
 
     def _apply_mouse_mode(self) -> None:
@@ -471,10 +527,12 @@ class TelemetryPlot(QtWidgets.QWidget):
                 lane.anchor.setVisible(False)
                 lane.cursor.setVisible(False)
             self.clear_reference()
+            self._cursor_x = None
             self.set_capture_window(None)
             self.last_readout = None
             self.readout_changed.emit(None)
         self._apply_mouse_mode()
+        self._update_markers()
         self.refresh_ranges()
 
     # --- reference overlay (R4.5) ---
@@ -527,6 +585,7 @@ class TelemetryPlot(QtWidgets.QWidget):
         for key in self._shown:
             self.lanes[key].cursor.setPos(x)
             self.lanes[key].cursor.setVisible(True)
+        self._update_markers()
         self._update_readout(x, ds)
 
     def on_mouse_clicked(self, evt: Any) -> None:
@@ -600,6 +659,37 @@ class TelemetryPlot(QtWidgets.QWidget):
                 lines.append(row)
         return "\n".join(lines)
 
+    # --- scope markers (R9.6) ---
+
+    def _update_markers(self) -> None:
+        """
+        The `T` markers (the level in the trigger signal's lane, the trigger time at the
+        top of the top lane) and, while stopped, the A/B flags on the top lane.
+        """
+        if not self.lanes or not self._shown:
+            return
+        stopped = self.mode == PlotMode.ANALYSIS
+        a = self._cursor_x if stopped else None
+        b = self.anchor_time if stopped else None
+        trigger_lane = None
+        if self._trigger is not None:
+            view = self.signal_views.get(self._trigger[0])
+            trigger_lane = view["lane"] if view is not None else None
+        t_trig = self._capture_window[1] if self._capture_window is not None else None
+        for key, lane in self.lanes.items():
+            lane.markers.set_state(
+                trigger_level=self._trigger[1]
+                if self._trigger is not None and key == trigger_lane
+                else None,
+                trigger_time=t_trig if key == self._shown[0] else None,
+                cursor_a=a,
+                cursor_b=b,
+                flags=key == self._shown[0],
+            )
+
+    def markers_of(self, lane_key: str) -> LaneMarkers:
+        return self.lanes[lane_key].markers
+
     # --- command markers (R6.3) ---
 
     def set_markers(self, markers: list[tuple[float, str]]) -> None:
@@ -631,6 +721,7 @@ class TelemetryPlot(QtWidgets.QWidget):
         """
         self._trigger = (signal, float(level)) if signal is not None else None
         self._draw_trigger_line()
+        self._update_markers()
 
     def trigger_line(self) -> pg.InfiniteLine | None:
         return self._trigger_line[1] if self._trigger_line is not None else None
@@ -665,6 +756,7 @@ class TelemetryPlot(QtWidgets.QWidget):
         """Shades part of a trigger capture, e.g. before the trigger (None clears it)."""
         self._capture_window = window
         self._draw_capture_window()
+        self._update_markers()
 
     def capture_window(self) -> tuple[float, float] | None:
         return self._capture_window

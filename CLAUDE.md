@@ -18,7 +18,7 @@ so you can work without hardware.
    (`C*` correctness, `P*` performance, `A*` architecture, `T*` tooling).
 4. `docs/adr/`: design decisions. ADR-0002 is the target pipeline.
 5. `docs/specs/`: working specs for the next roadmap items. **Phase 9 is in progress (R9.1–R9.6):
-   the scope view, `docs/specs/phase9-scope-view.md` (ADR-0012, proposed). R9.1–R9.5 done; next R9.6.**
+   the scope view, `docs/specs/phase9-scope-view.md` (ADR-0012, proposed). R9.1–R9.6 done: Phase 9 is complete.**
 
 Before starting non-trivial work, check whether a roadmap item or finding already covers
 it, and reference its ID in commits and PRs.
@@ -95,7 +95,8 @@ ui/ui_state.py          remembered port and baud, stream, view overrides, panel 
                         (per config file, i.e. per device profile), the panes (per profile) and the window geometry
 ui/charts/              TelemetryPlot (lanes = signals[*].group, per-lane Y modes, cursor/Δ), LiveFeed (pulls the
                         store's overview), lanes.py + series.py (Qt-free layout, range, decimation, readout),
-                        trigger_controller (arms on the shown store, emits captures)
+                        trigger_controller (arms on the shown store, emits captures), graticule (R9.6: each
+                        lane's painted graticule and T/A/B markers, in ViewBox pixels, never moved in paint)
 ui/panels/              container (owns the controls; MainWindow places them), top_bar (the 36 px row: PartsButton
                         RunBox, MessageLabel, LinkHealth; `add_optional` items
                         show only while true: REC, link problems), connection (profile
@@ -153,8 +154,9 @@ hold these bytes verbatim (ADR-0006), so a wire change also affects replaying ol
 - **Render budget.** Keep one paint per live frame. pyqtgraph items that change their
   transform or geometry inside `paint()` (a visible `TextItem`, a deferred view matrix)
   schedule a second paint. So nothing is drawn as text on the plot: the readout is shown in
-  the Signals pane (`readout_changed`), and overlays are lines and regions only (markers,
-  trigger level, capture shading). Check changes to the plot with `tools/bench_render.py`
+  the Signals pane (`readout_changed`), and overlays are lines and regions (markers, trigger
+  level, capture shading), or items that only paint inside a fixed rect (`graticule.py`: the
+  graticule and the `T` / `A` / `B` markers, R9.6). Check changes to the plot with `tools/bench_render.py`
   and record the numbers.
 - **The protocol and decoding layers (`core/protocol`) must not import Qt.** Keep them
   pure and unit-testable.
