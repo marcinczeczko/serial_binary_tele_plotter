@@ -1,33 +1,53 @@
 """
-Trigger & step-response panel (R4.4, R4.5).
+Trigger & step response (R4.4, R4.5, R6.5), in two parts.
 
-Trigger: which signal, level, edge, and how much to keep before and after the crossing.
-Arming waits for the next crossing on the live data, then freezes that capture in
-analysis mode (Δ anchored at the trigger).
+- `setup`: which signal, edge and level, and how much to keep before and after the
+  crossing, plus Arm. It opens from the toolbar's Trigger button. While armed, the level
+  is also a dashed line on the plot that can be dragged.
+- `results`: which signals are the setpoint and the measurement, and each capture's rise
+  time, overshoot, settling time and steady-state error, next to the previous capture's,
+  whose traces can be overlaid (e.g. before and after a gain change). It's the "Step
+  response" tab of the right dock.
 
-Step response: which signal is the setpoint and which the measurement. Each capture's rise
-time, overshoot, settling time and steady-state error are shown next to the previous
-capture's, whose traces can be overlaid (for example before and after a gain change).
+A capture freezes in analysis mode with the Δ anchor at the trigger.
 """
 
 from __future__ import annotations
 
-from PyQt6 import QtCore, QtWidgets
+import math
 
-from core.analysis.step_response import StepMetrics
+from PyQt6 import QtCore, QtGui, QtWidgets
+
+from core.analysis.step_response import SETTLE_BAND, StepMetrics
 from core.analysis.trigger import EDGES, TriggerSpec
 from core.types import StreamConfig
 
+EDGE_ARROWS = {"rising": "↗", "falling": "↘", "either": "↕"}
+EDGE_OPS = {"rising": ">", "falling": "<", "either": "×"}
+BETTER = "#7FD8AA"
+WORSE = "#F2C26B"
+METRIC_ROWS = (
+    ("Rise time 10–90 %", "rise"),
+    ("Overshoot", "overshoot"),
+    (f"Settling ±{SETTLE_BAND * 100:.0f} %", "settling"),
+    ("Steady-state error", "sse"),
+)
 
-class TriggerPanel(QtWidgets.QWidget):
+
+class TriggerPanel(QtCore.QObject):
     arm_requested = QtCore.pyqtSignal(object)  # TriggerSpec
     disarm_requested = QtCore.pyqtSignal()
+    changed = QtCore.pyqtSignal()  # the trigger settings changed (for the level line)
 
-    def __init__(self) -> None:
-        super().__init__()
-        form = QtWidgets.QFormLayout(self)
-        form.setContentsMargins(4, 4, 4, 4)
+    def __init__(self, parent: QtCore.QObject | None = None) -> None:
+        super().__init__(parent)
+        self._labels: dict[str, str] = {}
+        self._state = "idle"
 
+        # --- setup (toolbar popup) ---
+        self.setup = QtWidgets.QWidget()
+        form = QtWidgets.QFormLayout(self.setup)
+        form.setContentsMargins(10, 10, 10, 10)
         self.signal_combo = QtWidgets.QComboBox()
         self.edge_combo = QtWidgets.QComboBox()
         self.edge_combo.addItems(EDGES)
@@ -38,17 +58,6 @@ class TriggerPanel(QtWidgets.QWidget):
         self.arm_btn.setCheckable(True)
         self.arm_btn.toggled.connect(self._on_arm_toggled)
         self.state_lbl = QtWidgets.QLabel("Idle")
-
-        self.setpoint_combo = QtWidgets.QComboBox()
-        self.measurement_combo = QtWidgets.QComboBox()
-        self.overlay_chk = QtWidgets.QCheckBox("Overlay the previous capture")
-        self.overlay_chk.setChecked(True)
-        self.metrics_lbl = QtWidgets.QLabel("")
-        self.metrics_lbl.setWordWrap(True)
-        self.metrics_lbl.setTextInteractionFlags(
-            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
-        )
-
         form.addRow("Signal:", self.signal_combo)
         form.addRow("Edge:", self.edge_combo)
         form.addRow("Level:", self.level_sb)
@@ -58,19 +67,59 @@ class TriggerPanel(QtWidgets.QWidget):
         row.addWidget(self.arm_btn)
         row.addWidget(self.state_lbl, 1)
         form.addRow(row)
-        form.addRow(QtWidgets.QLabel("<b>Step response</b>"))
-        form.addRow("Setpoint:", self.setpoint_combo)
-        form.addRow("Measurement:", self.measurement_combo)
-        form.addRow(self.overlay_chk)
-        form.addRow(self.metrics_lbl)
+        for signal in (
+            self.signal_combo.currentIndexChanged,
+            self.edge_combo.currentIndexChanged,
+            self.level_sb.valueChanged,
+        ):
+            signal.connect(self.changed)
+
+        # --- results (right dock) ---
+        self.results = QtWidgets.QWidget()
+        rlayout = QtWidgets.QVBoxLayout(self.results)
+        rlayout.setContentsMargins(8, 8, 8, 8)
+        pick = QtWidgets.QFormLayout()
+        self.setpoint_combo = QtWidgets.QComboBox()
+        self.measurement_combo = QtWidgets.QComboBox()
+        pick.addRow("Setpoint:", self.setpoint_combo)
+        pick.addRow("Measurement:", self.measurement_combo)
+        rlayout.addLayout(pick)
+        self.overlay_chk = QtWidgets.QCheckBox("Overlay the previous capture")
+        self.overlay_chk.setChecked(True)
+        rlayout.addWidget(self.overlay_chk)
+        self.metrics_lbl = QtWidgets.QLabel("Arm the trigger (toolbar) to capture a step.")
+        self.metrics_lbl.setWordWrap(True)
+        self.metrics_lbl.setStyleSheet("color: #9aa4b2;")
+        rlayout.addWidget(self.metrics_lbl)
+        self.metrics_table = QtWidgets.QTableWidget(len(METRIC_ROWS), 3)
+        self.metrics_table.setHorizontalHeaderLabels(["This capture", "Previous", "Change"])
+        self.metrics_table.setVerticalHeaderLabels([label for label, _ in METRIC_ROWS])
+        self.metrics_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.metrics_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.ContiguousSelection
+        )
+        header = self.metrics_table.horizontalHeader()
+        assert header is not None
+        header.setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Stretch)
+        self.metrics_table.setStyleSheet(
+            "QHeaderView::section { background: #1b1f27; color: #c9d0da; border: none;"
+            " padding: 4px; }"
+        )
+        rlayout.addWidget(self.metrics_table)
+        rlayout.addStretch()
+
+    # --- configuration ---
 
     def set_signals(self, cfg: StreamConfig) -> None:
         """Offers the stream's signals; picks likely defaults (the user can change them)."""
         signals = cfg.get("signals", {})
+        self._labels = {sid: sig.get("label", sid) for sid, sig in signals.items()}
         for combo in (self.signal_combo, self.setpoint_combo, self.measurement_combo):
+            combo.blockSignals(True)
             combo.clear()
-            for sid, sig in signals.items():
-                combo.addItem(sig.get("label", sid), sid)
+            for sid, label in self._labels.items():
+                combo.addItem(label, sid)
+            combo.blockSignals(False)
         ids = list(signals)
         setpoint: str | None = next(
             (s for s in ids if "setpoint" in s.lower()), ids[0] if ids else None
@@ -86,7 +135,9 @@ class TriggerPanel(QtWidgets.QWidget):
             if choice is not None:
                 combo.setCurrentIndex(combo.findData(choice))
         self.set_armed(False)
-        self.metrics_lbl.setText("")
+        self.metrics_lbl.setText("Arm the trigger (toolbar) to capture a step.")
+        self.metrics_table.clearContents()
+        self.changed.emit()
 
     def spec(self) -> TriggerSpec | None:
         sid = self.signal_combo.currentData()
@@ -104,6 +155,16 @@ class TriggerPanel(QtWidgets.QWidget):
         sp, meas = self.setpoint_combo.currentData(), self.measurement_combo.currentData()
         return (sp, meas) if isinstance(sp, str) and isinstance(meas, str) else None
 
+    def set_level(self, level: float) -> None:
+        """The level line was dragged on the plot."""
+        self.level_sb.setValue(level)
+
+    # --- state ---
+
+    @property
+    def state(self) -> str:
+        return self._state
+
     def set_armed(self, armed: bool) -> None:
         """Reflects the controller's state without emitting (e.g. after a capture)."""
         self.arm_btn.blockSignals(True)
@@ -112,16 +173,55 @@ class TriggerPanel(QtWidgets.QWidget):
         self.arm_btn.blockSignals(False)
 
     def show_state(self, state: str) -> None:
+        self._state = state if state in ("armed", "fired") else "idle"
         self.state_lbl.setText(
             {"armed": "Armed: waiting…", "fired": "Triggered: capturing…"}.get(state, "Idle")
         )
         self.set_armed(state in ("armed", "fired"))
+        self.changed.emit()
+
+    def summary(self) -> str:
+        """For the toolbar button: what the trigger waits for, e.g. "↘ L target < 0.15"."""
+        spec = self.spec()
+        if spec is None:
+            return "Trigger"
+        label = self._labels.get(spec.signal, spec.signal)
+        return f"{EDGE_ARROWS[spec.edge]} {label} {EDGE_OPS[spec.edge]} {spec.level:g}"
+
+    # --- results ---
 
     def show_metrics(self, current: StepMetrics | None, previous: StepMetrics | None) -> None:
-        lines = [f"<b>This capture:</b> {current.summary() if current else 'no step found'}"]
-        if previous is not None:
-            lines.append(f"<b>Previous:</b> {previous.summary()}")
-        self.metrics_lbl.setText("<br>".join(lines))
+        pair = self.step_signals()
+        names = (
+            f"{self._labels.get(pair[0], pair[0])} → {self._labels.get(pair[1], pair[1])}"
+            if pair
+            else ""
+        )
+        if current is None:
+            self.metrics_lbl.setText(f"{names}: no step found in this capture")
+        else:
+            self.metrics_lbl.setText(
+                f"{names} · step {current.initial:+.4g} → {current.final:+.4g}"
+            )
+        for row, (_, key) in enumerate(METRIC_ROWS):
+            now = _metric(current, key)
+            before = _metric(previous, key)
+            self._set_cell(row, 0, _format(key, now))
+            self._set_cell(row, 1, _format(key, before) if previous is not None else "")
+            text, color = _change(key, now, before)
+            self._set_cell(row, 2, text if previous is not None else "", color)
+
+    def metric_text(self, row: int, column: int) -> str:
+        item = self.metrics_table.item(row, column)
+        return item.text() if item is not None else ""
+
+    def _set_cell(self, row: int, column: int, text: str, color: str | None = None) -> None:
+        item = QtWidgets.QTableWidgetItem(text)
+        if column < 2:
+            item.setFont(QtGui.QFont("monospace"))
+        if color is not None:
+            item.setForeground(QtGui.QColor(color))
+        self.metrics_table.setItem(row, column, item)
 
     def _on_arm_toggled(self, checked: bool) -> None:
         spec = self.spec()
@@ -131,6 +231,44 @@ class TriggerPanel(QtWidgets.QWidget):
         else:
             self.arm_btn.setText("Arm")
             self.disarm_requested.emit()
+
+
+def _metric(metrics: StepMetrics | None, key: str) -> float | None:
+    if metrics is None:
+        return None
+    return {
+        "rise": metrics.rise_time_s,
+        "overshoot": metrics.overshoot_pct,
+        "settling": metrics.settling_time_s,
+        "sse": metrics.steady_state_error,
+    }[key]
+
+
+def _format(key: str, value: float | None) -> str:
+    if value is None or not math.isfinite(value):
+        return "n/a"
+    if key in ("rise", "settling"):
+        return f"{value:.3f} s"
+    if key == "overshoot":
+        return f"{value:.1f} %"
+    return f"{value:+.4g}"
+
+
+def _change(key: str, now: float | None, before: float | None) -> tuple[str, str | None]:
+    """The change from the previous capture; for every metric, smaller is better."""
+    if now is None or before is None or not (math.isfinite(now) and math.isfinite(before)):
+        return "", None
+    if key == "sse":
+        now, before = abs(now), abs(before)
+    if abs(now - before) < 1e-12:
+        return "same", None
+    color = BETTER if now < before else WORSE
+    arrow = "▼" if now < before else "▲"
+    if key == "overshoot":
+        return f"{arrow} {now - before:+.1f} pts", color
+    if before == 0:
+        return f"{arrow} {now - before:+.3g}", color
+    return f"{arrow} {(now - before) / before * 100:+.0f} %", color
 
 
 def _spin(

@@ -6,6 +6,47 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — Phase 6: dashboard UX, layout concept A (R6.1–R6.5)
+
+- **Layout (R6.1, ADR-0008).** Chosen from a design spike of three concepts, compared with
+  a screenshot of the old UI.
+  - A session toolbar: connection, Pause (Space), Record with the elapsed time, Trigger
+    with its state, and the link statistics.
+  - Streams are tabs over the plot, each with its live rate ("200 Hz" / "no data", from
+    `SampleStore.latest_time_s` and its counts).
+  - Period and history sit behind one button.
+  - Signals dock on the left; Controls and Step response docks on the right, tabbed. The
+    dock layout is saved in `QSettings`.
+  - The stream editor opens in its own window (File → Edit streams.json).
+  - `MainControlPanel` keeps its pieces and logic, but no longer lays them out.
+- **Signals dock (R6.2).** Signals grouped by lane, with a filter, lane check boxes with
+  counts, and a context menu to move a signal to another lane. It is also the legend and
+  the cursor readout. The lane `TextItem` readout on the plot is gone: the plot emits
+  `readout_changed`.
+- **Controls (R6.3, R6.4).**
+  - Edited vs last sent: highlight, "N unsent", Revert. Rows can be linked across columns.
+  - Live mode: sends 150 ms after edits settle, at most every 100 ms. It's per panel and
+    remembered.
+  - Presets per panel, and Ctrl+Enter for the main button.
+  - Numbered send log with "what changed" and Send again. Each send is a dashed marker on
+    the plot, per stream, cleared on a new session.
+- **Trigger (R6.5).** Toolbar popup and state. A draggable level line while armed. A capture
+  shades the time before the trigger, and the metrics are a table comparing this capture
+  with the previous one.
+- Benchmarks, interleaved with main in this container:
+  - `bench_render`: 30.3 FPS, 21–22 ms paint, ~5.3 ms pull and draw: unchanged. The
+    benchmark doesn't hover, so the removed readout text item doesn't show.
+  - `bench_pipeline`: 120–170k frames/s at 900 B reads for both: the data path is
+    untouched.
+- Tests: +6 (273 with Qt; 226 + 47 skipped without). They cover:
+  - Live debounce and rate limit, presets and Ctrl+Enter
+  - stream activity, the time button, the readout in the Signals dock
+  - markers per stream and per session, and Send again
+  - the editor window, the restored dock layout, edited vs sent, and linking
+  - the trigger's toolbar state and draggable level, and the metrics table
+
+---
+
 ## 2026-09-24 — Phase 5: config schema 2, commands and panels in config, remembered UI (R5.1–R5.3)
 
 - **Schema 2 (R5.1, A5, ADR-0007).**

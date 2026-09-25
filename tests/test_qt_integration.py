@@ -162,11 +162,14 @@ def test_main_window_starts_switches_stream_and_closes(qtbot: Any, monkeypatch: 
     win.show()
 
     panel = win.panel
-    assert panel.payload_combo.count() >= 2
-    section = panel.control_sections["diffbot_pid"]  # generated from streams.json (R5.2)
-    section.header.click()  # expand, then collapse the PID section
-    section.header.click()
-    panel.payload_combo.setCurrentIndex(1)
+    assert panel.stream_tabs.count() >= 2
+    toggle = win.controls_dock.toggleViewAction()  # close, then reopen the controls dock
+    assert toggle is not None
+    toggle.trigger()
+    assert win.controls_dock.isHidden()
+    toggle.trigger()
+    assert not win.controls_dock.isHidden()
+    panel.stream_tabs.setCurrentIndex(1)
     qtbot.wait(50)
     current = panel.get_current_stream_config()
     assert current is not None
@@ -217,8 +220,8 @@ def test_main_window_switches_stream_while_running(qtbot: Any, monkeypatch: Any)
     # The status arrives in its own queued event, right after the state change.
     qtbot.waitUntil(lambda: win.lbl_status.text() == "Connected to VIRTUAL", timeout=5000)
 
-    imu_index = win.panel.payload_combo.findData("imu_6axis")
-    win.panel.payload_combo.setCurrentIndex(imu_index)
+    imu_index = win.panel.stream_tabs.findData("imu_6axis")
+    win.panel.stream_tabs.setCurrentIndex(imu_index)
     imu_signals = {
         k for k, v in _load_stream("imu_6axis")["signals"].items() if v.get("visible", True)
     }
@@ -374,12 +377,12 @@ def test_main_window_keeps_selected_stream_after_config_save(qtbot: Any, config_
 
     win = MainWindow(config_copy)
     qtbot.addWidget(win)
-    imu_index = win.panel.payload_combo.findData("imu_6axis")
-    win.panel.payload_combo.setCurrentIndex(imu_index)
+    imu_index = win.panel.stream_tabs.findData("imu_6axis")
+    win.panel.stream_tabs.setCurrentIndex(imu_index)
 
     win.configurator.save_to_file()
 
-    assert win.panel.payload_combo.currentData() == "imu_6axis"
+    assert win.panel.stream_tabs.currentData() == "imu_6axis"
     assert set(win.plot.signal_views) == set(_load_stream("imu_6axis")["signals"])
     win.close()
 
@@ -540,7 +543,7 @@ def test_switching_streams_is_a_view_change_that_keeps_history(qtbot: Any) -> No
     win = MainWindow()
     qtbot.addWidget(win)
     panel = win.panel
-    panel.payload_combo.setCurrentIndex(panel.payload_combo.findData("imu_6axis"))
+    panel.stream_tabs.setCurrentIndex(panel.stream_tabs.findData("imu_6axis"))
     conn = panel.conn_panel
     conn.port_combo.setCurrentIndex(conn.port_combo.findText("VIRTUAL"))
     conn.connect_btn.click()
@@ -554,10 +557,10 @@ def test_switching_streams_is_a_view_change_that_keeps_history(qtbot: Any) -> No
     states: list[EngineState] = []
     win.engine.state_changed.connect(states.append)
 
-    panel.payload_combo.setCurrentIndex(panel.payload_combo.findData("pid"))
+    panel.stream_tabs.setCurrentIndex(panel.stream_tabs.findData("pid"))
     qtbot.wait(100)
     kept = imu_count()
-    panel.payload_combo.setCurrentIndex(panel.payload_combo.findData("imu_6axis"))
+    panel.stream_tabs.setCurrentIndex(panel.stream_tabs.findData("imu_6axis"))
     qtbot.waitUntil(lambda: win.plot.last_packet is not None, timeout=5000)
 
     assert kept >= 20  # imu history survived showing another stream
@@ -606,7 +609,7 @@ def test_period_is_per_stream_and_an_override_retimes_history(
     imu_store, pid_store = win.stores.get("imu_6axis"), win.stores.get("pid")
     assert imu_store is not None and pid_store is not None
 
-    panel.payload_combo.setCurrentIndex(panel.payload_combo.findData("imu_6axis"))
+    panel.stream_tabs.setCurrentIndex(panel.stream_tabs.findData("imu_6axis"))
     assert time_panel.get_period() == pytest.approx(10.0)  # from its time block
     assert not time_panel.is_overridden()
 
@@ -614,11 +617,11 @@ def test_period_is_per_stream_and_an_override_retimes_history(
     qtbot.waitUntil(lambda: imu_store.time_scale_s == pytest.approx(0.02), timeout=5000)
     assert time_panel.is_overridden()
 
-    panel.payload_combo.setCurrentIndex(panel.payload_combo.findData("pid"))
+    panel.stream_tabs.setCurrentIndex(panel.stream_tabs.findData("pid"))
     assert time_panel.get_period() == pytest.approx(5.0)
     assert not time_panel.is_overridden()
     assert pid_store.time_scale_s == pytest.approx(0.005)  # other streams are untouched
-    panel.payload_combo.setCurrentIndex(panel.payload_combo.findData("imu_6axis"))
+    panel.stream_tabs.setCurrentIndex(panel.stream_tabs.findData("imu_6axis"))
     assert time_panel.get_period() == pytest.approx(20.0)  # the override is remembered
 
     win.configurator.save_to_file()  # reload: the file's values apply again

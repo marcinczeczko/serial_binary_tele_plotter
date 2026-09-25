@@ -186,30 +186,36 @@ def test_moving_a_signal_to_a_new_lane(qtbot: Any) -> None:
     assert _y_range(plot, "Lane 4")[1] < 0.02  # fits the small error signal alone
 
 
-def test_signal_panel_moves_signals_between_lanes(qtbot: Any) -> None:
+def test_signal_panel_groups_by_lane_and_moves_signals(qtbot: Any) -> None:
+    from ui.charts.series import Readout
     from ui.panels.signals import NEW_LANE, SignalListPanel
 
     panel = SignalListPanel()
     qtbot.addWidget(panel)
     panel.rebuild_list({"signals": SIGNALS, "groups": GROUPS})
     moves: list[tuple[str, str, str]] = []
+    shown: list[tuple[str, bool]] = []
     panel.signal_lane_changed.connect(lambda *a: moves.append(a))
+    panel.signal_visibility_changed.connect(lambda *a: shown.append(a))
 
-    combo = panel.rows["err"].lane_combo
-    assert combo is not None
-    assert [combo.itemText(i) for i in range(combo.count())] == [
-        "Speed [rps]",
-        "PWM",
-        "Extra",
-        "New lane",
-    ]
-    combo.setCurrentIndex(combo.findData("big"))
-    combo.setCurrentIndex(combo.findData(NEW_LANE))
-
+    assert [label for _, label in panel.lanes()] == ["Speed [rps]", "PWM", "Extra"]
+    panel.move_to_lane("err", "big")
+    panel.move_to_lane("err", NEW_LANE)
     assert moves == [("err", "big", "PWM"), ("err", "Lane 4", "Lane 4")]
-    other = panel.rows["speed"].lane_combo
-    assert other is not None and other.findData("Lane 4") >= 0  # offered everywhere now
-    assert panel.lane_of("err") == "Lane 4"
+    assert panel.lane_of("err") == "Lane 4" and ("Lane 4", "Lane 4") in panel.lanes()
+
+    panel.set_lane_visible("Lane 4", False)  # a lane's box hides all its signals
+    assert shown == [("err", False)] and not panel.is_visible("err")
+    panel.filter_edit.setText("spe")
+    assert panel.tree.topLevelItemCount() == 4  # lanes stay, non-matching ones hidden
+    items = [panel.tree.topLevelItem(i) for i in range(4)]
+    hidden = [item.isHidden() for item in items if item is not None]
+    assert hidden.count(False) == 1
+
+    panel.show_readout(Readout(1.5, 0.25, {"speed": 0.125, "err": 1.0}, {"speed": 0.5}))
+    assert panel.cursor_lbl.text() == "@ 1.500 s  Δt +0.250"
+    assert panel.value_text("speed") == "+0.125  Δ +0.500"
+    assert panel.value_text("err") == ""  # hidden signals show no value
 
 
 def test_stream_editor_lane_column_round_trips(qtbot: Any) -> None:

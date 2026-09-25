@@ -19,6 +19,7 @@ from PyQt6 import QtCore, QtWidgets  # noqa: E402
 
 from core.config import DEFAULT_CONFIG_PATH  # noqa: E402
 from core.types import EngineState  # noqa: E402
+from ui.panels.signals import NEW_LANE  # noqa: E402
 
 pytestmark = pytest.mark.qt
 
@@ -47,7 +48,7 @@ def _disconnect(qtbot: Any, win: Any) -> None:
 
 
 def _show(win: Any, stream: str) -> None:
-    combo = win.panel.payload_combo
+    combo = win.panel.stream_tabs
     combo.setCurrentIndex(combo.findData(stream))
 
 
@@ -56,9 +57,8 @@ def test_generated_pid_panel_sends_config_defined_commands(qtbot: Any, tmp_path:
     win.show()
     _show(win, "pid")
     panel = win.panel.control_panels["diffbot_pid"]
-    section = win.panel.control_sections["diffbot_pid"]
-    assert win.panel.dynamic_stack.currentWidget() is section
-    assert not win.panel.dynamic_stack.isHidden()
+    assert win.panel.controls_stack.currentWidget() is panel
+    assert win.controls_dock.windowTitle() == "PID Tuning"
     assert list(panel.inputs) == ["Left", "Right"]
     assert list(panel.inputs["Left"]) == [
         *("kp", "ki", "k1", "k2", "k3", "k_aw", "alpha", "rps", "use_ramp", "use_pi")
@@ -71,12 +71,27 @@ def test_generated_pid_panel_sends_config_defined_commands(qtbot: Any, tmp_path:
 
     panel.buttons[0].click()
     assert win.lbl_status.text() == "Not connected: 'Update Left PID' not sent"
+    (refused,) = win.command_log.entries()
+    assert not refused.sent and refused.detail == "not connected"
 
     _connect_virtual(qtbot, win)
+    pid = win.stores.get("pid")
+    qtbot.waitUntil(lambda: pid is not None and pid.latest_time_s() is not None, timeout=3000)
+    panel.links["kp"].setChecked(False)  # rows start linked (equal values): unlink Kp
     panel.inputs["Left"]["kp"].setValue(2.5)
-    panel.inputs["Left"]["use_pi"].setChecked(True)
+    panel.inputs["Left"]["use_pi"].setChecked(True)  # linked: Right follows
+    assert panel.inputs["Right"]["kp"].value() == 0.1
+    assert panel.inputs["Right"]["use_pi"].isChecked()
     panel.buttons[0].click()
     assert win.lbl_status.text() == ("Sent 'Update Left PID': PID gains, one motor (ID 0x10, 41 B)")
+    first = win.command_log.entries()[0]
+    assert (first.number, first.detail, len(first.packet)) == (1, "first send", 41)
+    assert win.plot.marker_count() == 1  # dashed line at the stream time it was sent
+    assert panel.edited() == [] and not panel.unsent_lbl.isVisibleTo(panel)
+    panel.inputs["Left"]["kp"].setValue(3.0)
+    assert panel.edited() == [("Left", "kp")] and panel.unsent_lbl.text() == "1 unsent"
+    panel.revert()
+    assert panel.inputs["Left"]["kp"].value() == 2.5 and panel.edited() == []
 
     def left_kp() -> float:
         sim = win.engine._sim  # test only: the simulator decoded what the panel sent
@@ -84,15 +99,19 @@ def test_generated_pid_panel_sends_config_defined_commands(qtbot: Any, tmp_path:
 
     qtbot.waitUntil(lambda: left_kp() == pytest.approx(2.5), timeout=3000)
 
-    panel.inputs["Right"]["rps"].setValue(-1.25)
+    panel.inputs["Right"]["rps"].setValue(-1.25)  # linked: Left too
     panel.buttons[2].click()  # both motors, one packet
     assert "(ID 0x11, 74 B)" in win.lbl_status.text()
+    both = win.command_log.entries()[0]
+    assert both.number == 2 and both.detail == "rps 0.3 → -1.25 (Left)"
+    assert win.plot.marker_count() == 2
     qtbot.waitUntil(
         lambda: win.engine._sim.synth.model.gains("right").rps == pytest.approx(-1.25),
         timeout=3000,
     )
-    _show(win, "imu_6axis")
-    assert win.panel.dynamic_stack.isHidden()  # the IMU stream names no panel
+    _show(win, "imu_6axis")  # the IMU stream names no panel
+    assert win.panel.controls_stack.currentWidget() is win.panel.empty_controls
+    assert win.controls_dock.windowTitle() == "Controls"
     _disconnect(qtbot, win)
 
 
@@ -136,13 +155,17 @@ def test_ui_state_is_remembered_between_runs(qtbot: Any, tmp_path: Path) -> None
     _disconnect(qtbot, win)
     _show(win, "pid_ff")
     hidden, moved = list(win.panel.get_current_stream_config()["signals"])[:2]
-    win.panel.sig_panel.rows[hidden].enable_checkbox.setChecked(False)
-    lane_combo = win.panel.sig_panel.rows[moved].lane_combo
-    lane_combo.setCurrentIndex(lane_combo.count() - 1)  # "New lane"
+    win.panel.sig_panel.set_visible(hidden, False)
+    win.panel.sig_panel.move_to_lane(moved, NEW_LANE)
     new_lane = win.panel.sig_panel.lane_of(moved)
     assert new_lane is not None and new_lane.startswith("Lane ")
-    win.panel.control_panels["diffbot_pid"].inputs["Right"]["rps"].setValue(-1.25)
-    win.panel.control_panels["diffbot_pid"].inputs["Left"]["use_ramp"].setChecked(True)
+    pid_panel = win.panel.control_panels["diffbot_pid"]
+    pid_panel.links["rps"].setChecked(False)
+    pid_panel.inputs["Right"]["rps"].setValue(-1.25)
+    pid_panel.inputs["Left"]["use_ramp"].setChecked(True)  # linked: both
+    pid_panel.save_preset("reverse")
+    pid_panel.set_live(True)
+    win.signals_dock.close()
     win.close()
     win.settings.sync()
 
@@ -152,7 +175,7 @@ def test_ui_state_is_remembered_between_runs(qtbot: Any, tmp_path: Path) -> None
     assert panel.current_stream_key() == "pid_ff"
     assert panel.conn_panel.port_combo.currentText() == "VIRTUAL"
     assert panel.conn_panel.baud_combo.currentText() == "460800"
-    assert not panel.sig_panel.rows[hidden].enable_checkbox.isChecked()
+    assert not panel.sig_panel.is_visible(hidden)
     assert not again.plot.signal_views[hidden]["visible"]
     assert panel.sig_panel.lane_of(moved) == new_lane
     assert again.plot.signal_views[moved]["lane"] == new_lane
@@ -160,9 +183,15 @@ def test_ui_state_is_remembered_between_runs(qtbot: Any, tmp_path: Path) -> None
     assert pid.inputs["Right"]["rps"].value() == -1.25
     assert pid.inputs["Left"]["use_ramp"].isChecked()
     assert pid.inputs["Left"]["rps"].value() == 0.3  # untouched values keep their default
+    assert not pid.links["rps"].isChecked() and pid.links["kp"].isChecked()  # equal: linked
+    assert pid.preset_names() == ["reverse"] and pid.live
+    assert again.signals_dock.isHidden()  # the window layout is restored too
+    pid.inputs["Right"]["rps"].setValue(2.0)
+    pid.apply_preset("reverse")
+    assert pid.inputs["Right"]["rps"].value() == -1.25
 
     again.act_reset_view.trigger()  # back to streams.json for this stream
-    assert panel.sig_panel.rows[hidden].enable_checkbox.isChecked()
+    assert panel.sig_panel.is_visible(hidden)
     assert again.plot.signal_views[moved]["lane"] != new_lane
     assert panel.current_stream_key() == "pid_ff"
     assert pid.inputs["Right"]["rps"].value() == -1.25  # panel values aren't view state
@@ -211,7 +240,7 @@ def test_config_tab_saves_a_schema_1_file_as_schema_2(
     assert (tmp_path / "streams.json.bak").read_bytes() == V1_FIXTURE.read_bytes()
     assert win.panel.stream_loader.source_version == 2  # reloaded after saving
     _show(win, "pid")
-    assert not win.panel.dynamic_stack.isHidden()
+    assert win.panel.controls_stack.currentWidget() is win.panel.control_panels["diffbot_pid"]
     _show(win, "pid_ff")
-    assert win.panel.dynamic_stack.isHidden()
+    assert win.panel.controls_stack.currentWidget() is win.panel.empty_controls
     win.close()

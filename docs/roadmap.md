@@ -257,6 +257,36 @@ PRs that each keep the app working. Measure with `tools/bench_pipeline.py` befor
   *Done: `QSettings`, per config file. Visibility and lanes are overrides on top of
   streams.json, and View → "Reset view to streams.json" forgets them.*
 
+## Phase 6: dashboard UX (layout concept A, ADR-0008)
+
+Added after the UX spike (2026-09-25): the sidebar held everything in one column, the most
+used control (the signal list) got two rows, and the control panel didn't show what the
+device had last received.
+
+- [x] **R6.1 Toolbar and stream tabs**: port, baud, Connect, Pause, Record and Trigger in a
+  toolbar, with the link statistics. Streams as tabs above the plot, each with its live
+  rate or "no data". Period and history behind one button. Docks can be moved, floated
+  and closed, and their layout is remembered. The stream editor opens in its own window.
+  *Done.*
+- [x] **R6.2 Signals dock**: signals grouped by lane, with a filter, lane check boxes and
+  counts. It is also the legend and the cursor readout (value, Δ). The readout text on the
+  plot is removed.
+  *Done: lane moves are in a signal's context menu (no drag and drop yet).*
+- [x] **R6.3 Controls dock**: the stream's panel with edited vs last sent (highlight,
+  count, Revert) and rows linked across columns. A numbered send log with "what changed"
+  and "Send again", and a dashed marker on the plot per send.
+  *Done.*
+- [x] **R6.4 Live mode and presets**: Live sends a column after its values settle (150 ms
+  debounce, at most every 100 ms). Named presets per panel. Ctrl+Enter presses the main
+  button.
+  *Done. Scope: A/B is two presets plus the trigger's overlay, not a separate toggle.
+  Dragging a label to change its value is not done.*
+- [x] **R6.5 Trigger on the plot**: the Trigger toolbar button shows its state and opens the
+  setup. While armed, the level is a draggable dashed line. A capture shades the time
+  before the trigger, and the Step response dock compares metrics with the previous
+  capture in a table.
+  *Done.*
+
 ---
 
 ## Suggested order and sizing
@@ -271,3 +301,4 @@ PRs that each keep the app working. Measure with `tools/bench_pipeline.py` befor
 | 6 | R3.* | M | Needs the R2.4 store API |
 | 7 | R4.* | M | Needs the R2.1 transport interface |
 | 8 | R5.* | M | Can run in parallel with R3/R4 once R1.5 exists |
+| 9 | R6.* | M | UX, once the config model (R5) defines the panels |
