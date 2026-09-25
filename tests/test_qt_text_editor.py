@@ -196,3 +196,112 @@ def test_a_new_stream_in_a_text_profile_is_a_pattern(qtbot: Any, profile: Path) 
         "pattern": "new,{v1}",
         "fields": [{"name": "v1", "type": "f32"}],
     }
+
+
+# --- From console output… and Copy as printf ---
+
+CONSOLE = """boot ok, fw 1.4.2
+DBG,1204,0.12,-0.03
+DBG,1214,0.13,-0.02
+ENC l=-12 r=15
+DBG,1224,0.11,-0.04
+ENC l=-14 r=17
+"""
+
+
+def test_console_output_creates_the_ticked_streams(qtbot: Any, profile: Path) -> None:
+    tab = _tab(qtbot, profile)
+    dialog = tab.console_dialog()
+    dialog.paste_box.setPlainText(CONSOLE)
+    dialog.infer()
+    assert [c.found.pattern for c in dialog.cards] == ["DBG,{v1},{v2},{v3}", "ENC l={l} r={r}"]
+    assert "boot ok, fw 1.4.2" in dialog.seen_once_lbl.text()
+    assert dialog.create_btn.text() == "Create 2 streams"
+    assert not dialog.listen_btn.isEnabled()  # not connected
+    assert dialog.listen_btn.toolTip() == "Connect first"
+
+    dialog.cards[1].check.setChecked(False)
+    dialog.cards[0].name_edit.setText("Debug")
+    assert dialog.create_btn.text() == "Create 1 stream"
+    assert dialog.summary_lbl.text() == "1 of 2 streams, 3 values from 6 lines"
+    dialog.infer()  # a re-read keeps the tick and the name
+    assert not dialog.cards[1].checked and dialog.cards[0].name == "Debug"
+
+    tab.apply_console(dialog)
+
+    assert list(tab.drafts) == ["imu", "env", "debug"]
+    assert tab.current_key() == "debug"
+    draft = tab.drafts["debug"]
+    assert draft.name == "Debug" and draft.pattern == "DBG,{v1},{v2},{v3}"
+    assert draft.time_value("field") == "v1" and draft.time_value("step") == 10
+    view = tab.editor.line_view
+    assert view.line == "DBG,1224,0.11,-0.04" and view.matches()  # the pasted line
+    tab.save_to_file()
+    assert "debug" in _saved(profile)["streams"]
+
+
+def test_listening_adds_the_lines_heard(qtbot: Any, profile: Path) -> None:
+    tab = _tab(qtbot, profile)
+    requested: list[float] = []
+    tab.listen_requested.connect(requested.append)
+    tab.set_connected(True)
+    dialog = tab.console_dialog()
+    assert dialog.listen_btn.isEnabled()
+
+    dialog.listen_btn.click()
+    assert requested == [5.0]
+    assert dialog.listen_btn.text() == "Listening… 5 s" and not dialog.listen_btn.isEnabled()
+
+    dialog.on_lines_heard(["ENC l=1 r=2", "ENC l=3 r=4"])
+    assert dialog.listen_btn.text() == "Listen on the port for 5 s"
+    assert dialog.paste_box.toPlainText() == "ENC l=1 r=2\nENC l=3 r=4"
+    assert [c.found.pattern for c in dialog.cards] == ["ENC l={l} r={r}"]
+
+
+def test_cancel_while_listening_stops_it(qtbot: Any, profile: Path) -> None:
+    tab = _tab(qtbot, profile)
+    stopped: list[bool] = []
+    tab.stop_listening_requested.connect(lambda: stopped.append(True))
+    tab.set_connected(True)
+    dialog = tab.console_dialog()
+    dialog.listen_btn.click()
+    dialog.reject()
+    assert stopped == [True]
+
+
+def test_copy_as_printf(qtbot: Any, profile: Path) -> None:
+    from PyQt6 import QtWidgets
+
+    tab = _tab(qtbot, profile, "env")
+    assert tab.printf_btn.isVisible() and tab.console_btn.isVisible()
+    tab.printf_btn.click()
+    clipboard = QtWidgets.QApplication.clipboard()
+    assert clipboard is not None
+    assert clipboard.text() == 'printf("ENV t=%fC h=%lu%%\\r\\n", t, h);'
+    assert tab.status_lbl.text() == "Copied env as printf"
+
+
+def test_the_dashboard_hands_heard_lines_to_the_editor(qtbot: Any, tmp_path: Path) -> None:
+    """Listen end to end: the dashboard on VIRTUAL, the editor's dialog, the engine."""
+    from PyQt6 import QtCore as Core
+
+    from core.types import EngineState
+    from ui.main_window import MainWindow
+
+    settings = Core.QSettings(str(tmp_path / "s.ini"), Core.QSettings.Format.IniFormat)
+    win = MainWindow(FIXTURE, settings=settings)
+    qtbot.addWidget(win)
+    conn = win.panel.conn_panel
+    conn.port_combo.setCurrentIndex(conn.port_combo.findText("VIRTUAL"))
+    conn.connect_btn.click()
+    qtbot.waitUntil(lambda: win.engine_state == EngineState.RUNNING, timeout=5000)
+    tab = win.configurator
+    dialog = tab.console_dialog()
+    tab._console = dialog
+    dialog.listen_btn.click()
+    qtbot.wait(300)
+    tab.stop_listening_requested.emit()  # stop early: what was heard so far
+    qtbot.waitUntil(lambda: not dialog._listening, timeout=5000)
+    assert "IMU," in dialog.paste_box.toPlainText()
+    assert any(c.found.pattern.startswith("IMU,") for c in dialog.cards)
+    win.close()

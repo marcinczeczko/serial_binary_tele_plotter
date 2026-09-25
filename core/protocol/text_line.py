@@ -162,6 +162,23 @@ def format_line(pattern: Pattern, values: Mapping[str, Any]) -> str:
     return "".join(out)
 
 
+def printf_line(pattern: Pattern, types: Mapping[str, str]) -> str:
+    """
+    The C line that prints what `pattern` matches ("Copy as printf", R8.4), e.g.
+    `printf("IMU,%lu,%f\\r\\n", ms, ax);`: unsigned integers as `%lu`, signed as `%ld`,
+    numbers as `%f`. `%`, `"` and `\\` in the fixed text are escaped.
+    """
+    fmt: list[str] = []
+    for token in pattern.tokens:
+        if isinstance(token, Slot):
+            code = STRUCT_TYPE_MAP.get(types.get(token.name, "f32"), ("f",))[0]
+            fmt.append("%f" if code in "fd" else "%lu" if code.isupper() else "%ld")
+        else:
+            fmt.append(token.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%"))
+    args = "".join(f", {name}" for name in pattern.slots)
+    return f'printf("{"".join(fmt)}\\r\\n"{args});'
+
+
 def pattern_of(stream: StreamConfig | Mapping[str, Any]) -> str | None:
     """A stream's `frame.pattern`: set means it is a text stream."""
     frame = stream.get("frame")

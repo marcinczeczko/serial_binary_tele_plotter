@@ -17,8 +17,8 @@ so you can work without hardware.
 3. `docs/reviews/2026-09-24-architecture-review.md`: known defects, with stable IDs
    (`C*` correctness, `P*` performance, `A*` architecture, `T*` tooling).
 4. `docs/adr/`: design decisions. ADR-0002 is the target pipeline.
-5. `docs/specs/`: working specs for the next roadmap items. **Next up: R8.4, the editor for
-   text profiles (R8.3's decoder is done), specified in `docs/specs/phase8-text-lines.md`.**
+5. `docs/specs/`: working specs for the next roadmap items. **Phase 8's text lines are done
+   (R8.1–R8.4). R8.5, text commands, is the next item; it has no spec yet.**
 
 Before starting non-trivial work, check whether a roadmap item or finding already covers
 it, and reference its ID in commits and PRs.
@@ -69,7 +69,8 @@ core/types.py           TypedDict config shapes, PlotMode, EngineState
 core/config/            document (load -> migrate -> validate -> save, StreamConfigLoader), streams (stream
                         validation), controls (CommandDef/PanelDef parsing), migrate (schema versions),
                         draft (StreamDraft: the editor's model), cstruct (C struct in and out), profile
-                        (the `profile` block: name, format, baud; listing a profiles folder)
+                        (the `profile` block: name, format, baud; listing a profiles folder), infer_lines
+                        (line patterns from console output, R8.4)
 core/protocol/          wire format: link (LinkDecoder: bytes -> records per stream; the engine's only view of the
                         format, ADR-0010), constants, crc (CRC-8), frame_parser (sync/CRC, all IDs), record_decoder
                         (numpy dtype), router (multi-stream dispatch), handler (single-stream API), commands, stats,
@@ -98,7 +99,8 @@ ui/panels/              container (owns the controls; MainWindow places them), c
                         timing, trigger (setup popup + step-response results)
 ui/config/              streams.json editor (ADR-0009): tab (toolbar, profile row, stream tabs, save),
                         stream_editor (settings row, lanes tree, field form), frame_view (bus-decode drawing),
-                        line_view (a text stream's pattern and last line, R8.4), paste_dialog
+                        line_view (a text stream's pattern and last line, R8.4), paste_dialog,
+                        console_dialog (From console output…: paste or listen, infer streams)
 tests/                  pytest: pure logic, stubbed-Qt legacy tests, `qt`-marked real-Qt tests
 tools/                  dev scripts (bench_pipeline.py)
 .github/workflows/      CI

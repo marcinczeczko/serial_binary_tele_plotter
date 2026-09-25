@@ -44,6 +44,10 @@ from core.types import EngineState, StreamConfig
 
 logger = logging.getLogger(__name__)
 
+# "Listen on the port" keeps at most this much (a few seconds at 115200 baud is ~60 kB).
+MAX_HEARD_BYTES = 512 * 1024
+MAX_HEARD_LINES = 5000
+
 
 class TelemetryEngine(QtCore.QObject):
     """
@@ -68,6 +72,8 @@ class TelemetryEngine(QtCore.QObject):
     recording_changed = QtCore.pyqtSignal(str)
     # A recording write failed on the reader thread; handled on the engine thread.
     _reader_failed_recording = QtCore.pyqtSignal(str)
+    # The raw lines heard by `listen_lines` (R8.4), once, when the time is up or stopped.
+    lines_heard = QtCore.pyqtSignal(list)
 
     def __init__(self, max_samples: int, stores: StreamStores | None = None) -> None:
         super().__init__()
@@ -92,6 +98,12 @@ class TelemetryEngine(QtCore.QObject):
         # Raw recording (R4.1): written on the reader thread, swapped on the engine thread.
         self._recorder: RecordingWriter | None = None
         self._rec_lock = threading.Lock()
+        # "Listen on the port" (R8.4): raw bytes kept for a few seconds, on the reader
+        # thread, under the recording lock; None when not listening.
+        self._heard: bytearray | None = None
+        self.listen_timer = QtCore.QTimer(self)
+        self.listen_timer.setSingleShot(True)
+        self.listen_timer.timeout.connect(self.stop_listening)
         self._transport: Transport | None = None
         self._reader: ReaderThread | None = None
         self._data_lock = threading.Lock()
@@ -245,6 +257,7 @@ class TelemetryEngine(QtCore.QObject):
         self._set_state(EngineState.CONFIGURED)
         self._close_transport()
         self.stop_recording()
+        self.stop_listening()
 
     def _close_transport(self) -> None:
         self._sim = None
@@ -322,6 +335,9 @@ class TelemetryEngine(QtCore.QObject):
                     logger.error("Recording failed: %s", e)
                     self._recorder = None
                     self._reader_failed_recording.emit(str(e))
+            heard = self._heard
+            if heard is not None and len(heard) < MAX_HEARD_BYTES:
+                heard += data[: MAX_HEARD_BYTES - len(heard)]
         with self._data_lock:
             batches = self.link.feed(data)
         for key, records in batches.items():
@@ -425,6 +441,32 @@ class TelemetryEngine(QtCore.QObject):
     def _on_recording_failed(self, message: str) -> None:
         self.status_msg.emit(f"Recording stopped: {message}")
         self.recording_changed.emit("")
+
+    # --- listening for console output (R8.4) -------------------------------------------
+
+    @QtCore.pyqtSlot(float)
+    def listen_lines(self, seconds: float) -> None:
+        """Keeps the raw lines received for `seconds`, then emits them once (`lines_heard`)."""
+        if self.state != EngineState.RUNNING:
+            self.lines_heard.emit([])
+            return
+        with self._rec_lock:
+            self._heard = bytearray()
+        self.listen_timer.start(int(seconds * 1000))
+
+    @QtCore.pyqtSlot()
+    def stop_listening(self) -> None:
+        """Ends listening early (or on time): emits what was heard so far."""
+        self.listen_timer.stop()
+        with self._rec_lock:
+            heard, self._heard = self._heard, None
+        if heard is None:
+            return
+        text = heard.decode("ascii", errors="replace")
+        # The first and last pieces are most likely parts of lines: listening started and
+        # stopped in the middle of one.
+        lines = [line.strip() for line in text.split("\n")][1:-1]
+        self.lines_heard.emit([line for line in lines if line][:MAX_HEARD_LINES])
 
     @QtCore.pyqtSlot(float)
     def set_replay_speed(self, speed: float) -> None:

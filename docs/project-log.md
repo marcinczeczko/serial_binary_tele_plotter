@@ -6,6 +6,22 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — R8.4 (part 2): From console output… and Copy as printf
+
+- `core/config/infer_lines.py`: splits lines into numbers and fixed text, groups by
+  shape (seen once = not a pattern), names values from `name=`/`name:` else `v1`…,
+  types them (u32 / i32 / f32), suggests a steadily rising integer as the X axis (1 ms
+  per tick for an `ms` name). Each result is a stream `TextLineDecoder` decodes.
+- `ui/config/console_dialog.py`: the paste box, Listen for 5 s (engine
+  `listen_lines`/`stop_listening`, lines handed over once via `lines_heard`), a card per
+  pattern (tick, name, values), Create N streams. The new streams' Line view shows a
+  pasted line. "Copy as printf" (`printf_line`): `%lu`/`%ld`/`%f`, `%%`.
+- Spec change: the Line view prefers a stream's pasted line over the newest unmatched
+  one, so a stream just made from console output shows its own line.
+- Tests: 419 (+14). R8.4 is done; Phase 8's text lines (R8.1–R8.4) are complete.
+
+---
+
 ## 2026-09-25 — R8.4 (part 1): the editor on a text profile
 
 - Profile row (all profiles): name, format (read-only), baud, edited into the `profile`

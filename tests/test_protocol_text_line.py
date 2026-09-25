@@ -232,3 +232,11 @@ def test_pattern_text_writes_tokens_back() -> None:
 
     for text in ("ENV t={t}C h={h}%", "{{{a}}} x", "{a} , {b}"):
         assert pattern_text(parse_pattern(text).tokens) == text
+
+
+def test_printf_prints_what_the_pattern_matches() -> None:
+    from core.protocol.text_line import printf_line
+
+    pattern = parse_pattern('IMU,{ms},{ax} "{n}" 5%')
+    types = {"ms": "u32", "ax": "f32", "n": "i16"}
+    assert printf_line(pattern, types) == ('printf("IMU,%lu,%f \\"%ld\\" 5%%\\r\\n", ms, ax, n);')

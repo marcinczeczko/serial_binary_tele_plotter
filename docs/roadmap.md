@@ -321,7 +321,7 @@ layout) instead of binary frames. Binary or text is a property of the device, so
 choice lives in a named **device profile** picked before connecting, and each text stream
 is a **line pattern** inferred from pasted console output.
 
-**Next: R8.4** (R8.3 is done). Both are specified in detail (config shape, pattern grammar,
+**R8.3 and R8.4 are done.** Both were specified in detail (config shape, pattern grammar,
 matching, inference, editor screens, acceptance tests) in
 [`docs/specs/phase8-text-lines.md`](specs/phase8-text-lines.md).
 
@@ -352,15 +352,16 @@ matching, inference, editor screens, acceptance tests) in
   *Done. The text counters are in the status bar's link readout (where the binary ones
   are), not in the Period/History popup the spec named. About 45k lines/s with 34 values
   per line.*
-- [ ] **R8.4 Editor for text profiles**: the profile row (name, format, baud), a
+- [x] **R8.4 Editor for text profiles**: the profile row (name, format, baud), a
   **Pattern** field and the Line view (fixed text and value blocks) instead of ID and
   byte order, "From console output…" (paste raw lines or listen for a few seconds;
   infers patterns, names values from the text next to them or `v1`…, suggests a rising
   integer as the X axis, ignores lines seen once), and "Copy as printf".
   *Done when:* pasting mixed console output creates one stream per repeated line layout
   that decodes those lines.
-  *In progress: part 1 (profile row, Pattern, X axis, Line view, value form) is built;
-  part 2 is "From console output…" and "Copy as printf".*
+  *Done, in two PRs: the profile row, Pattern, X axis, Line view and value form; then
+  "From console output…" (paste or listen, `core/config/infer_lines.py`) and "Copy as
+  printf".*
 - [ ] **R8.5 Text commands** (a later phase): host-to-board commands as text templates
   (`"PID {kp} {ki}\n"`) for text profiles.
 

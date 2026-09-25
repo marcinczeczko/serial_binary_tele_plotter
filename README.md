@@ -230,6 +230,16 @@ on the right. Docks can be closed (View menu), moved, or floated; the layout is 
      axis offers the integer values and `(line number)`. The form edits a value: name,
      type (number, integer, signed integer), position, and Add value after / Remove value,
      which edit the pattern. The C struct buttons are for binary profiles only.
+   - **From console output…** (text profiles) finds the streams for you: paste what the
+     board prints, or **Listen on the port for 5 s** while connected. Lines are split
+     into numbers and the text between them; each layout seen at least twice becomes a
+     pattern (a line seen once, like a boot banner, is listed and left out). A value is
+     named from the text before it (`t=24.5` → `t`), else `v1`, `v2`…; whole numbers
+     are integers (signed if a negative was seen), the rest numbers. The first integer
+     that goes up by a steady step is the X axis (1 ms per tick when its name says `ms`).
+     Untick a pattern or rename it, then **Create N streams**.
+   - **Copy as printf** puts the C line that prints the stream's pattern on the
+     clipboard, e.g. `printf("ENV t=%fC h=%lu%%\r\n", t, h);`.
    - Save (Ctrl+S) is orange while there are unsaved changes; the status line shows the
      stream's size and its first problem as you edit. Saving updates `streams.json` (the
      previous file is kept as `streams.json.bak`); a file with errors isn't saved.
