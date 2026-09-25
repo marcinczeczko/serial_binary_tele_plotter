@@ -6,6 +6,19 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — Phase 9 planned: the scope view (design approved)
+
+- Design review of the main view: 19 findings (always-on zero counters, labels shown twice,
+  rare actions always visible, dock chrome, generic app styling). Canvas with the current
+  window pinned and an interactive proposal: <https://claude.ai/artifact/C7HPkY66MjUYJHUyPfRzPM>.
+- Approved direction, modelled on Rigol DHO800 / Keysight InfiniiVision / Tek MSO screens:
+  one top bar of boxed labels, square flat controls, letters instead of icons, readouts in
+  trace colour, B612 / B612 Mono, and side panes collapsed from always-visible edge tabs.
+- `docs/specs/phase9-scope-view.md`, ADR-0012 (proposed; supersedes ADR-0008 decisions 1–3
+  once accepted), roadmap Phase 9 (R9.1–R9.6). No code changed.
+
+---
+
 ## 2026-09-25 — R8.5 Text commands: the terminal
 
 - A text profile's Controls dock is a **Terminal** (`ui/panels/terminal.py`, ADR-0011

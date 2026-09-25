@@ -17,8 +17,8 @@ so you can work without hardware.
 3. `docs/reviews/2026-09-24-architecture-review.md`: known defects, with stable IDs
    (`C*` correctness, `P*` performance, `A*` architecture, `T*` tooling).
 4. `docs/adr/`: design decisions. ADR-0002 is the target pipeline.
-5. `docs/specs/`: working specs for the next roadmap items. **Phase 8 is done (R8.1–R8.5):
-   device profiles, text-line streams and the terminal. No roadmap item is open.**
+5. `docs/specs/`: working specs for the next roadmap items. **Phase 9 is next (R9.1–R9.6):
+   the scope view, `docs/specs/phase9-scope-view.md` (ADR-0012, proposed). Start with R9.1.**
 
 Before starting non-trivial work, check whether a roadmap item or finding already covers
 it, and reference its ID in commits and PRs.
