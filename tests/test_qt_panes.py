@@ -100,8 +100,8 @@ def test_keys_toggle_panes_but_not_while_typing(qtbot: Any, tmp_path: Path) -> N
     assert _open(win)[:2] == (False, False)
     qtbot.keyClick(win.plot, "\\")
 
+    win.panel.sig_panel.show_filter()  # the filter (shown on Ctrl+F) keeps its keys
     edit = win.panel.sig_panel.filter_edit
-    edit.setFocus()
     qtbot.keyClicks(edit, "[x]\\")  # typed text, not pane toggles
     assert edit.text() == "[x]\\" and _open(win)[:2] == (True, True)
 

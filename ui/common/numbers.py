@@ -27,6 +27,22 @@ def format_number(value: float, decimals: int = 3, sign: bool = False) -> str:
     return text
 
 
+def format_significant(
+    value: float, digits: int = 4, sign: bool = False, max_decimals: int = 3
+) -> str:
+    """
+    `value` to `digits` significant digits but at most `max_decimals` decimals, trailing
+    zeros dropped, never in exponent form: a readout stays short whatever the magnitude
+    (`159.5`, `16.35`, `0.267`, `0.005`).
+    """
+    if not math.isfinite(value):
+        return "n/a"
+    if value == 0:
+        return "+0" if sign else "0"
+    decimals = min(max(digits - 1 - math.floor(math.log10(abs(value))), 0), max_decimals)
+    return format_number(value, decimals, sign)
+
+
 class ScopeDoubleSpinBox(QtWidgets.QDoubleSpinBox):
     """
     A QDoubleSpinBox that reads and writes numbers the C way (dot, no group separator) and

@@ -6,6 +6,26 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — R9.4 Signals pane: pairs, swatch toggles, readout in colour
+
+- One row per left/right pair (`ui/panels/signal_rows.py`, Qt-free): label prefix `L: `/`R: `,
+  else key prefix `left_`/`right_`, within a lane (spec open question 1: no config key). The
+  bundled `pid` stream's 34 signals are 17 rows. Header `Signals  L  R`; lanes in small caps
+  with a hairline; no counts.
+- Swatches are the toggles (filled/hollow); a dashed trace's swatch is split. The bundled
+  profile now draws right copies dashed and left solid (`line.style`; v1 fixture follows).
+- Readout: each shown signal's value at A (the cursor) beside its swatch, in its colour, 4
+  significant digits and at most 3 decimals (`format_significant`); a boxed
+  `A …s  B …s  ΔT …s` header (B = the anchor, ΔT = B − A); Δ in the tooltip. The value
+  columns only grow while a cursor is set (no jitter); the pane defaults to 280 px.
+- Filter on Ctrl+F or typing in the list; Esc clears and hides it. Moving a row moves both.
+- `bench_render.py` interleaved, 3 runs each (6 s): main paint 8.8/8.9/8.8 ms mean, branch
+  8.9/8.9/8.9 ms; 30.3 FPS and one paint per frame on both; nothing lost.
+- Tests: `test_ui_signal_rows.py` (5), `test_qt_signals_pane.py` (5); readout and drop tests
+  follow the pairs.
+
+---
+
 ## 2026-09-25 — R9.2 Top bar replaces the toolbar, the tabs row and the status bar
 
 - One 36 px bar (`ui/panels/top_bar.py`): profile `diffbot ▾` (format in tooltip and menu) |

@@ -154,6 +154,8 @@ Order: R9.1 first (everything else inherits it), then R9.3 and R9.2 (the frame),
 1. **L/R pairing (R9.4).** Detect the `L: ` / `R: ` name prefix, or add an optional pair key to a
    signal in `streams.json` (a schema bump, a migration step and a test)? Prefix detection needs no
    file change but ties behaviour to naming.
+   *Decided in R9.4:* the label prefix, else the key prefix `left_` / `right_`, within a lane;
+   no config key (`ui/panels/signal_rows.py`). A pair key can come later if a device needs it.
 2. **Short button labels (R9.5).** `Update Left PID` → `Send` is a `panels` config edit; decide
    whether the panel keeps a long label for the tooltip.
 3. **Right tab label.** `TUNE` for the bundled PID panel; for other panels, derive from the panel

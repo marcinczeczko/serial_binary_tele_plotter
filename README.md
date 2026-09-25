@@ -167,14 +167,22 @@ profile; drag the edge between a pane and the plot to resize it.
    only a view. The square before each name is green while its frames arrive and hollow when
    none do (check its `stream_id` and layout); the rate is in the tab's tooltip. The shown
    stream's rate is also next to `H` (`200 Hz` over `2.00k pts`).
-5. **Signals** pane: the shown stream's signals, grouped by lane.
-   - A check box shows or hides a signal; a lane's check box does it for the whole lane,
-     and the lane shows how many are shown (`3/4`). The filter box narrows the list.
-   - Hovering the plot shows each signal's value at the cursor next to its name, and the
-     time at the top. Next to a gap (lost frames), a value reads `n/a` rather than being
-     interpolated across the gap.
-   - Drag a signal onto another lane (or into the empty space below the list, for a new
-     lane), or right-click it → **Move to lane** / **New lane**.
+5. **Signals** pane: the shown stream's signals, grouped by lane (`SPEED rps`).
+   - A left/right pair is one row: its name, then an **L** and an **R** swatch in the
+     traces' colours. Pairs are found by the label prefix `L: ` / `R: `, else by the key
+     prefix `left_` / `right_`, within a lane; any other signal has one swatch. In the
+     bundled profile the right copy is drawn dashed (its `line.style`), and a dashed
+     trace's swatch has a gap in the middle.
+   - A swatch is the toggle: filled = shown, hollow = hidden. Right-click a lane header to
+     show or hide all of it. Ctrl+F, or typing in the list, opens a filter; Esc closes it.
+   - Hovering the plot shows each shown signal's value at the cursor (**A**) beside its
+     swatch, in its colour, under a boxed header `A 0.42s  B 0.76s  ΔT +0.34s` (**B** is
+     the Δ anchor, ΔT = B − A; each signal's Δ is in its swatch's tooltip). Values show 4
+     significant digits, at most 3 decimals. Next to a gap (lost frames), a value reads
+     `n/a` rather than being interpolated across the gap.
+   - Drag a row onto another lane (or into the empty space below the list, for a new
+     lane), or right-click it → **Move to lane** / **New lane**; both signals of a pair
+     move.
    - Visibility and lane moves are remembered per stream (and per config file) between
      runs, on top of `streams.json`. **View → Reset view to the profile** forgets them for
      the shown stream. To change the file itself, use the stream editor (a signal's check
@@ -183,8 +191,8 @@ profile; drag the edge between a pane and the plot to resize it.
      then holds its range. Right-click a lane → **Lane Y range** to choose Auto (fit the
      data in view), Auto-grow (only widens) or Manual, and whether zero is always included.
 6. The `RUN` box (or Space) turns to `STOP` and enters analysis mode: zoom and pan freely (Auto lanes fit what's in
-   view). A click drops a Δ anchor (drag it to move it), and the Signals pane shows Δt and
-   each signal's Δ. `STOP` again (or Space) returns to the live view; it works even after a session ended
+   view). A click drops the Δ anchor **B** (drag it to move it), and the Signals pane shows
+   A, B and ΔT, and each signal's Δ in its tooltip. `STOP` again (or Space) returns to the live view; it works even after a session ended
    (disconnected, the box shows `—`).
 7. The **`H`** item (`H 10.0 s`, the history shown: period × samples) opens the
    **Period** of the shown stream (the time between two frames, from its `time` block) and

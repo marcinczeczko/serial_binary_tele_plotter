@@ -29,7 +29,7 @@ class PaneState:
     left_open: bool = True
     right_open: bool = True
     view: RightView = "tune"
-    left_width: int = 250
+    left_width: int = 280  # names beside two readout values
     right_width: int = 340
 
     def toggle_left(self) -> PaneState:

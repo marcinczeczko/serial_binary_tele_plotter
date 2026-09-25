@@ -483,7 +483,7 @@
                     "color": "#C8C8C8",
                     "visible": true,
                     "line": {
-                        "style": "dotted",
+                        "style": "solid",
                         "width": 1
                     },
                     "group": "speed"
@@ -505,7 +505,7 @@
                     "color": "#00E5FF",
                     "visible": true,
                     "line": {
-                        "style": "dashed",
+                        "style": "solid",
                         "width": 1
                     },
                     "group": "speed"
@@ -527,7 +527,7 @@
                     "color": "#A6A040",
                     "visible": false,
                     "line": {
-                        "style": "dotted",
+                        "style": "solid",
                         "width": 1
                     },
                     "group": "speed"
@@ -637,7 +637,7 @@
                     "color": "#FF9E8A",
                     "visible": false,
                     "line": {
-                        "style": "dotted",
+                        "style": "solid",
                         "width": 1
                     },
                     "group": "control"
@@ -648,7 +648,7 @@
                     "color": "#FF5A5A",
                     "visible": true,
                     "line": {
-                        "style": "dotted",
+                        "style": "solid",
                         "width": 1
                     },
                     "group": "control"
@@ -659,7 +659,7 @@
                     "color": "#FF5A5A",
                     "visible": true,
                     "line": {
-                        "style": "dotted",
+                        "style": "solid",
                         "width": 1
                     },
                     "group": "pwm"
@@ -670,7 +670,7 @@
                     "color": "#C8C8C8",
                     "visible": true,
                     "line": {
-                        "style": "dotted",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "speed"
@@ -681,7 +681,7 @@
                     "color": "#D080FF",
                     "visible": false,
                     "line": {
-                        "style": "solid",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "pwm"
@@ -703,7 +703,7 @@
                     "color": "#FFE81A",
                     "visible": true,
                     "line": {
-                        "style": "solid",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "speed"
@@ -714,7 +714,7 @@
                     "color": "#A6A040",
                     "visible": false,
                     "line": {
-                        "style": "dotted",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "speed"
@@ -725,7 +725,7 @@
                     "color": "#FF4FD8",
                     "visible": true,
                     "line": {
-                        "style": "solid",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "error"
@@ -736,7 +736,7 @@
                     "color": "#A070FF",
                     "visible": false,
                     "line": {
-                        "style": "solid",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "error"
@@ -747,7 +747,7 @@
                     "color": "#3D8BFF",
                     "visible": true,
                     "line": {
-                        "style": "solid",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "control"
@@ -758,7 +758,7 @@
                     "color": "#3DFF6E",
                     "visible": true,
                     "line": {
-                        "style": "solid",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "control"
@@ -769,7 +769,7 @@
                     "color": "#35C9B0",
                     "visible": true,
                     "line": {
-                        "style": "solid",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "control"
@@ -780,7 +780,7 @@
                     "color": "#C8B400",
                     "visible": true,
                     "line": {
-                        "style": "solid",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "control"
@@ -791,7 +791,7 @@
                     "color": "#B388FF",
                     "visible": true,
                     "line": {
-                        "style": "solid",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "control"
@@ -802,7 +802,7 @@
                     "color": "#FF8FA0",
                     "visible": true,
                     "line": {
-                        "style": "solid",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "control"
@@ -813,7 +813,7 @@
                     "color": "#FF80C0",
                     "visible": true,
                     "line": {
-                        "style": "solid",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "control"
@@ -824,7 +824,7 @@
                     "color": "#FF9E8A",
                     "visible": false,
                     "line": {
-                        "style": "dotted",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "control"
@@ -835,7 +835,7 @@
                     "color": "#FF5A5A",
                     "visible": true,
                     "line": {
-                        "style": "dotted",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "control"
@@ -846,7 +846,7 @@
                     "color": "#FF5A5A",
                     "visible": true,
                     "line": {
-                        "style": "dotted",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "pwm"
@@ -1036,7 +1036,7 @@
                     "color": "#C8C8C8",
                     "visible": true,
                     "line": {
-                        "style": "dotted",
+                        "style": "solid",
                         "width": 1
                     },
                     "group": "speed"
@@ -1047,7 +1047,7 @@
                     "color": "#00E5FF",
                     "visible": true,
                     "line": {
-                        "style": "dashed",
+                        "style": "solid",
                         "width": 1
                     },
                     "group": "speed"
@@ -1113,7 +1113,7 @@
                     "color": "#C8B400",
                     "visible": true,
                     "line": {
-                        "style": "dashed",
+                        "style": "solid",
                         "width": 1
                     },
                     "group": "control"
@@ -1124,7 +1124,7 @@
                     "color": "#C8C8C8",
                     "visible": true,
                     "line": {
-                        "style": "dotted",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "speed"
@@ -1146,7 +1146,7 @@
                     "color": "#FFE81A",
                     "visible": true,
                     "line": {
-                        "style": "solid",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "speed"
@@ -1157,7 +1157,7 @@
                     "color": "#A070FF",
                     "visible": true,
                     "line": {
-                        "style": "solid",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "error"
@@ -1168,7 +1168,7 @@
                     "color": "#3D8BFF",
                     "visible": true,
                     "line": {
-                        "style": "solid",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "control"
@@ -1179,7 +1179,7 @@
                     "color": "#3DFF6E",
                     "visible": true,
                     "line": {
-                        "style": "solid",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "control"
@@ -1190,7 +1190,7 @@
                     "color": "#35C9B0",
                     "visible": true,
                     "line": {
-                        "style": "solid",
+                        "style": "dashed",
                         "width": 1
                     },
                     "group": "control"
@@ -1212,7 +1212,7 @@
                     "color": "#FF5A5A",
                     "visible": true,
                     "line": {
-                        "style": "dashed",
+                        "style": "solid",
                         "width": 1
                     },
                     "group": "pwm"

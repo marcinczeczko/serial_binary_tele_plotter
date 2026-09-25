@@ -18,7 +18,7 @@ so you can work without hardware.
    (`C*` correctness, `P*` performance, `A*` architecture, `T*` tooling).
 4. `docs/adr/`: design decisions. ADR-0002 is the target pipeline.
 5. `docs/specs/`: working specs for the next roadmap items. **Phase 9 is in progress (R9.1–R9.6):
-   the scope view, `docs/specs/phase9-scope-view.md` (ADR-0012, proposed). R9.1–R9.3 done; next R9.4.**
+   the scope view, `docs/specs/phase9-scope-view.md` (ADR-0012, proposed). R9.1–R9.4 done; next R9.5.**
 
 Before starting non-trivial work, check whether a roadmap item or finding already covers
 it, and reference its ID in commits and PRs.
@@ -98,8 +98,8 @@ ui/charts/              TelemetryPlot (lanes = signals[*].group, per-lane Y mode
 ui/panels/              container (owns the controls; MainWindow places them), top_bar (the 36 px row: PartsButton
                         with boxed letters, RunBox, MessageLabel, RatePoints, LinkHealth), connection (profile
                         menu, port (refreshes on open), baud (serial only), Connect, RUN/STOP), profile_dialog (New profile),
-                        stream_tabs, signals (lane-grouped list = legend + cursor readout, drag between
-                        lanes), command_panel (generated from `panels`: edited vs sent, linked rows, Live,
+                        stream_tabs, signals (the Signals pane: one row per L/R pair from signal_rows,
+                        swatch toggles, readout at A in colour, filter on Ctrl+F, drag rows between lanes), command_panel (generated from `panels`: edited vs sent, linked rows, Live,
                         presets, label scrubbing, Esc revert), command_log, terminal (a text profile's
                         input line and replies, R8.5),
                         timing, trigger (setup popup + step-response results)

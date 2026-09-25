@@ -213,8 +213,10 @@ def test_signal_panel_groups_by_lane_and_moves_signals(qtbot: Any) -> None:
     assert hidden.count(False) == 1
 
     panel.show_readout(Readout(1.5, 0.25, {"speed": 0.125, "err": 1.0}, {"speed": 0.5}))
-    assert panel.cursor_lbl.text() == "@ 1.5 s  Δt +0.25"
-    assert panel.value_text("speed") == "+0.125  Δ +0.5"
+    assert panel.cursor_lbl.text() == "A 1.5s  B 1.25s  ΔT -0.25s"  # B is the anchor
+    assert panel.value_text("speed") == "0.125"  # its value at A; Δ is in the tooltip
+    item = panel._items["speed"]
+    assert "Δ (A − B) +0.5" in item.toolTip(1)
     assert panel.value_text("err") == ""  # hidden signals show no value
 
 
