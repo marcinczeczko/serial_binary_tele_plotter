@@ -321,7 +321,7 @@ layout) instead of binary frames. Binary or text is a property of the device, so
 choice lives in a named **device profile** picked before connecting, and each text stream
 is a **line pattern** inferred from pasted console output.
 
-**Next: R8.3, then R8.4.** Both are specified in detail (config shape, pattern grammar,
+**Next: R8.4** (R8.3 is done). Both are specified in detail (config shape, pattern grammar,
 matching, inference, editor screens, acceptance tests) in
 [`docs/specs/phase8-text-lines.md`](specs/phase8-text-lines.md).
 
@@ -341,7 +341,7 @@ matching, inference, editor screens, acceptance tests) in
   *Done. The profiles folder defaults to `~/telemetry-profiles`; the menu also lists the
   bundled `streams.json` (now the `diffbot` profile) and files opened from elsewhere.
   A profile's baud beats the last baud used with another profile.*
-- [ ] **R8.3 Text-line decoder**: `TextLineDecoder` splits lines (bounded length) and
+- [x] **R8.3 Text-line decoder**: `TextLineDecoder` splits lines (bounded length) and
   matches each against the streams' patterns (`IMU,{ms},{ax}`: fixed text plus number
   slots; `nan`, `inf` and exponents accepted; an empty slot is a gap). Lines matching no
   pattern, and overlong lines, are counted in the link statistics. Validation for text
@@ -349,6 +349,9 @@ matching, inference, editor screens, acceptance tests) in
   a counter the X axis is the line number). VIRTUAL prints lines for text profiles.
   *Done when:* a text profile plots from VIRTUAL and from a recording, and every
   dropped line is counted.
+  *Done. The text counters are in the status bar's link readout (where the binary ones
+  are), not in the Period/History popup the spec named. About 45k lines/s with 34 values
+  per line.*
 - [ ] **R8.4 Editor for text profiles**: the profile row (name, format, baud), a
   **Pattern** field and the Line view (fixed text and value blocks) instead of ID and
   byte order, "From console output…" (paste raw lines or listen for a few seconds;

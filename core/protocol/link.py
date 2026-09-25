@@ -19,6 +19,7 @@ Pure Python, no Qt.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Protocol
 
 import numpy as np
@@ -26,9 +27,11 @@ import numpy as np
 from core.protocol.frame_parser import FrameParser
 from core.protocol.router import StreamRouter
 from core.protocol.stats import LinkStats
+from core.protocol.text_line import TextLineDecoder
 from core.types import StreamConfig
 
 BINARY = "binary"
+TEXT = "text"
 
 
 class LinkDecoder(Protocol):
@@ -65,7 +68,10 @@ class BinaryFrameDecoder:
         return self.router.route(self.parser.feed(data))
 
 
-LINK_FORMATS: dict[str, type[BinaryFrameDecoder]] = {BINARY: BinaryFrameDecoder}
+LINK_FORMATS: dict[str, Callable[[], LinkDecoder]] = {
+    BINARY: BinaryFrameDecoder,
+    TEXT: TextLineDecoder,  # R8.3
+}
 
 
 def make_link_decoder(fmt: str = BINARY) -> LinkDecoder:

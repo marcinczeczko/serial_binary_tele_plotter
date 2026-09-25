@@ -23,6 +23,8 @@ Primary use cases:
 - **Device profiles**: one file per device (`robot-1`, `esc-2`, …) with its wire format,
   baud rate and streams, picked first in the toolbar. Port and baud are remembered per
   profile. The bundled `streams.json` is the `diffbot` profile.
+- **Text lines**: a text profile plots boards that print lines (`IMU,120,0.51,-0.02`,
+  `ENV t=24.5C h=41%`, any layout) instead of binary frames. Each stream is a line pattern.
 - Serial connection management with port scanning and baud rate selection.
 - Analysis mode: pause the plot, scrub with the cursor, click to set an anchor for delta (Δ)
   readouts across all signals.
@@ -264,6 +266,9 @@ Two things are needed on the firmware side:
 No library is required on the MCU. The protocol is a simple packed struct with a header and two
 CRC bytes, straightforward to implement in C/C++.
 
+A board that prints text lines instead (`Serial.println`) needs no protocol at all: use a
+text profile, see [Text lines](#text-lines).
+
 ## Binary Protocol
 
 Every frame sent by the MCU follows this structure:
@@ -311,7 +316,7 @@ commands and panels. Edit it directly or use the in-app stream editor. The bundl
 | Key | Description |
 |-----|-------------|
 | `schema_version` | The file format version, currently `3` |
-| `profile` | Optional: `name` (default: the file name), `format` (the wire format: `binary`, the default) and `baud` (the baud rate to connect at, until you pick another for this profile). An unknown format makes the file unusable |
+| `profile` | Optional: `name` (default: the file name), `format` (the wire format: `binary`, the default, or `text`, see [Text lines](#text-lines)) and `baud` (the baud rate to connect at, until you pick another for this profile). An unknown format makes the file unusable |
 | `commands` | Optional: command packets the app can send (see [Commands and control panels](#commands-and-control-panels)) |
 | `panels` | Optional: control panels that send those commands |
 | `streams` | The telemetry streams, by key |
@@ -374,6 +379,74 @@ frames, and by default it's also the X axis. It should be a `u32` and the first 
 The editor refuses to save a file with errors. A signal with no data (a field the source
 doesn't send) is drawn as a gap and reads `n/a` in the cursor readout. It is never plotted
 as zero.
+
+### Text lines
+
+A profile with `"format": "text"` reads lines of text. Each stream's `frame.pattern` is one
+line layout: fixed text, and a `{name}` slot for each number. `frame.fields` gives each
+slot a type, in the pattern's order.
+
+```json
+{
+  "schema_version": 3,
+  "profile": {"name": "arduino-imu", "format": "text", "baud": 115200},
+  "streams": {
+    "imu": {
+      "name": "IMU",
+      "frame": {
+        "pattern": "IMU,{ms},{ax},{ay}",
+        "fields": [{"name": "ms", "type": "u32"}, {"name": "ax", "type": "f32"},
+                   {"name": "ay", "type": "f32"}]
+      },
+      "time": {"field": "ms", "scale_s": 0.001, "step": 10},
+      "signals": {"ax": {"field": "ax", "label": "Acc X"}}
+    },
+    "env": {
+      "name": "Environment",
+      "frame": {
+        "pattern": "ENV t={t}C h={h}%",
+        "fields": [{"name": "t", "type": "f32"}, {"name": "h", "type": "u32"}]
+      },
+      "signals": {"t": {"field": "t", "label": "Temp"}}
+    }
+  }
+}
+```
+
+For this profile the firmware prints, for example,
+`printf("IMU,%lu,%f,%f\r\n", ms, ax, ay);` and `printf("ENV t=%.1fC h=%u%%\r\n", t, h);`.
+
+**Pattern grammar.**
+- `{name}` is a number slot. The name is letters, digits and `_`. `_line` is reserved.
+- Everything else is fixed text, matched exactly. Write `{{` and `}}` for literal braces.
+  A run of spaces matches any run of whitespace, so `%6.2f` padding is fine.
+- Slots need fixed text between them: `{a}{b}` is an error.
+- A slot takes a number: a sign, decimals, an exponent, `nan` or `inf` (`-.5e-3`, `1E3`).
+  An empty slot (`1,,3`) or `nan` in a float field is a gap in the plot.
+- An integer field (`u32`, `i32`, …) needs a whole number in its range. Anything else
+  (`1.5`, `nan`, a negative `u32`) drops the line, and it's counted.
+
+**Matching.** Lines end at `\n`. A trailing `\r` and surrounding whitespace are ignored,
+and blank lines are skipped. Each line is tried against the streams in file order, and
+the first full match wins. A line that matches no pattern (a boot banner, a debug print)
+is counted as *unmatched*. A line longer than 1024 bytes is dropped and counted. The
+status bar shows these counts for a text profile (hover for all of them).
+
+**X axis.** `time.field` works as for binary streams. Without one, it's `loop_cntr` if the
+pattern has that slot, otherwise the stream's **line number** (`_line`): each matched
+line is one tick, and `time.scale_s` is the time per line. `loop_cntr` is optional in a
+text stream. An integer time slot is checked for gaps and resets like a binary
+`loop_cntr`.
+
+**Validation.** A text stream needs a valid `pattern` whose slots are its field names in
+order. Two streams with the same pattern are a warning, because the second never
+matches. `stream_id`, `endianness` and `packed` mean nothing for text and are ignored
+with a warning. The 255 B payload limit doesn't apply. A `pattern` in a binary profile
+is ignored, with a warning.
+
+`VIRTUAL` prints the shown stream's lines (`\r\n` endings) at its period, plus a
+`# sim tick` line once a second that no pattern matches. It ignores commands: text
+commands are a later phase. Recordings of a text profile replay as text.
 
 ### Simulator (`VIRTUAL` port)
 

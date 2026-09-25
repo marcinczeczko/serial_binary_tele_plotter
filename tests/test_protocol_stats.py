@@ -35,3 +35,15 @@ def test_snapshot_is_independent() -> None:
     stats.bytes_rx = 5
     assert snap.frames_by_id == {1: 2}
     assert snap.bytes_rx == 0
+
+
+def test_a_text_report_shows_the_line_counters() -> None:
+    cur = LinkStats(lines_rx=12, frames_decoded=9, lines_unmatched=3)
+    text, tooltip, problems = format_link_report(make_link_report(LinkStats(), cur, 9, 1.0, "text"))
+    assert not problems  # boards print banners: unmatched lines aren't a problem
+    assert "unmatched 3" in text and "CRC" not in text
+    assert "Lines received: 12" in tooltip and "Lines decoded: 9" in tooltip
+
+    bad = LinkStats(lines_overlong=1)
+    _, _, problems = format_link_report(make_link_report(LinkStats(), bad, 0, 1.0, "text"))
+    assert problems

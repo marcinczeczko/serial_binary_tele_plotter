@@ -9,6 +9,9 @@ statistics count its bytes and frames too.
 Commands written to it are framed and decoded like the firmware would: with the command
 layouts from `streams.json` (R5.2), given by `set_commands`. PID gains change the simulated
 motors (see `core.simulation.pid_motor`).
+
+For a text profile (`set_text(True)`, R8.3) it prints the stream's pattern lines instead,
+and ignores what it's sent: text commands are R8.5.
 """
 
 from __future__ import annotations
@@ -61,6 +64,7 @@ class SimTransport:
         self._t0 = 0.0  # when frame `_k0` was due
         self._k0 = 0
         self._last_read = 0.0
+        self._text = False
 
     @property
     def name(self) -> str:
@@ -85,6 +89,11 @@ class SimTransport:
         with self._lock:
             self._command_defs = tuple(commands)
 
+    def set_text(self, text: bool) -> None:
+        """Prints text lines (a text profile) instead of binary frames."""
+        with self._lock:
+            self._text = text
+
     def set_stream(self, stream: StreamConfig) -> None:
         """Simulates another stream from now on, at that stream's period."""
         with self._lock:
@@ -106,7 +115,8 @@ class SimTransport:
                     if due > MAX_FRAMES_PER_READ:
                         self._k += due - MAX_FRAMES_PER_READ
                         due = MAX_FRAMES_PER_READ
-                    data = self._synth.frames(self._k, due)
+                    synth = self._synth
+                    data = synth.lines(self._k, due) if self._text else synth.frames(self._k, due)
                     self._k += due
                     self._last_read = now
                     return data
@@ -120,5 +130,7 @@ class SimTransport:
         with self._lock:
             if not self._open:
                 raise TransportError("simulator closed")
+            if self._text:
+                return  # text commands arrive with R8.5
             for packet_id, payload in self._commands.feed(data):
                 self._synth.apply_command(packet_id, payload, self._command_defs)

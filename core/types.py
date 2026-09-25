@@ -71,6 +71,7 @@ class StreamFrameConfig(TypedDict, total=False):
     endianness: str
     packed: bool
     fields: list[StreamFrameField]
+    pattern: str  # text profiles (R8.3): the line layout; stream_id and endianness don't apply
 
 
 class StreamTimeConfig(TypedDict, total=False):

@@ -1,6 +1,7 @@
 # Spec: text-line streams (R8.3, R8.4)
 
-- Status: ready to build. R8.1 (decoder slot) and R8.2 (device profiles) are done.
+- Status: R8.3 is built; R8.4 is next. R8.1 (decoder slot) and R8.2 (device profiles)
+  are done.
 - Decision record: [ADR-0010](../adr/0010-device-profiles-and-text-line-streams.md).
   This spec is the working detail below that decision. Change it freely while building,
   and say why in the project log.
@@ -157,8 +158,10 @@ with `tools/bench_pipeline.py` and add a text case to it; a rough target is ≥ 
   - `lines_overlong`;
   - `value_errors`.
 - For text, `frames_decoded` counts matched lines, and `frames_by_id` stays empty.
-- The Timing panel (`ui/panels/timing.py`) shows the text counters when the profile is
-  text. Keep the binary layout unchanged for binary profiles.
+- The status bar's link readout (`format_link_report`) shows the text counters when the
+  decoder is text; `LinkReport` carries the decoder's `format`. The binary layout is
+  unchanged. (Built this way in R8.3: the link counters were never in
+  `ui/panels/timing.py`, which only holds Period and History.)
 
 ### Validation (`core/config/streams.py`, `document.py`)
 

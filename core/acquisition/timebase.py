@@ -31,6 +31,7 @@ from typing import Any
 import numpy as np
 
 from core.protocol.constants import LOOP_CNTR_NAME, STRUCT_TYPE_MAP
+from core.protocol.text_line import default_time_field
 from core.types import StreamConfig
 
 DEFAULT_SCALE_S = 0.005  # the UI's historical default period (5 ms per loop_cntr tick)
@@ -75,7 +76,9 @@ def time_base_config(stream: StreamConfig | dict[str, Any]) -> TimeBaseConfig:
     """
     raw: Any = stream.get("time")
     time_cfg: dict[str, Any] = raw if isinstance(raw, dict) else {}
-    field = str(time_cfg.get("field", LOOP_CNTR_NAME))
+    # A text stream without a counter counts lines instead (`_line`, R8.3); `_line` is no
+    # frame field, so it gets the u32 default below and wraps like one.
+    field = str(time_cfg.get("field", default_time_field(stream)))
     frame = stream.get("frame")
     fields = frame.get("fields", []) if isinstance(frame, dict) else []
     ftype = next(

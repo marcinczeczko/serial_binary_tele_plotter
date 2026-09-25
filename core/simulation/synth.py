@@ -3,6 +3,9 @@ Frame synthesis for the simulator (R2.7, review finding A6).
 
 `FrameSynth` builds real protocol frames (header, CRC, packed payload) for any stream in
 streams.json, so the simulator exercises the same parser, router and store as hardware.
+For a text profile it prints the stream's `frame.pattern` lines instead (R8.3), with
+`\r\n` endings like Arduino's `println`, and a `# sim tick` line once a second that no
+pattern matches, so the unmatched-line counter has something to count.
 What each field carries comes from config, never from the stream's name:
 
     "sim": {
@@ -33,6 +36,7 @@ from core.protocol.commands import CommandDef, decode_command
 from core.protocol.constants import LOOP_CNTR_NAME, MAGIC_0, MAGIC_1, STRUCT_TYPE_MAP
 from core.protocol.crc import calculate_crc8
 from core.protocol.record_decoder import frame_dtype
+from core.protocol.text_line import format_line, parse_pattern, pattern_of
 from core.simulation.pid_motor import PidMotorModel
 from core.types import StreamConfig
 
@@ -40,6 +44,7 @@ WAVES = ("sine", "step", "noise", "const", "counter")
 WAVE_KEYS = ("wave", "amp", "freq_hz", "offset", "phase_deg", "noise")
 SIM_MODELS = ("pid_motor",)
 SIM_KEYS = ("model", "fields")
+SIM_TICK_LINE = b"# sim tick\r\n"
 
 
 @dataclass(frozen=True)
@@ -129,8 +134,11 @@ class FrameSynth:
         self.stream = stream
         self._fields = [(f["name"], f["type"]) for f in frame["fields"]]
         self._dtype = frame_dtype(frame.get("endianness", "little"), frame["fields"])
-        header = bytes([MAGIC_0, MAGIC_1, frame["stream_id"], self._dtype.itemsize])
+        # A text stream has no stream_id; its header is never used.
+        header = bytes([MAGIC_0, MAGIC_1, frame.get("stream_id", 0), self._dtype.itemsize])
         self._header = header + bytes([calculate_crc8(header)])
+        pattern = pattern_of(stream)
+        self._pattern = parse_pattern(pattern) if pattern is not None else None
         time_cfg = time_base_config(stream)
         self._time_field = time_cfg.field
         self._time_step = time_cfg.step
@@ -160,6 +168,35 @@ class FrameSynth:
         """Encodes frames k0 .. k0 + n - 1 (consecutive calls continue the models)."""
         if n <= 0:
             return b""
+        blob = self._records(k0, n).tobytes()
+        size = self._dtype.itemsize
+        out = bytearray()
+        for i in range(n):
+            payload = blob[i * size : (i + 1) * size]
+            out += self._header
+            out += payload
+            out.append(calculate_crc8(payload))
+        return bytes(out)
+
+    def lines(self, k0: int, n: int) -> bytes:
+        """
+        Prints frames k0 .. k0 + n - 1 as the stream's pattern lines (a text profile),
+        with a `# sim tick` line before every frame that starts a second.
+        """
+        if n <= 0 or self._pattern is None:
+            return b""
+        records = self._records(k0, n)
+        names = [name for name, _ in self._fields]
+        per_second = max(1, round(1.0 / max(self.period_s, 1e-6)))
+        out = bytearray()
+        for k, row in enumerate(records.tolist(), start=k0):
+            if k % per_second == 0:
+                out += SIM_TICK_LINE
+            line = format_line(self._pattern, dict(zip(names, row, strict=True)))
+            out += line.encode("ascii") + b"\r\n"
+        return bytes(out)
+
+    def _records(self, k0: int, n: int) -> np.ndarray:
         k = np.arange(k0, k0 + n, dtype=np.int64)
         t = k * self.period_s
         records = np.zeros(n, dtype=self._dtype)
@@ -176,16 +213,7 @@ class FrameSynth:
             for name, ftype in self._model_fields:
                 column = np.array([s[name] for s in steps], dtype=np.float64)
                 records[name] = _to_field(column, ftype, wrap=False)
-
-        blob = records.tobytes()
-        size = self._dtype.itemsize
-        out = bytearray()
-        for i in range(n):
-            payload = blob[i * size : (i + 1) * size]
-            out += self._header
-            out += payload
-            out.append(calculate_crc8(payload))
-        return bytes(out)
+        return records
 
     def apply_command(self, packet_id: int, payload: bytes, commands: Sequence[CommandDef]) -> bool:
         """

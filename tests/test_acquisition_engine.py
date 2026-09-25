@@ -356,3 +356,43 @@ def test_set_capacity_resizes_every_store(pyqt_stub):
     engine.set_capacity(5)
     assert len(engine.stores.get("a")) == 5 and len(engine.stores.get("b")) == 0
     assert engine.stores.get("a").capacity == 5
+
+
+def test_a_text_profile_decodes_lines_into_the_stores(pyqt_stub):
+    from core.protocol.text_line import TextLineDecoder
+
+    streams = {
+        "env": {
+            "name": "Environment",
+            "frame": {
+                "pattern": "ENV t={t}C h={h}%",
+                "fields": [{"name": "t", "type": "f32"}, {"name": "h", "type": "u32"}],
+            },
+            "time": {"scale_s": 0.5},
+            "signals": {"t": {"field": "t"}},
+        }
+    }
+    transport = FakeTransport()
+    engine = _engine(transport)
+    engine.configure_profile("sensor", "text")
+    engine.configure_streams(streams)
+    assert isinstance(engine.link, TextLineDecoder)
+    engine.start_working("COM7", 115200)
+    transport.push(b"boot\r\nENV t=20.5C h=40%\r\nENV t=21C h=41%\r\nENV t=21.5C h=42%\r\n")
+    try:
+        assert wait_for(lambda: engine.stores.get("env").total_stored == 3)
+    finally:
+        engine.stop_working()
+    snap = engine.stores.get("env").snapshot()
+    assert snap.time.tolist() == [0.0, 0.5, 1.0]  # the line number x 0.5 s
+    assert snap.signals["t"].tolist() == [20.5, 21.0, 21.5]
+    assert engine.link.stats.lines_unmatched == 1
+
+
+def test_switching_to_a_text_profile_tolerates_the_old_binary_streams(pyqt_stub):
+    engine = _engine()
+    engine.configure_streams(STREAMS)
+    engine.configure_profile("sensor", "text")  # its streams follow
+    assert engine.link.feed(b"x\n") == {}
+    engine.configure_profile("robot", "binary")
+    assert type(engine.link).__name__ == "BinaryFrameDecoder"

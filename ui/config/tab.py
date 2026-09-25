@@ -222,7 +222,7 @@ class ConfiguratorTab(QtWidgets.QWidget):
             f"{key} · {len(draft.fields)} fields · {len(draft.signals)} signals"
             f" · {draft.payload_size()} B"
         )
-        problems = validate_stream(key, draft.to_stream())
+        problems = validate_stream(key, draft.to_stream(), self.loader.profile.format)
         errors = [p for p in problems if p.severity == "error"]
         shown = errors or problems
         if shown:
