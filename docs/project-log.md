@@ -6,6 +6,21 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — Quieter top bar: words, and only what's true
+
+- The owner found the bar's right end unreadable (`H 10.0 s | 202 Hz 2.00k pts | T — | □ REC |
+  30 kB/s`). Now: `Window 10 s | Trigger` when idle; the armed trigger in orange (`Trigger ╲
+  0.15 ARMED`), `REC 02:14` in red and link problems in words on amber (`3 CRC errors · 12
+  lost`; text: `2 bad values · 1 line too long`) appear only while true (`TopBar.add_optional`).
+- Removed: `RatePoints` (rate in the tab's tooltip, points in the Window popup), the idle
+  `kB/s`, the scope letters `H` and `T`. New View → Link statistics: every counter, live.
+- `format_link_report` problems are in words; `format_duration` drops trailing zeros
+  (`10 s`). Mockup rendered first, then the real bar checked in screenshots. Spec amended.
+- Tests follow the new texts; two new: link problems shown only while non-zero (and the
+  statistics window), REC only while recording. 475 pass (the count-format tests went).
+
+---
+
 ## 2026-09-25 — Numbers in B612, not B612 Mono
 
 - B612 Mono's decimal point takes a full cell, so every number read `0. 25`, `10. 0 s`. The

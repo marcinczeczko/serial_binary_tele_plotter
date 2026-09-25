@@ -25,7 +25,7 @@ def test_format_flags_problems_but_not_other_stream_ids() -> None:
     cur = LinkStats(bytes_rx=29_300, header_crc_errors=1, payload_crc_errors=2, discarded_bytes=7)
     rate, problems, _ = format_link_report(make_link_report(LinkStats(), cur, 0, 1.0))
     assert rate == "29 kB/s"
-    assert problems == "CRC 3  SYNC 7"  # only what went wrong
+    assert problems == "3 CRC errors · 7 bytes dropped"  # only what went wrong, in words
 
 
 def test_snapshot_is_independent() -> None:
@@ -47,7 +47,10 @@ def test_a_text_report_shows_the_line_counters() -> None:
 
     bad = LinkStats(lines_overlong=1)
     _, problems, _ = format_link_report(make_link_report(LinkStats(), bad, 0, 1.0, "text"))
-    assert problems == "LONG 1"
+    assert problems == "1 line too long"
+    worse = LinkStats(lines_overlong=2, value_errors=1, counter_missing=4)
+    _, problems, _ = format_link_report(make_link_report(LinkStats(), worse, 0, 1.0, "text"))
+    assert problems == "2 lines too long · 1 bad value · 4 lost"
 
 
 def test_a_report_carries_the_replies_since_the_previous_one() -> None:

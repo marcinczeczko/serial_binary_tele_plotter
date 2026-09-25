@@ -139,15 +139,15 @@ def _rate(report: LinkReport) -> str:
     return f"{kb:.0f} kB/s" if kb >= 10 else f"{kb:.1f} kB/s"
 
 
-def _problems(counts: list[tuple[str, int]]) -> str:
-    """Only what went wrong: `CRC 3  LOST 12` (empty when nothing did)."""
-    return "  ".join(f"{label} {n}" for label, n in counts if n)
+def _problems(counts: list[tuple[str, str, int]]) -> str:
+    """Only what went wrong, in words: `3 CRC errors · 12 lost` (empty when nothing did)."""
+    return " · ".join(f"{n} {one if n == 1 else many}" for one, many, n in counts if n)
 
 
 def format_link_report(report: LinkReport) -> tuple[str, str, str]:
     """
     (rate, problems, tooltip) for the top bar's link-health item (R9.2): the byte rate,
-    the non-zero drop counters in short form ("" when the link is clean), and the full
+    the non-zero drop counters in words ("" when the link is clean), and the full
     breakdown. Nothing dropped is hidden: every counter is in the tooltip (C13).
     """
     if report["format"] == "text":
@@ -156,11 +156,11 @@ def format_link_report(report: LinkReport) -> tuple[str, str, str]:
     # Unconfigured stream IDs aren't flagged: the MCU may send streams nobody plots.
     problems = _problems(
         [
-            ("CRC", crc),
-            ("SIZE", report["size_mismatches"]),
-            ("SYNC", report["discarded_bytes"]),
-            ("LOST", report["counter_missing"]),
-            ("RESET", report["counter_resets"]),
+            ("CRC error", "CRC errors", crc),
+            ("size mismatch", "size mismatches", report["size_mismatches"]),
+            ("byte dropped", "bytes dropped", report["discarded_bytes"]),
+            ("lost", "lost", report["counter_missing"]),
+            ("reset", "resets", report["counter_resets"]),
         ]
     )
     tooltip = "\n".join(
@@ -184,10 +184,10 @@ def _format_text_report(report: LinkReport) -> tuple[str, str, str]:
     # Unmatched lines aren't flagged: boards print banners and debug lines nobody plots.
     problems = _problems(
         [
-            ("LONG", report["lines_overlong"]),
-            ("BAD", report["value_errors"]),
-            ("LOST", report["counter_missing"]),
-            ("RESET", report["counter_resets"]),
+            ("line too long", "lines too long", report["lines_overlong"]),
+            ("bad value", "bad values", report["value_errors"]),
+            ("lost", "lost", report["counter_missing"]),
+            ("reset", "resets", report["counter_resets"]),
         ]
     )
     tooltip = "\n".join(

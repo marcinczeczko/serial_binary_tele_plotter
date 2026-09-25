@@ -97,7 +97,8 @@ ui/charts/              TelemetryPlot (lanes = signals[*].group, per-lane Y mode
                         store's overview), lanes.py + series.py (Qt-free layout, range, decimation, readout),
                         trigger_controller (arms on the shown store, emits captures)
 ui/panels/              container (owns the controls; MainWindow places them), top_bar (the 36 px row: PartsButton
-                        with boxed letters, RunBox, MessageLabel, RatePoints, LinkHealth), connection (profile
+                        RunBox, MessageLabel, LinkHealth; `add_optional` items
+                        show only while true: REC, link problems), connection (profile
                         menu, port (refreshes on open), baud (serial only), Connect, RUN/STOP), profile_dialog (New profile),
                         stream_tabs, signals (the Signals pane: one row per L/R pair from signal_rows,
                         swatch toggles, readout at A in colour, filter on Ctrl+F, drag rows between lanes), command_panel (generated from `panels`: edited vs sent, Manual|Live, Presets ▾,

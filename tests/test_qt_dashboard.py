@@ -104,11 +104,10 @@ def test_stream_tabs_show_activity_and_the_time_button_the_window(
     assert tabs.tabText(0) == "PID Telemetry" and tabs.rate("pid") == 200.4
     assert tabs.tabToolTip(0) == "PID Telemetry: 200 Hz"
     assert tabs.rate("imu_6axis") is None and "no data" in tabs.tabToolTip(2)
-    assert win.time_btn.text() == "H 10.0 s"  # 5 ms x 2000 samples
+    assert win.time_btn.text() == "Window 10 s"  # 5 ms x 2000 samples
     assert "period 5 ms × 2000 samples" in win.time_btn.toolTip()
-    assert win.rate_points.text() == "— Hz\n2.00k pts"  # the shown stream: "pid", not yet
     win.panel.time_panel.samples_sb.setValue(5000)
-    assert win.time_btn.text() == "H 25.0 s" and win.rate_points.text().endswith("5.00k pts")
+    assert win.time_btn.text() == "Window 25 s"
 
     conn = win.panel.conn_panel
     conn.port_combo.setCurrentIndex(conn.port_combo.findText("VIRTUAL"))
@@ -117,7 +116,6 @@ def test_stream_tabs_show_activity_and_the_time_button_the_window(
     # The simulator sends the shown stream only; pid_ff shares its frames (R2.2).
     qtbot.waitUntil(lambda: (tabs.rate("pid") or 0) > 0, timeout=5000)
     qtbot.waitUntil(lambda: tabs.rate("imu_6axis") is None, timeout=5000)
-    assert win.rate_points.text().split("\n")[0].endswith(" Hz")
     assert win.panel.conn_panel.pause_btn.text() == "RUN"
     conn.connect_btn.click()
     qtbot.waitUntil(lambda: win.engine_state == EngineState.CONFIGURED, timeout=5000)
