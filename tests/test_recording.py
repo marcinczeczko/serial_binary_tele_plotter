@@ -303,5 +303,51 @@ def test_an_unknown_format_refuses_to_connect(pyqt_stub: Any) -> None:
     engine.connection_failed.connect(failures.append)
     engine.configure_profile("broken", "morse")
     engine.start_working("COM7", 115200)
-    assert failures == ["Cannot decode: unknown link format 'morse' (known: binary)"]
+    assert failures == ["Cannot decode: unknown link format 'morse' (known: binary, text)"]
     assert engine.state.name == "CONFIGURED"
+
+
+# --- text profiles (R8.3) ---
+
+
+def _text_streams() -> dict[str, Any]:
+    import json
+
+    fixture = Path(__file__).parent / "fixtures" / "text_profile.json"
+    streams: dict[str, Any] = json.loads(fixture.read_text(encoding="utf-8"))["streams"]
+    return streams
+
+
+def test_a_text_profile_plots_from_virtual_and_replays_the_same(
+    pyqt_stub: Any, tmp_path: Path
+) -> None:
+    from core.protocol.text_line import TextLineDecoder
+
+    streams = _text_streams()
+    live = _engine()
+    live.configure_profile("arduino-imu", "text")
+    live.configure_streams(streams)
+    live.select_stream("imu")
+    assert isinstance(live.link, TextLineDecoder)
+    live.start_working("VIRTUAL", 115200)
+    path = tmp_path / "text.sbtp"
+    live.start_recording(str(path))
+    try:
+        assert wait_for(lambda: live.stores.get("imu").total_stored >= 150, timeout_s=5.0)
+    finally:
+        live.stop_working()
+    stats = live.link.stats
+    assert stats.lines_unmatched >= 1  # the simulator's "# sim tick"
+    assert stats.counter_gaps == stats.value_errors == stats.lines_overlong == 0
+    assert RecordingReader(path).header.extra["profile"]["format"] == "text"
+
+    replayed = _engine()
+    replayed.configure_profile("arduino-imu", "text")
+    replayed.configure_streams(streams)
+    replayed.start_replay(str(path), 0.0)
+    assert _wait_idle(replayed)
+    assert replayed.link.stats == stats
+    a, b = live.stores.get("imu").snapshot(), replayed.stores.get("imu").snapshot()
+    assert a is not None and b is not None and len(a.time) >= 150
+    assert a.time.tolist() == b.time.tolist()
+    assert a.signals["ax"].tolist() == b.signals["ax"].tolist()

@@ -21,7 +21,12 @@ from typing import Any, cast
 from core.config.controls import PanelDef, parse_commands, parse_panels
 from core.config.migrate import SCHEMA_VERSION, SchemaError, migrate, schema_version
 from core.config.profile import Profile, profile_of, profile_problems
-from core.config.streams import ConfigProblem, shared_id_problems, validate_stream
+from core.config.streams import (
+    ConfigProblem,
+    same_pattern_problems,
+    shared_id_problems,
+    validate_stream,
+)
 from core.protocol.commands import CommandDef
 from core.types import StreamConfig
 
@@ -75,9 +80,13 @@ def validate_config(data: Any) -> list[ConfigProblem]:
             ConfigProblem("warning", None, f"unknown top-level key(s) {', '.join(unknown)}")
         )
     problems.extend(profile_problems(doc))
+    fmt = profile_of(doc, "").format
     for key, stream in streams.items():
-        problems.extend(validate_stream(str(key), stream))
-    problems.extend(shared_id_problems(streams))
+        problems.extend(validate_stream(str(key), stream, fmt))
+    if fmt == "text":
+        problems.extend(same_pattern_problems(streams))
+    else:
+        problems.extend(shared_id_problems(streams))
 
     raw_commands = doc.get("commands")
     commands, command_problems = parse_commands(raw_commands)

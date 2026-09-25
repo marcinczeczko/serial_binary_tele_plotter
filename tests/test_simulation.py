@@ -281,3 +281,51 @@ def test_sim_transport_lifecycle_and_commands() -> None:
         sim.read(0.01)
     with pytest.raises(TransportError):
         sim.write(b"\x00")
+
+
+# --- text profiles (R8.3) ---
+
+
+def _text_stream() -> StreamConfig:
+    return cast(
+        StreamConfig,
+        {
+            "name": "IMU",
+            "frame": {
+                "pattern": "IMU,{ms},{ax},{n}",
+                "fields": [
+                    {"name": "ms", "type": "u32"},
+                    {"name": "ax", "type": "f32"},
+                    {"name": "n", "type": "i16"},
+                ],
+            },
+            "time": {"field": "ms", "scale_s": 0.001, "step": 10},
+            "sim": {"fields": {"ax": {"wave": "sine", "amp": 2.0}}},
+        },
+    )
+
+
+def test_text_lines_print_the_pattern_and_decode_back() -> None:
+    from core.protocol.text_line import TextLineDecoder
+
+    stream = _text_stream()
+    data = FrameSynth(stream, seed=0).lines(0, 250)  # 2.5 s at 10 ms per line
+    lines = data.split(b"\r\n")
+    assert lines[0] == b"# sim tick" and lines[1].startswith(b"IMU,0,")
+    assert data.count(b"# sim tick") == 3  # at 0 s, 1 s and 2 s
+    decoder = TextLineDecoder()
+    decoder.configure({"s": stream})
+    records = decoder.feed(data)["s"]
+    assert records["ms"].tolist() == list(range(0, 2500, 10))
+    assert np.abs(records["ax"]).max() == pytest.approx(2.0, abs=0.01)
+    assert decoder.stats.lines_unmatched == 3
+    assert decoder.stats.counter_gaps == decoder.stats.value_errors == 0
+
+
+def test_a_text_sim_transport_prints_lines_and_ignores_commands() -> None:
+    clock = _Clock()
+    sim = _transport(_text_stream(), clock)
+    sim.set_text(True)
+    clock.now += 0.05
+    assert sim.read(0.05).startswith(b"# sim tick\r\nIMU,0,")
+    sim.write(b"PID 1 2\n")  # text commands are R8.5: nothing happens, nothing raises

@@ -1,0 +1,33 @@
+{
+    "schema_version": 3,
+    "profile": {"name": "arduino-imu", "format": "text", "baud": 115200},
+    "streams": {
+        "imu": {
+            "name": "IMU",
+            "frame": {
+                "pattern": "IMU,{ms},{ax},{ay},{az}",
+                "fields": [
+                    {"name": "ms", "type": "u32"},
+                    {"name": "ax", "type": "f32"},
+                    {"name": "ay", "type": "f32"},
+                    {"name": "az", "type": "f32"}
+                ]
+            },
+            "time": {"field": "ms", "scale_s": 0.001, "step": 10},
+            "signals": {
+                "ax": {"field": "ax", "label": "Acc X", "group": "accel"},
+                "ay": {"field": "ay", "label": "Acc Y", "group": "accel"},
+                "az": {"field": "az", "label": "Acc Z", "group": "accel"}
+            }
+        },
+        "env": {
+            "name": "Environment",
+            "frame": {
+                "pattern": "ENV t={t}C h={h}%",
+                "fields": [{"name": "t", "type": "f32"}, {"name": "h", "type": "u32"}]
+            },
+            "time": {"scale_s": 0.5},
+            "signals": {"t": {"field": "t", "label": "Temp"}, "h": {"field": "h", "label": "Humidity"}}
+        }
+    }
+}

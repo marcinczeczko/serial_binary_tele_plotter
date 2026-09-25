@@ -6,6 +6,26 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — R8.3 Text-line decoder
+
+- **Text profiles (ADR-0010).** `core/protocol/text_line.py`: the pattern grammar
+  (`parse_pattern`, `format_line`) and `TextLineDecoder`, registered as `text` in
+  `LINK_FORMATS`. Lines are bounded at 1024 B. Unmatched, overlong and unconvertible
+  lines are counted in new `LinkStats` counters (C13). Each record carries `_line`, the
+  X axis of a stream without a counter.
+- Validation is format-aware: a text stream needs a pattern whose slots are its fields
+  in order, `loop_cntr` is optional, and `stream_id`/`endianness` are ignored (warning).
+  VIRTUAL prints pattern lines plus `# sim tick` once a second. A recording replays as text.
+- Spec change: the text counters are in the status bar's link readout (`LinkReport`
+  now carries `format`), since the Period/History popup never held link counters.
+- Numbers (`bench_pipeline`, 3 interleaved runs each): binary 900 B reads ~155k frames/s
+  on main and on the branch (no change); text lines ~45k lines/s with 34 values per line.
+  Tests: 386 (+48). With Qt, 384 pass and 1 is skipped; without, 316 pass and 69 are
+  skipped. The one failure in both, `test_serial_transport_over_a_real_pty`, also fails
+  on main on macOS (`Inappropriate ioctl for device`); CI (Linux) isn't affected.
+
+---
+
 ## 2026-09-25 — Handoff: R8.3/R8.4 spec, web session hook
 
 - `docs/specs/phase8-text-lines.md`: the working spec for text-line streams (R8.3

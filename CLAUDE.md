@@ -17,8 +17,8 @@ so you can work without hardware.
 3. `docs/reviews/2026-09-24-architecture-review.md`: known defects, with stable IDs
    (`C*` correctness, `P*` performance, `A*` architecture, `T*` tooling).
 4. `docs/adr/`: design decisions. ADR-0002 is the target pipeline.
-5. `docs/specs/`: working specs for the next roadmap items. **Next up: R8.3, then R8.4:
-   text-line streams, fully specified in `docs/specs/phase8-text-lines.md`.**
+5. `docs/specs/`: working specs for the next roadmap items. **Next up: R8.4, the editor for
+   text profiles (R8.3's decoder is done), specified in `docs/specs/phase8-text-lines.md`.**
 
 Before starting non-trivial work, check whether a roadmap item or finding already covers
 it, and reference its ID in commits and PRs.
@@ -72,7 +72,8 @@ core/config/            document (load -> migrate -> validate -> save, StreamCon
                         (the `profile` block: name, format, baud; listing a profiles folder)
 core/protocol/          wire format: link (LinkDecoder: bytes -> records per stream; the engine's only view of the
                         format, ADR-0010), constants, crc (CRC-8), frame_parser (sync/CRC, all IDs), record_decoder
-                        (numpy dtype), router (multi-stream dispatch), handler (single-stream API), commands, stats
+                        (numpy dtype), router (multi-stream dispatch), handler (single-stream API), commands, stats,
+                        text_line (text profiles: pattern grammar, TextLineDecoder, `_line` X axis; R8.3)
 core/transport/         Transport protocol, SerialTransport, SimTransport (the VIRTUAL port), ReplayTransport
                         (plays an .sbtp file), ReaderThread (no Qt)
 core/recording/         .sbtp raw recordings (ADR-0006): RecordingWriter/Reader; no Qt

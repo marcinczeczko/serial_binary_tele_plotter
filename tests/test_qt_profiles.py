@@ -8,6 +8,7 @@ Marked `qt`: skipped when pytest-qt is disabled or Qt can't load (see tests/conf
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -210,4 +211,40 @@ def test_a_profile_opened_from_elsewhere_is_remembered_in_the_menu(
     win.switch_profile(DEFAULT_CONFIG_PATH)
 
     assert "robot-1   ·  binary" in _menu_names(win)
+    win.close()
+
+
+def test_a_text_profile_plots_from_virtual_and_counts_unmatched_lines(
+    qtbot: Any, tmp_path: Path
+) -> None:
+    """R8.3: a text profile end to end, with the text counters in the status bar."""
+    from ui.main_window import MainWindow
+
+    fixture = Path(__file__).parent / "fixtures" / "text_profile.json"
+    settings = QtCore.QSettings(str(tmp_path / "s.ini"), QtCore.QSettings.Format.IniFormat)
+    settings.setValue(KEY_PROFILES_DIR, str(tmp_path))
+    win = MainWindow(fixture, settings=settings)
+    qtbot.addWidget(win)
+    conn = win.panel.conn_panel
+    assert conn.profile_btn.text() == "arduino-imu · text ▾"
+    assert conn.baud_combo.currentText() == "115200"
+    qtbot.waitUntil(lambda: win.engine._profile == {"name": "arduino-imu", "format": "text"})
+
+    conn.port_combo.setCurrentIndex(conn.port_combo.findText("VIRTUAL"))
+    conn.connect_btn.click()
+    qtbot.waitUntil(lambda: win.engine_state == EngineState.RUNNING, timeout=5000)
+
+    def plotting_imu() -> bool:
+        packet = win.plot.last_packet
+        return packet is not None and set(packet["signals"]) == {"ax", "ay", "az"}
+
+    qtbot.waitUntil(plotting_imu, timeout=5000)
+
+    # "# sim tick" once a second; the report comes about once a second too.
+    def unmatched() -> int:
+        found = re.search(r"unmatched (\d+)", win.lbl_link.text())
+        return int(found.group(1)) if found else 0
+
+    qtbot.waitUntil(lambda: unmatched() > 0, timeout=5000)
+    assert "Lines matching no pattern:" in win.lbl_link.toolTip()
     win.close()

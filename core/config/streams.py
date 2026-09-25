@@ -2,7 +2,8 @@
 Validation of the stream definitions in `streams.json` (`streams.<key>`).
 
 `validate_stream()` is the single source of truth for what a usable stream is: frame
-layout, time base, simulation, lanes and signals. The document-level checks (schema
+layout (binary frames, or a text line pattern in a text profile, R8.3), time base,
+simulation, lanes and signals. The document-level checks (schema
 version, commands, panels, cross-references) are in `core.config.document`.
 """
 
@@ -14,6 +15,7 @@ from typing import Any, Literal
 
 from core.acquisition.timebase import TIME_KEYS
 from core.protocol.constants import LOOP_CNTR_NAME, STRUCT_TYPE_MAP
+from core.protocol.text_line import LINE_FIELD, PatternError, default_time_field, parse_pattern
 from core.simulation.synth import SIM_KEYS, SIM_MODELS, WAVE_KEYS, WAVES
 
 ENDIANNESS = ("little", "big")
@@ -21,6 +23,7 @@ MAX_PAYLOAD_BYTES = 255  # LEN is a single byte on the wire
 Y_RANGE_MODES = ("auto", "auto-grow", "manual")  # per-lane Y range behaviour (R3.2)
 GROUP_KEYS = ("label", "order", "y_range")
 Y_RANGE_KEYS = ("mode", "min", "max", "include_zero")
+BINARY_FRAME_KEYS = ("stream_id", "endianness", "packed")  # meaningless for text lines
 
 
 @dataclass(frozen=True)
@@ -77,8 +80,34 @@ def shared_id_problems(streams: dict[str, Any]) -> list[ConfigProblem]:
     return problems
 
 
-def validate_stream(key: str, stream: Any) -> list[ConfigProblem]:
-    """Returns the problems of a single stream definition."""
+def same_pattern_problems(streams: dict[str, Any]) -> list[ConfigProblem]:
+    """Text streams: the first pattern that matches a line wins, so a repeat never matches."""
+    problems: list[ConfigProblem] = []
+    seen: dict[str, str] = {}
+    for key, stream in streams.items():
+        frame = stream.get("frame") if isinstance(stream, dict) else None
+        pattern = frame.get("pattern") if isinstance(frame, dict) else None
+        if not isinstance(pattern, str):
+            continue
+        if pattern in seen:
+            problems.append(
+                ConfigProblem(
+                    "warning",
+                    str(key),
+                    f"has the same pattern as '{seen[pattern]}', which gets every such line",
+                )
+            )
+        else:
+            seen[pattern] = str(key)
+    return problems
+
+
+def validate_stream(key: str, stream: Any, fmt: str = "binary") -> list[ConfigProblem]:
+    """
+    Returns the problems of a single stream definition, in a profile of format `fmt`
+    (`binary` frames or `text` lines).
+    """
+    text = fmt == "text"
     problems: list[ConfigProblem] = []
 
     def error(msg: str) -> None:
@@ -100,12 +129,23 @@ def validate_stream(key: str, stream: Any) -> list[ConfigProblem]:
         error("'frame' must be an object")
         return problems
 
-    stream_id = frame.get("stream_id")
-    if not isinstance(stream_id, int) or isinstance(stream_id, bool) or not 0 <= stream_id <= 255:
-        error(f"frame.stream_id must be an integer 0-255, got {stream_id!r}")
-    endianness = frame.get("endianness", "little")
-    if endianness not in ENDIANNESS:
-        error(f"frame.endianness must be 'little' or 'big', got {endianness!r}")
+    if text:
+        ignored = [k for k in BINARY_FRAME_KEYS if k in frame]
+        if ignored:
+            warning(f"frame.{', frame.'.join(ignored)} mean nothing for text lines; ignored")
+    else:
+        stream_id = frame.get("stream_id")
+        if (
+            not isinstance(stream_id, int)
+            or isinstance(stream_id, bool)
+            or not 0 <= stream_id <= 255
+        ):
+            error(f"frame.stream_id must be an integer 0-255, got {stream_id!r}")
+        endianness = frame.get("endianness", "little")
+        if endianness not in ENDIANNESS:
+            error(f"frame.endianness must be 'little' or 'big', got {endianness!r}")
+        if "pattern" in frame:
+            warning("frame.pattern is for text-line profiles; ignored in a binary profile")
 
     fields = frame.get("fields")
     if not isinstance(fields, list) or not fields:
@@ -113,7 +153,7 @@ def validate_stream(key: str, stream: Any) -> list[ConfigProblem]:
         return problems
 
     names: list[str] = []
-    fmt = ""
+    layout = ""
     for i, field in enumerate(fields):
         name = field.get("name") if isinstance(field, dict) else None
         ftype = field.get("type") if isinstance(field, dict) else None
@@ -128,13 +168,16 @@ def validate_stream(key: str, stream: Any) -> list[ConfigProblem]:
                 f"field '{name}' has unknown type {ftype!r} (known: {', '.join(STRUCT_TYPE_MAP)})"
             )
         else:
-            fmt += STRUCT_TYPE_MAP[ftype][0]
+            layout += STRUCT_TYPE_MAP[ftype][0]
 
-    payload = struct.calcsize("<" + fmt)
-    if payload > MAX_PAYLOAD_BYTES:
+    if text:
+        problems.extend(_pattern_problems(key, frame.get("pattern"), names))
+    elif (payload := struct.calcsize("<" + layout)) > MAX_PAYLOAD_BYTES:
         error(f"payload is {payload} B; the protocol allows at most {MAX_PAYLOAD_BYTES} B")
 
-    if LOOP_CNTR_NAME not in names:
+    if text:
+        pass  # a counter is optional: without one the X axis is the line number
+    elif LOOP_CNTR_NAME not in names:
         error(f"frame must contain '{LOOP_CNTR_NAME}' (it's used to detect lost frames)")
     else:
         if names[0] != LOOP_CNTR_NAME:
@@ -143,7 +186,9 @@ def validate_stream(key: str, stream: Any) -> list[ConfigProblem]:
         if cntr.get("type") != "u32":
             warning(f"'{LOOP_CNTR_NAME}' should be u32, got {cntr.get('type')!r}")
 
-    problems.extend(_time_problems(key, stream.get("time"), names))
+    time_names = [*names, LINE_FIELD] if text else names
+    default_field = default_time_field(stream) if text else LOOP_CNTR_NAME
+    problems.extend(_time_problems(key, stream.get("time"), time_names, default_field))
     problems.extend(_sim_problems(key, stream.get("sim"), names))
     problems.extend(_lane_problems(key, stream))
 
@@ -165,14 +210,36 @@ def _is_positive_number(value: Any) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool) and value > 0
 
 
-def _time_problems(key: str, time_cfg: Any, names: list[str]) -> list[ConfigProblem]:
+def _pattern_problems(key: str, pattern: Any, names: list[str]) -> list[ConfigProblem]:
+    """A text stream's `frame.pattern` (R8.3): valid, and its slots are the fields in order."""
+
+    def error(msg: str) -> list[ConfigProblem]:
+        return [ConfigProblem("error", key, msg)]
+
+    if not isinstance(pattern, str) or not pattern.strip():
+        return error('frame.pattern is required for a text stream (e.g. "IMU,{ms},{ax}")')
+    try:
+        slots = list(parse_pattern(pattern).slots)
+    except PatternError as e:
+        return error(f"frame.pattern: {e}")
+    if slots != names:
+        return error(
+            f"frame.pattern slots ({', '.join(slots)}) must be the fields in order "
+            f"({', '.join(names)})"
+        )
+    return []
+
+
+def _time_problems(
+    key: str, time_cfg: Any, names: list[str], default_field: str = LOOP_CNTR_NAME
+) -> list[ConfigProblem]:
     """Checks the optional `time: {field, scale_s, step}` block (R2.5)."""
     if time_cfg is None:
         return []
     if not isinstance(time_cfg, dict):
         return [ConfigProblem("error", key, "'time' must be an object")]
     problems: list[ConfigProblem] = []
-    field = time_cfg.get("field", LOOP_CNTR_NAME)
+    field = time_cfg.get("field", default_field)
     if field not in names:
         problems.append(
             ConfigProblem("error", key, f"time.field {field!r} is not a field of the frame")
@@ -184,7 +251,7 @@ def _time_problems(key: str, time_cfg: Any, names: list[str]) -> list[ConfigProb
                     "error", key, f"time.{name} must be a positive number, got {time_cfg[name]!r}"
                 )
             )
-    if field != LOOP_CNTR_NAME and "step" not in time_cfg:
+    if field not in (LOOP_CNTR_NAME, LINE_FIELD) and "step" not in time_cfg:
         problems.append(
             ConfigProblem(
                 "warning",

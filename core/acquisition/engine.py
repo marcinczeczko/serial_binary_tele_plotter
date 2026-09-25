@@ -28,7 +28,7 @@ from PyQt6 import QtCore
 
 from core.acquisition.storage import StreamStores
 from core.protocol.commands import CommandDef
-from core.protocol.link import BINARY, LinkDecoder, make_link_decoder
+from core.protocol.link import BINARY, TEXT, LinkDecoder, make_link_decoder
 from core.protocol.stats import LinkStats, make_link_report
 from core.recording.sbtp import RecordingError, RecordingWriter
 from core.transport import (
@@ -121,6 +121,7 @@ class TelemetryEngine(QtCore.QObject):
                 return
             self._sim = self.sim_factory(self._sim_stream())
             self._sim.set_commands(self._commands)
+            self._sim.set_text(self._link_format == TEXT)
             if not self._start(self._sim, port_name):
                 self._sim = None
         else:
@@ -186,7 +187,12 @@ class TelemetryEngine(QtCore.QObject):
                 self.connection_failed.emit(msg)
             return False
         with self._data_lock:
-            link.configure(self._streams)
+            try:
+                link.configure(self._streams)
+            except KeyError, ValueError:
+                # The previous profile's streams, in another format: the new profile's
+                # streams follow (configure_streams), so start with none.
+                link.configure({})
             self.link = link
             self._link_format = fmt
         return True
@@ -349,7 +355,11 @@ class TelemetryEngine(QtCore.QObject):
             cur = self.link.stats.snapshot()
         samples = self.stores.total_stored
         report = make_link_report(
-            self._stats_prev, cur, samples - self._stats_prev_samples, now - self._stats_prev_ts
+            self._stats_prev,
+            cur,
+            samples - self._stats_prev_samples,
+            now - self._stats_prev_ts,
+            self._link_format,
         )
         self._stats_prev, self._stats_prev_samples, self._stats_prev_ts = cur, samples, now
         self.link_stats.emit(report)

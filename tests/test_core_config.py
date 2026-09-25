@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -209,3 +210,76 @@ def test_time_block_warnings():
     assert warnings[1] == "unknown time key(s) unit (known: field, scale_s, step)"
     ok = validate_stream("s", _stream(time={"field": "x", "scale_s": 1e-6, "step": 5000}))
     assert ok == []
+
+
+# --- text profiles (R8.3) ----------------------------------------------------------------
+
+TEXT_PROFILE = Path(__file__).parent / "fixtures" / "text_profile.json"
+
+
+def _text_doc():
+    return json.loads(TEXT_PROFILE.read_text(encoding="utf-8"))
+
+
+def test_a_text_profile_loads_without_problems():
+    loader = StreamConfigLoader(TEXT_PROFILE)
+    assert loader.problems == []
+    assert loader.profile.format == "text"
+    assert sorted(loader.list_streams()) == ["env", "imu"]
+
+
+def test_a_text_stream_needs_a_pattern_matching_its_fields():
+    doc = _text_doc()
+    doc["streams"]["imu"]["frame"]["pattern"] = "IMU,{ms},{ay},{ax},{az}"
+    del doc["streams"]["env"]["frame"]["pattern"]
+    errors = [(p.stream, p.message) for p in validate_config(doc) if p.severity == "error"]
+    assert (
+        "imu",
+        "frame.pattern slots (ms, ay, ax, az) must be the fields in order (ms, ax, ay, az)",
+    ) in errors
+    assert any(s == "env" and "frame.pattern is required" in m for s, m in errors)
+
+
+def test_a_bad_pattern_is_an_error_saying_why():
+    doc = _text_doc()
+    doc["streams"]["env"]["frame"]["pattern"] = "ENV {t}{h}"
+    errors = _messages(validate_config(doc))
+    assert errors == ["frame.pattern: '{t}' and '{h}' need fixed text between them"]
+
+
+def test_loop_cntr_is_optional_for_text_but_required_for_binary():
+    text = _text_doc()["streams"]["env"]  # no loop_cntr, no time.field: the line number
+    assert validate_stream("env", text, "text") == []
+    binary = _stream(frame={"stream_id": 3, "fields": [{"name": "x", "type": "f32"}]})
+    assert any("must contain 'loop_cntr'" in m for m in _messages(validate_stream("s", binary)))
+
+
+def test_the_line_number_can_be_named_as_the_time_field():
+    stream = {**_text_doc()["streams"]["env"], "time": {"field": "_line", "scale_s": 0.5}}
+    assert validate_stream("env", stream, "text") == []
+
+
+def test_binary_keys_in_text_and_a_pattern_in_binary_are_warnings():
+    text = _text_doc()["streams"]["env"]
+    text["frame"]["stream_id"] = 4
+    assert _messages(validate_stream("env", text, "text"), "warning") == [
+        "frame.stream_id mean nothing for text lines; ignored"
+    ]
+    binary = _stream()
+    binary["frame"]["pattern"] = "x={x}"
+    warnings = _messages(validate_stream("s", binary), "warning")
+    assert warnings == ["frame.pattern is for text-line profiles; ignored in a binary profile"]
+
+
+def test_a_repeated_pattern_is_a_warning():
+    doc = _text_doc()
+    doc["streams"]["env2"] = doc["streams"]["env"]
+    warnings = [(p.stream, p.message) for p in validate_config(doc) if p.severity == "warning"]
+    assert warnings == [("env2", "has the same pattern as 'env', which gets every such line")]
+
+
+def test_a_text_stream_has_no_payload_limit():
+    fields = [{"name": f"v{i}", "type": "f64"} for i in range(40)]  # 320 B as binary
+    pattern = ",".join(f"{{v{i}}}" for i in range(40))
+    stream = {"name": "wide", "frame": {"pattern": pattern, "fields": fields}}
+    assert validate_stream("wide", stream, "text") == []

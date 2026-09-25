@@ -6,6 +6,7 @@ Measures the Qt-free hot paths so performance work can be compared before/after:
      (the binary LinkDecoder: FrameParser -> StreamRouter, then SampleStore.append_records)
      and via the per-frame dict path (ProtocolHandler -> SampleStore.append) for comparison
   2. decode ratio for large reads (regression guard for review finding C1)
+  2b. the same stream printed as text lines (a text profile's TextLineDecoder, R8.3)
   3. CRC-8 cost per frame
   4. GUI pull cost for several buffer sizes, all signals or only the visible ones:
      a full-resolution snapshot (pause/analysis), the live overview (min/max level of
@@ -35,6 +36,7 @@ from core.protocol.constants import MAGIC_0, MAGIC_1, STRUCT_TYPE_MAP  # noqa: E
 from core.protocol.crc import calculate_crc8  # noqa: E402
 from core.protocol.handler import ProtocolHandler  # noqa: E402
 from core.protocol.link import make_link_decoder  # noqa: E402
+from core.simulation.synth import FrameSynth  # noqa: E402
 from core.types import StreamConfig  # noqa: E402
 
 N_FRAMES = 20_000
@@ -73,9 +75,20 @@ def best_of(
     return min(results, key=lambda r: r[1])
 
 
-def parse_and_store(cfg: StreamConfig, blob: bytes, chunk: int) -> tuple[int, float]:
-    """The engine's path: the binary LinkDecoder (R8.1) -> append_records (R2.2/R2.3)."""
-    link = make_link_decoder("binary")
+def text_stream(cfg: StreamConfig, n: int) -> tuple[StreamConfig, bytes]:
+    """`cfg` as a text stream ("PID,{loop_cntr},{v1},…") and n of its simulated lines."""
+    fields = cfg["frame"]["fields"]
+    pattern = "PID," + ",".join(f"{{{f['name']}}}" for f in fields)
+    text_cfg: StreamConfig = {**cfg, "frame": {"pattern": pattern, "fields": fields}}
+    text_cfg.pop("sim", None)
+    return text_cfg, FrameSynth(text_cfg, seed=0).lines(0, n)
+
+
+def parse_and_store(
+    cfg: StreamConfig, blob: bytes, chunk: int, fmt: str = "binary"
+) -> tuple[int, float]:
+    """The engine's path: the profile's LinkDecoder (R8.1) -> append_records (R2.2/R2.3)."""
+    link = make_link_decoder(fmt)
     link.configure({"s": cfg})
     store = SampleStore(2_000)
     store.configure(cfg.get("signals", {}), time_base_config(cfg))
@@ -165,6 +178,14 @@ def main() -> int:
     print(
         f"parse+store,      vectorised (5000 B reads): {decoded / dt:>9,.0f} frames/s  "
         f"({decoded}/{N_FRAMES} decoded)  [C1 guard; bigger reads = bigger batches]"
+    )
+
+    text_cfg, lines = text_stream(cfg, N_FRAMES)
+    decoded, dt = best_of(lambda c, b, n: parse_and_store(c, b, n, "text"), text_cfg, lines, 900)
+    print(
+        f"parse+store,      text lines (900 B reads): {decoded / dt:>10,.0f} lines/s  "
+        f"{len(lines) / dt / 1e6:6.2f} MB/s  ({decoded}/{N_FRAMES} decoded, "
+        f"{len(lines) / N_FRAMES:.0f} B/line)"
     )
 
     payload = blob[5 : frame_len - 1]
