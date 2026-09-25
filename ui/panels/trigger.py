@@ -22,7 +22,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from core.analysis.step_response import SETTLE_BAND, StepMetrics
 from core.analysis.trigger import EDGES, TriggerSpec
 from core.types import StreamConfig
-from styles import BORDER, TEXT, TEXT_DIM, TEXT_MUTED, mono_font
+from styles import BORDER, TEXT, TEXT_DIM, TEXT_MUTED, number_font
 from ui.common.numbers import ScopeDoubleSpinBox, format_number
 
 EDGE_ARROWS = {"rising": "↗", "falling": "↘", "either": "↕"}
@@ -237,7 +237,7 @@ class TriggerPanel(QtCore.QObject):
 
     def _set_cell(self, row: int, column: int, text: str, color: str | None = None) -> None:
         item = QtWidgets.QTableWidgetItem(text)
-        item.setFont(mono_font())
+        item.setFont(number_font())
         if color is not None:
             item.setForeground(QtGui.QColor(color))
         self.metrics_table.setItem(row, column, item)

@@ -22,6 +22,11 @@ UI_FAMILY = "B612"
 MONO_FAMILY = "B612 Mono"
 # Inline stylesheets name the mono face with fallbacks, for a machine where loading failed.
 MONO_CSS = f"font-family: '{MONO_FAMILY}', Menlo, 'DejaVu Sans Mono', monospace;"
+# Numbers (readouts, inputs, the top bar) use B612 itself: B612 Mono's decimal point takes a
+# full cell (`0. 25`). B612 Mono stays for text that must align by column (code, hex, the
+# terminal).
+NUMBER_FAMILY = UI_FAMILY
+NUMBER_CSS = f"font-family: '{NUMBER_FAMILY}';"
 
 # --- tokens ---------------------------------------------------------------------------------
 PLOT_BG = "#000000"
@@ -62,6 +67,15 @@ def load_fonts() -> bool:
             ok = False
     _loaded = ok
     return ok
+
+
+def number_font(point_size: float | None = None) -> QtGui.QFont:
+    """The face for numbers (B612), at `point_size` (default: the application's size)."""
+    font = QtGui.QFont(NUMBER_FAMILY)
+    size = point_size if point_size is not None else QtGui.QGuiApplication.font().pointSizeF()
+    if size > 0:
+        font.setPointSizeF(size)
+    return font
 
 
 def mono_font(point_size: float | None = None) -> QtGui.QFont:

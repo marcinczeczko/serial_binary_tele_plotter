@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from styles import BORDER, TEXT_DIM, mono_font
+from styles import BORDER, TEXT_DIM, number_font
 
 ERROR_COLOR = "#FF4040"
 MAX_ROWS = 500
@@ -45,7 +45,7 @@ class CommandLog(QtWidgets.QWidget):
         layout.setSpacing(0)
         self.list = QtWidgets.QListWidget()
         self.list.setObjectName("send_log")
-        self.list.setFont(mono_font(max(QtGui.QGuiApplication.font().pointSizeF() - 2, 8)))
+        self.list.setFont(number_font(max(QtGui.QGuiApplication.font().pointSizeF() - 2, 8)))
         self.list.setStyleSheet(
             f"QListWidget#send_log {{ background: transparent; border: none;"
             f" border-top: 1px solid {BORDER}; color: {TEXT_DIM}; }}"

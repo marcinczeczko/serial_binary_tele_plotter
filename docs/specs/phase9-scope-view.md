@@ -26,6 +26,9 @@ solve the same problem with a fixed visual language; Phase 9 adopts it.
   when armed), `A` / `B` (cursors). Everything else is a word.
 - **Font: B612** for UI text and **B612 Mono** for numbers (Airbus/ENAC cockpit-display face, SIL OFL,
   bundled with the app). Candidates compared on the canvas: Share Tech Mono, Barlow Semi Condensed.
+  *Changed after R9.5 (owner, 2026-09-25):* numbers use **B612** too. B612 Mono's decimal point
+  takes a full cell (`0. 25`); compared side by side with Share Tech Mono and Barlow Semi
+  Condensed, B612 read best. B612 Mono stays for text aligned by column (code, hex, terminal).
 - **Colour means something.** Traces are the brightest thing on screen. Chrome stays grey. Green =
   running / alive, red = stopped / recording / fault, orange = trigger, amber `#FFB000` = edited /
   needs attention. A readout is written in its trace's colour.
@@ -110,7 +113,7 @@ Tune (the panel, still generated from `panels`):
   on the right (load, Save as…, Delete inside the menu).
 - The grid: an `L=R` box (lit when linked) in the top-left corner, `Left` / `Right` column labels,
   then one row per parameter: the label (drag to scrub, as today) and square black inputs with
-  B612 Mono values. No spin arrows. Edited values are amber with an amber border.
+  B612 values. No spin arrows. Edited values are amber with an amber border.
 - Booleans are 13 px square boxes (filled = on).
 - `Send` under each column (the config's labels shortened), `Run test` across both columns.
 - `Revert N` in amber, only while something is edited (Esc does the same).
@@ -126,7 +129,7 @@ Step:
 - Each lane is a framed graticule: 1 px `#4a4a4a` frame, 10 vertical divisions as dotted `#333` lines,
   horizontal dotted lines at the Y ticks (the zero line brighter), and a centre crosshair with minor
   ticks (5 per division).
-- The Y gutter keeps the rotated lane name (dimmer, small caps) and tick labels in B612 Mono.
+- The Y gutter keeps the rotated lane name (dimmer, small caps) and tick labels in B612 (the number face).
 - No `Time [s]` label: the unit goes on the last X tick (`2.5 s`).
 - Trigger armed: a dashed orange level line, an orange `T` marker on the right edge at the level,
   and an orange `T` marker at the top at the trigger position.

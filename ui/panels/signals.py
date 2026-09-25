@@ -21,7 +21,7 @@ import math
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.types import StreamConfig
-from styles import BORDER, BUTTON_BORDER, MONO_FAMILY, TEXT, TEXT_DIM, TEXT_DISABLED, TEXT_MUTED
+from styles import BORDER, BUTTON_BORDER, NUMBER_FAMILY, TEXT, TEXT_DIM, TEXT_DISABLED, TEXT_MUTED
 from ui.charts.lanes import lane_layout
 from ui.charts.series import Readout
 from ui.common.numbers import format_significant
@@ -101,7 +101,7 @@ class SignalDelegate(QtWidgets.QStyledItemDelegate):
             draw_swatch(painter, box, color, shown, dashed)
             text = str(index.data() or "")
             if text:
-                font = QtGui.QFont(MONO_FAMILY)
+                font = QtGui.QFont(NUMBER_FAMILY)
                 font.setPixelSize(11)
                 painter.setFont(font)
                 painter.setPen(QtGui.QColor(color))
@@ -118,7 +118,7 @@ class SignalDelegate(QtWidgets.QStyledItemDelegate):
         hint = super().sizeHint(option, index)
         if index.column() in (LEFT_COLUMN, RIGHT_COLUMN):
             text = str(index.data() or "")
-            font = QtGui.QFont(MONO_FAMILY)
+            font = QtGui.QFont(NUMBER_FAMILY)
             font.setPixelSize(11)
             width = (
                 SWATCH_PX
@@ -217,7 +217,7 @@ class SignalListPanel(QtWidgets.QWidget):
         self.cursor_lbl = QtWidgets.QLabel("")  # A / B / ΔT, boxed, while a cursor is set
         self.cursor_lbl.setStyleSheet(
             f"color: {TEXT}; border: 1px solid {BUTTON_BORDER}; padding: 3px 6px;"
-            f" margin: 6px 6px 0 6px; font-family: '{MONO_FAMILY}'; font-size: 11px;"
+            f" margin: 6px 6px 0 6px; font-family: '{NUMBER_FAMILY}'; font-size: 11px;"
         )
         self.cursor_lbl.hide()
         self.cursor_lbl.setWordWrap(True)
@@ -555,7 +555,7 @@ class SignalListPanel(QtWidgets.QWidget):
         hdr = self.tree.header()
         if hdr is None:
             return
-        font = QtGui.QFont(MONO_FAMILY)
+        font = QtGui.QFont(NUMBER_FAMILY)
         font.setPixelSize(11)
         metrics = QtGui.QFontMetrics(font)
         for col, side in ((LEFT_COLUMN, "left"), (RIGHT_COLUMN, "right")):
