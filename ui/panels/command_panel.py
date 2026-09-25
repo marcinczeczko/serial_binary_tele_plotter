@@ -17,7 +17,12 @@ What the panel adds on top of that:
   It's off by default because it sends to real hardware as you type.
 - **Presets.** Named value sets (kept by the owner, per config file); choosing one loads its
   values, which then count as edited until sent.
-- **Ctrl+Enter** presses the panel's main button (the first one spanning the panel).
+- **Ctrl+Enter** presses the panel's main button (the first one spanning the panel), and
+  **Esc** reverts the values edited since the last send.
+- **Scrubbing.** Dragging a number parameter's label left or right changes the row's values
+  by one `step` per `SCRUB_PX_PER_STEP` pixels (Shift ×10, Alt ×0.1), like a knob. A linked
+  row stays equal; an unlinked row moves every column by the same amount. It goes through
+  the same path as typing, so edited marks and Live mode apply.
 
 The panel only collects values: the main window resolves and encodes the command
 (`core.protocol.commands`), hands the packet to the engine and calls `mark_sent`.
@@ -35,6 +40,9 @@ from core.config.controls import ButtonDef, PanelDef, ParamDef
 
 ParamWidget = QtWidgets.QDoubleSpinBox | QtWidgets.QSpinBox | QtWidgets.QCheckBox
 
+SCRUB_PX_PER_STEP = 4
+SCRUB_FAST = 10.0  # with Shift
+SCRUB_FINE = 0.1  # with Alt
 LIVE_DEBOUNCE_MS = 150
 LIVE_MIN_INTERVAL_S = 0.1
 EDITED_STYLE = "border: 1px solid #B98225; background: #231D12; color: #FFE2AD;"
@@ -50,6 +58,52 @@ class SendRequest:
     column: str | None
     params: dict[str, dict[str, float]]
     live: bool = False  # sent by Live mode, not a button press
+
+
+def scrub_factor(modifiers: QtCore.Qt.KeyboardModifier) -> float:
+    if modifiers & QtCore.Qt.KeyboardModifier.ShiftModifier:
+        return SCRUB_FAST
+    if modifiers & QtCore.Qt.KeyboardModifier.AltModifier:
+        return SCRUB_FINE
+    return 1.0
+
+
+class ScrubLabel(QtWidgets.QLabel):
+    """
+    A parameter's label that changes its value when dragged horizontally. It reports steps
+    moved since the press (fractional with Alt); the panel applies them from the values the
+    drag started at, so a drag back to where it started restores them exactly.
+    """
+
+    scrub_started = QtCore.pyqtSignal()
+    scrubbed = QtCore.pyqtSignal(float)  # steps since the press
+
+    def __init__(self, text: str, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self.setCursor(QtCore.Qt.CursorShape.SizeHorCursor)
+        self.setToolTip("Drag left or right to change · Shift ×10 · Alt ×0.1")
+        self._press_x: float | None = None
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent | None) -> None:  # noqa: N802
+        if event is not None and event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self._press_x = event.position().x()
+            self.scrub_started.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent | None) -> None:  # noqa: N802
+        if event is None or self._press_x is None:
+            super().mouseMoveEvent(event)
+            return
+        pixels = event.position().x() - self._press_x
+        steps = pixels / SCRUB_PX_PER_STEP * scrub_factor(event.modifiers())
+        self.scrubbed.emit(round(steps, 6))
+        event.accept()
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent | None) -> None:  # noqa: N802
+        self._press_x = None
+        super().mouseReleaseEvent(event)
 
 
 class CommandPanel(QtWidgets.QWidget):
@@ -71,6 +125,8 @@ class CommandPanel(QtWidgets.QWidget):
         self._live_timers: dict[str, QtCore.QTimer] = {}
         self._last_live: dict[str, float] = {}
         self._button_widgets: dict[int, QtWidgets.QPushButton] = {}
+        self.labels: dict[str, QtWidgets.QLabel] = {}
+        self._scrub_start: dict[str, dict[str, float]] = {}  # row -> column -> value
 
         outer = QtWidgets.QVBoxLayout(self)
         outer.setContentsMargins(8, 6, 8, 6)
@@ -113,7 +169,15 @@ class CommandPanel(QtWidgets.QWidget):
                 grid.addWidget(QtWidgets.QLabel(f"<b>{col}</b>"), row, first_input + i)
             row += 1
         for param in panel.parameters:
-            label = QtWidgets.QLabel(f"{param.label}:")
+            label: QtWidgets.QLabel
+            if param.kind == "bool":
+                label = QtWidgets.QLabel(f"{param.label}:")
+            else:
+                scrub = ScrubLabel(f"{param.label}:")
+                scrub.scrub_started.connect(lambda p=param.key: self._begin_scrub(p))
+                scrub.scrubbed.connect(lambda steps, p=param: self.scrub(p.key, steps))
+                label = scrub
+            self.labels[param.key] = label
             grid.addWidget(label, row, 0)
             if linkable:
                 link = QtWidgets.QToolButton()
@@ -183,6 +247,9 @@ class CommandPanel(QtWidgets.QWidget):
         shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Return"), self)
         shortcut.setContext(QtCore.Qt.ShortcutContext.WidgetWithChildrenShortcut)
         shortcut.activated.connect(self.press_default)
+        revert = QtGui.QShortcut(QtGui.QKeySequence("Escape"), self)
+        revert.setContext(QtCore.Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        revert.activated.connect(self.revert)
 
         self.reset_links()
         for link in self.links.values():
@@ -271,6 +338,33 @@ class CommandPanel(QtWidgets.QWidget):
             for c in cols:
                 self._schedule_live(c)
 
+    # --- scrubbing ---
+
+    def _begin_scrub(self, key: str) -> None:
+        self._scrub_start[key] = {col: self._value(col, key) for col in self.panel.column_keys}
+
+    def scrub(self, key: str, steps: float) -> None:
+        """
+        Moves a row `steps` parameter steps away from where the drag started (see
+        `ScrubLabel`). Values are clamped by their spin boxes' ranges.
+        """
+        param = next((p for p in self.panel.parameters if p.key == key), None)
+        if param is None or param.kind == "bool":
+            return
+        if key not in self._scrub_start:
+            self._begin_scrub(key)
+        link = self.links.get(key)
+        linked = link is not None and link.isChecked()
+        cols = self.panel.column_keys[:1] if linked else self.panel.column_keys
+        for col in cols:
+            start = self._scrub_start[key][col]
+            widget = self.inputs[col][key]
+            target = start + steps * param.step
+            if isinstance(widget, QtWidgets.QSpinBox):
+                widget.setValue(round(target))
+            elif isinstance(widget, QtWidgets.QDoubleSpinBox):
+                widget.setValue(target)
+
     # --- linking ---
 
     def reset_links(self) -> None:
@@ -319,7 +413,7 @@ class CommandPanel(QtWidgets.QWidget):
         return out
 
     def revert(self) -> None:
-        """Puts every edited value back to what was last sent."""
+        """Puts every edited value back to what was last sent (also Esc)."""
         self.set_values({col: dict(params) for col, params in self._sent.items()}, notify=False)
         self.values_changed.emit()
 

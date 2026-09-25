@@ -6,6 +6,23 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — Dashboard UX follow-up: scrubbing, drag between lanes, Esc (R6.2, R6.4)
+
+The three items ADR-0008 left out:
+- **Drag a parameter's label** to change it (`ScrubLabel`): one step per 4 px, Shift ×10,
+  Alt ×0.1, measured from where the drag started (dragging back restores the value
+  exactly). A linked row stays equal, an unlinked row moves every column. It goes through
+  the same path as typing, so edited marks and Live mode apply. Bool rows don't scrub.
+- **Drag a signal to another lane** in the Signals dock (`SignalTree`): onto a lane, onto a
+  signal of it, or below the list for a new lane. The move is applied after the drag
+  loop ends (child timer), since it rebuilds the tree.
+- **Esc** in a control panel reverts the values edited since the last send.
+- Tests: +3 real-event tests (synthesized mouse moves with modifiers, a key press, and
+  `QDropEvent`s). A mutation check confirmed the Esc test fails without the shortcut.
+  276 with Qt; 226 + 50 skipped without. The plot and data path are untouched.
+
+---
+
 ## 2026-09-25 — Phase 6: dashboard UX, layout concept A (R6.1–R6.5)
 
 - **Layout (R6.1, ADR-0008).** Chosen from a design spike of three concepts, compared with

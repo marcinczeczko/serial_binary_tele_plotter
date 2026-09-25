@@ -81,8 +81,9 @@ ui/charts/              TelemetryPlot (lanes = signals[*].group, per-lane Y mode
                         store's overview), lanes.py + series.py (Qt-free layout, range, decimation, readout),
                         trigger_controller (arms on the shown store, emits captures)
 ui/panels/              container (owns the controls; MainWindow places them), connection (toolbar row),
-                        stream_tabs, signals (lane-grouped list = legend + cursor readout), command_panel
-                        (generated from `panels`: edited vs sent, linked rows, Live, presets), command_log,
+                        stream_tabs, signals (lane-grouped list = legend + cursor readout, drag between
+                        lanes), command_panel (generated from `panels`: edited vs sent, linked rows, Live,
+                        presets, label scrubbing, Esc revert), command_log,
                         timing, trigger (setup popup + step-response results)
 ui/config/              in-app streams.json editor
 tests/                  pytest: pure logic, stubbed-Qt legacy tests, `qt`-marked real-Qt tests
