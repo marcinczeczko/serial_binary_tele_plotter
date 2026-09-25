@@ -364,6 +364,8 @@ matching, inference, editor screens, acceptance tests) in
   printf".*
 - [ ] **R8.5 Text commands** (a later phase): host-to-board commands as text templates
   (`"PID {kp} {ki}\n"`) for text profiles.
+  *Spec drafted for review: [`docs/specs/r8.5-text-commands.md`](specs/r8.5-text-commands.md),
+  ADR-0011 (proposed).*
 
 ---
 
