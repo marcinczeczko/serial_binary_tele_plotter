@@ -6,12 +6,14 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
-## 2026-09-25 — R8.5 spec drafted (for review)
+## 2026-09-25 — R8.5 spec drafted (for review): a terminal
 
-- `docs/specs/r8.5-text-commands.md` and ADR-0011 (proposed): a text command is a
-  template in the pattern grammar (`"PID {motor} {kp} {ki}\n"`), its slots are its
-  fields; panels unchanged; numbers never use an exponent; the engine still gets bytes.
-- Canvas: `Dashboard: sending to a text device` (the log shows the line sent, with ⏎).
+- First draft (command templates in config) replaced on the owner's call: a text profile
+  sends from a **terminal** in the Controls dock (Enter sends, Up/Down history, line
+  ending per profile), and shows the board's replies (lines no pattern matches, at most
+  100 per ~1 Hz report). No config keys; text profiles' `commands`/`panels` are ignored.
+- `docs/specs/r8.5-text-commands.md`, ADR-0011 (proposed); canvas board
+  `Dashboard: terminal on a text device`.
 
 ---
 
