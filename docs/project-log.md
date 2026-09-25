@@ -6,6 +6,17 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — R8.4 canvas revised
+
+- Canvas boards added for R8.4: the text stream editor's states (invalid pattern, no
+  match, line-number X axis, no line yet), the dashboard on a text profile, and the
+  Listen button's states; `PasteLine` gains an unticked card and an `i32` value.
+- Trimmed for a clean look: no source/age on the last line, no hints beyond `✗ no match`,
+  no helper text, no progress bar; tooltips instead. The spec records the decisions,
+  including where the editor's last line comes from (the ~1 Hz `LinkReport`).
+
+---
+
 ## 2026-09-25 — R8.3 Text-line decoder
 
 - **Text profiles (ADR-0010).** `core/protocol/text_line.py`: the pattern grammar
