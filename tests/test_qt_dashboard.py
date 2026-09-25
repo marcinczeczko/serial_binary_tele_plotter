@@ -128,7 +128,7 @@ def test_stream_tabs_show_activity_and_the_time_button_the_window(
 def test_readout_goes_to_the_signals_panel_and_markers_follow_the_stream(
     qtbot: Any, tmp_path: Path
 ) -> None:
-    from ui.common.numbers import format_number
+    from ui.common.numbers import format_significant
 
     win = _window(qtbot, tmp_path)
     conn = win.panel.conn_panel
@@ -142,10 +142,10 @@ def test_readout_goes_to_the_signals_panel_and_markers_follow_the_stream(
     t = win.plot.analysis_packet["time"]
     win.plot.move_cursor(float(t[100]))
     sig = win.panel.sig_panel
-    assert sig.cursor_lbl.text() == f"@ {format_number(float(t[100]))} s"
+    assert sig.cursor_lbl.text() == f"A {format_significant(float(t[100]))}s"
     assert sig.value_text("left_measurement") not in ("", "n/a")
     win.panel.conn_panel.pause_btn.click()
-    assert sig.cursor_lbl.text() == ""  # live again: no frozen readout
+    assert sig.cursor_lbl.text() == "" and sig.cursor_lbl.isHidden()  # live: no frozen readout
 
     panel = win.panel.control_panels["diffbot_pid"]
     panel.buttons[0].click()
@@ -272,10 +272,11 @@ def test_dropping_a_signal_on_another_lane_moves_it(qtbot: Any) -> None:
 
     drop("left_error", tree.visualItemRect(panel._lane_items[speed]).center())
     qtbot.waitUntil(lambda: panel.lane_of("left_error") == speed, timeout=2000)
-    assert moves[-1] == ("left_error", speed, speed_label)
+    # A row is a pair: both motors' copies move (R9.4).
+    assert moves[-2:] == [("left_error", speed, speed_label), ("right_error", speed, speed_label)]
 
     # Onto a signal row: that signal's lane.
-    drop("left_error", tree.visualItemRect(panel._items["right_error"]).center())
+    drop("left_error", tree.visualItemRect(panel._items["left_integral"]).center())
     qtbot.waitUntil(lambda: panel.lane_of("left_error") == error, timeout=2000)
 
     # Below the list: a new lane (lanes collapsed, so there's empty space whatever the font).

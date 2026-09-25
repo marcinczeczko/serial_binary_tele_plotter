@@ -398,7 +398,7 @@ in each item's PR.
   keys `[`, `]`, `\`; open state, view and widths kept per profile.
   *Done when:* each pane opens and closes from its tab and its key, `\` gives a plot-only
   window, and the state comes back after a restart and a profile switch.
-- [ ] **R9.4 Signals pane**: one row per L/R pair, swatches as toggles (R swatch and R trace
+- [x] **R9.4 Signals pane**: one row per L/R pair, swatches as toggles (R swatch and R trace
   dashed), no counts, filter on Ctrl+F, the stopped readout in trace colour with an A/B/ΔT
   header.
   *Done when:* the bundled profile's 34 signals show as 17 rows, and a cursor readout shows
