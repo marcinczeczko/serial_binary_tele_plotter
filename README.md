@@ -200,26 +200,31 @@ profile; drag the edge between a pane and the plot to resize it.
    stream's whole history for this session; the value turns amber while it differs from
    the file. Set it in the stream editor (X axis × time per tick) to keep it.
 8. **Tune** pane (Controls): the shown stream's control panel (e.g. PID Tuning for the `pid`
-   streams), generated from `streams.json` `panels`. Its buttons send commands while
-   connected; the top bar's message says what was sent, or why not.
-   - After a send, a value that differs from what was last sent is highlighted and counted
-     (`2 unsent`); **Revert** (or Esc) puts them back. (Before the first send, what the
-     device holds is unknown, so nothing is marked.)
+   streams), generated from `streams.json` `panels`. Values are typed into square inputs
+   (no spin arrows). A button placed under a column reads **Send** (its label from the
+   config is its tooltip); a button spanning the panel shows its label. They send commands
+   while connected; the top bar's message says what was sent, or why not.
+   - After a send, a value that differs from what was last sent is amber, and **Revert N**
+     appears (amber, only while something is edited); it or Esc puts them back. (Before the
+     first send, what the device holds is unknown, so nothing is marked.)
    - Drag a number parameter's label left or right to change it, like a knob: one step per
      4 px, ×10 with Shift, ×0.1 with Alt. A linked row stays equal; an unlinked row moves
      every column by the same amount.
-   - With two or more columns, a row's **⇄** keeps its columns equal (e.g. the same Kp for
-     both motors); rows whose values start equal start linked. **Link columns** does all.
+   - With two or more columns, a linked row keeps its columns equal (e.g. the same Kp for
+     both motors); rows whose values start equal start linked. The **L=R** box in the
+     grid's corner links or unlinks every row; right-click a row's label to link it alone.
+     An unlinked row's label shows `≠`.
    - **Live** sends a column 150 ms after its values stop changing (at most every 100 ms):
      tune by dragging a spin box. It sends to the device as you edit, so it's off by
      default; **Manual** sends only on a button. **Ctrl+Enter** presses the panel's main
      button (the one spanning the panel).
-   - **Presets**: **Save as…** keeps the current values under a name; choosing one loads
-     its values (then send them). Values, presets and the Live choice are remembered.
-   - Under the panel, **Sent** lists every send, numbered, with what changed since the
-     previous one (`kp 0.1 → 0.25`); refused sends are listed in red. The number is also a
-     dashed marker on the plot at the stream time it was sent. **Send again** (or a double
-     click) re-sends a row's exact packet.
+   - **Presets ▾** (top right): choose a preset to load its values (then send them),
+     **Save as…** to keep the current values under a name, **Delete** to remove one. The
+     button shows the loaded preset. Values, presets and the Live choice are remembered.
+   - Under a hairline, the send log: one plain line per send, newest first
+     (`20:41:07  ▲2  Run Test (Both Motors)  ki 0.015 → 0.02`); refused sends are red. The
+     number is also a dashed marker on the plot at the stream time it was sent.
+     Double-click a line to send its exact packet again; its bytes are in the tooltip.
 9. **File → Edit profile…** (Ctrl+,) opens the current profile in the stream editor, laid
    out like the scope:
    - The profile row: its name, format (read-only: chosen at New profile) and baud.
@@ -295,12 +300,12 @@ profile; drag the edge between a pane and the plot to resize it.
       trigger time, and the time before it is shaded. Single shot: arm again for the next
       capture. If the buffer holds less than **Before**, the top bar says how much there
       was: raise **Samples** to keep more.
-    - The **Step response** pane (it comes forward on a capture): choose the **Setpoint**
-      and **Measurement** signals. The table shows rise time (10–90 %), overshoot, settling
-      time (±2 %) and steady-state error for this capture and the previous one, with the
-      change (green when smaller). With **Overlay the previous capture** on, the previous
-      capture's traces are drawn dashed, lined up at its trigger. `Resume` removes the
-      overlay.
+    - The **Step** pane (it comes forward on a capture): a table of rise time (10–90 %),
+      overshoot, settling time (±2 %) and steady-state error, **Now** in the measured
+      signal's colour, **Prev** dim, and the change **Δ** (green when smaller, amber when
+      larger). Below it, the **Setpoint** and **Measured** signals, and **Overlay
+      previous**: the previous capture's traces drawn dashed, lined up at its trigger.
+      `RUN` again removes the overlay.
 
 ## Connecting Your MCU
 

@@ -2,12 +2,13 @@
 Trigger & step response (R4.4, R4.5, R6.5), in two parts.
 
 - `setup`: which signal, edge and level, and how much to keep before and after the
-  crossing, plus Arm. It opens from the toolbar's Trigger button. While armed, the level
+  crossing, plus Arm. It opens from the top bar's `T`. While armed, the level
   is also a dashed line on the plot that can be dragged.
 - `results`: which signals are the setpoint and the measurement, and each capture's rise
   time, overshoot, settling time and steady-state error, next to the previous capture's,
-  whose traces can be overlaid (e.g. before and after a gain change). It's the "Step
-  response" tab of the right dock.
+  whose traces can be overlaid (e.g. before and after a gain change). It's the right
+  pane's Step view: a Now / Prev / Δ table, Now in the measurement's colour, Prev dim,
+  the change green when it improved (R9.5).
 
 A capture freezes in analysis mode with the Δ anchor at the trigger.
 """
@@ -21,13 +22,14 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from core.analysis.step_response import SETTLE_BAND, StepMetrics
 from core.analysis.trigger import EDGES, TriggerSpec
 from core.types import StreamConfig
-from styles import mono_font
-from ui.common.numbers import ScopeDoubleSpinBox
+from styles import BORDER, TEXT, TEXT_DIM, TEXT_MUTED, mono_font
+from ui.common.numbers import ScopeDoubleSpinBox, format_number
 
 EDGE_ARROWS = {"rising": "↗", "falling": "↘", "either": "↕"}
 EDGE_OPS = {"rising": ">", "falling": "<", "either": "×"}
 BETTER = "#3DFF6E"
 WORSE = "#FFB000"
+NO_CAPTURE = "Arm T in the top bar to capture a step."
 METRIC_ROWS = (
     ("Rise time 10–90 %", "rise"),
     ("Overshoot", "overshoot"),
@@ -76,35 +78,52 @@ class TriggerPanel(QtCore.QObject):
         ):
             signal.connect(self.changed)
 
-        # --- results (right dock) ---
+        # --- results (the right pane's Step view) ---
         self.results = QtWidgets.QWidget()
         rlayout = QtWidgets.QVBoxLayout(self.results)
         rlayout.setContentsMargins(8, 8, 8, 8)
-        pick = QtWidgets.QFormLayout()
-        self.setpoint_combo = QtWidgets.QComboBox()
-        self.measurement_combo = QtWidgets.QComboBox()
-        pick.addRow("Setpoint:", self.setpoint_combo)
-        pick.addRow("Measurement:", self.measurement_combo)
-        rlayout.addLayout(pick)
-        self.overlay_chk = QtWidgets.QCheckBox("Overlay the previous capture")
-        self.overlay_chk.setChecked(True)
-        rlayout.addWidget(self.overlay_chk)
-        self.metrics_lbl = QtWidgets.QLabel("Arm the trigger (toolbar) to capture a step.")
+        rlayout.setSpacing(8)
+        self.metrics_lbl = QtWidgets.QLabel(NO_CAPTURE)
         self.metrics_lbl.setWordWrap(True)
-        self.metrics_lbl.setStyleSheet("color: #9a9a9a;")
+        self.metrics_lbl.setStyleSheet(f"color: {TEXT_DIM};")
         rlayout.addWidget(self.metrics_lbl)
         self.metrics_table = QtWidgets.QTableWidget(len(METRIC_ROWS), 3)
-        self.metrics_table.setHorizontalHeaderLabels(["This capture", "Previous", "Change"])
+        self.metrics_table.setHorizontalHeaderLabels(["Now", "Prev", "Δ"])
         self.metrics_table.setVerticalHeaderLabels([label for label, _ in METRIC_ROWS])
         self.metrics_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         self.metrics_table.setSelectionMode(
             QtWidgets.QAbstractItemView.SelectionMode.ContiguousSelection
         )
+        self.metrics_table.setShowGrid(False)
+        self.metrics_table.setStyleSheet(
+            "QTableWidget { border: none; background: transparent; }"
+            f" QHeaderView::section {{ background: transparent; color: {TEXT_MUTED};"
+            f" border: none; border-bottom: 1px solid {BORDER}; padding: 3px 6px; }}"
+            f" QHeaderView::section:vertical {{ color: {TEXT_DIM}; border-bottom: none; }}"
+        )
         header = self.metrics_table.horizontalHeader()
         assert header is not None
         header.setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Stretch)
+        vheader = self.metrics_table.verticalHeader()
+        assert vheader is not None
+        vheader.setDefaultAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        self.metrics_table.setFixedHeight(
+            (vheader.defaultSectionSize() * len(METRIC_ROWS)) + header.sizeHint().height() + 4
+        )
         rlayout.addWidget(self.metrics_table)
+        pick = QtWidgets.QFormLayout()
+        self.setpoint_combo = QtWidgets.QComboBox()
+        self.measurement_combo = QtWidgets.QComboBox()
+        pick.addRow("Setpoint", self.setpoint_combo)
+        pick.addRow("Measured", self.measurement_combo)
+        rlayout.addLayout(pick)
+        self.overlay_chk = QtWidgets.QCheckBox("Overlay previous")
+        self.overlay_chk.setChecked(True)
+        rlayout.addWidget(self.overlay_chk)
         rlayout.addStretch()
+        self._colors: dict[str, str] = {}
 
     # --- configuration ---
 
@@ -112,6 +131,7 @@ class TriggerPanel(QtCore.QObject):
         """Offers the stream's signals; picks likely defaults (the user can change them)."""
         signals = cfg.get("signals", {})
         self._labels = {sid: sig.get("label", sid) for sid, sig in signals.items()}
+        self._colors = {sid: str(sig.get("color", TEXT)) for sid, sig in signals.items()}
         for combo in (self.signal_combo, self.setpoint_combo, self.measurement_combo):
             combo.blockSignals(True)
             combo.clear()
@@ -133,7 +153,7 @@ class TriggerPanel(QtCore.QObject):
             if choice is not None:
                 combo.setCurrentIndex(combo.findData(choice))
         self.set_armed(False)
-        self.metrics_lbl.setText("Arm the trigger (toolbar) to capture a step.")
+        self.metrics_lbl.setText(NO_CAPTURE)
         self.metrics_table.clearContents()
         self.changed.emit()
 
@@ -201,11 +221,13 @@ class TriggerPanel(QtCore.QObject):
             self.metrics_lbl.setText(
                 f"{names} · step {current.initial:+.4g} → {current.final:+.4g}"
             )
+        measured = self.measurement_combo.currentData()
+        now_color = self._colors.get(measured, TEXT) if isinstance(measured, str) else TEXT
         for row, (_, key) in enumerate(METRIC_ROWS):
             now = _metric(current, key)
             before = _metric(previous, key)
-            self._set_cell(row, 0, _format(key, now))
-            self._set_cell(row, 1, _format(key, before) if previous is not None else "")
+            self._set_cell(row, 0, _format(key, now), now_color)
+            self._set_cell(row, 1, _format(key, before) if previous is not None else "", TEXT_MUTED)
             text, color = _change(key, now, before)
             self._set_cell(row, 2, text if previous is not None else "", color)
 
@@ -215,8 +237,7 @@ class TriggerPanel(QtCore.QObject):
 
     def _set_cell(self, row: int, column: int, text: str, color: str | None = None) -> None:
         item = QtWidgets.QTableWidgetItem(text)
-        if column < 2:
-            item.setFont(mono_font())
+        item.setFont(mono_font())
         if color is not None:
             item.setForeground(QtGui.QColor(color))
         self.metrics_table.setItem(row, column, item)
@@ -263,7 +284,7 @@ def _change(key: str, now: float | None, before: float | None) -> tuple[str, str
     color = BETTER if now < before else WORSE
     arrow = "▼" if now < before else "▲"
     if key == "overshoot":
-        return f"{arrow} {now - before:+.1f} pts", color
+        return f"{arrow} {format_number(now - before, 1, sign=True)} pt", color
     if before == 0:
         return f"{arrow} {now - before:+.3g}", color
     return f"{arrow} {(now - before) / before * 100:+.0f} %", color

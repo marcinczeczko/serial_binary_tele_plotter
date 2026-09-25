@@ -10,19 +10,26 @@ What the panel adds on top of that:
 - **Edited vs sent.** After a send, every value that differs from what was last sent is
   highlighted, and counted next to Revert. Before the first send, what the board holds is
   unknown, so nothing is marked.
-- **Linked rows.** With two or more columns, a row's link button (⇄) keeps its columns
-  equal: editing one edits the others. Rows whose values start equal start linked.
+- **Linked rows.** With two or more columns, a linked row keeps its columns equal: editing
+  one edits the others. Rows whose values start equal start linked. The `L=R` box in the
+  grid's corner links or unlinks every row; a single row is linked from its label's
+  right-click menu, and an unlinked row's label shows `≠` (R9.5).
 - **Live mode.** Each change sends its column's button after `LIVE_DEBOUNCE_MS` without
   further changes, and at most every `LIVE_MIN_INTERVAL_S`: tuning by dragging a spin box.
   It's off by default because it sends to real hardware as you type.
-- **Presets.** Named value sets (kept by the owner, per config file); choosing one loads its
-  values, which then count as edited until sent.
+- **Presets.** Named value sets (kept by the owner, per config file), in the `Presets ▾`
+  menu (load, Save as…, Delete); choosing one loads its values, which then count as edited
+  until sent.
 - **Ctrl+Enter** presses the panel's main button (the first one spanning the panel), and
   **Esc** reverts the values edited since the last send.
 - **Scrubbing.** Dragging a number parameter's label left or right changes the row's values
   by one `step` per `SCRUB_PX_PER_STEP` pixels (Shift ×10, Alt ×0.1), like a knob. A linked
   row stays equal; an unlinked row moves every column by the same amount. It goes through
   the same path as typing, so edited marks and Live mode apply.
+
+Looks (R9.5, ADR-0012): a Manual | Live segment, square black inputs without spin arrows
+in B612 Mono, `Send` under each column (the button's label is its tooltip), and `Revert N`
+in amber only while something is edited.
 
 The panel only collects values: the main window resolves and encodes the command
 (`core.protocol.commands`), hands the packet to the engine and calls `mark_sent`.
@@ -37,6 +44,7 @@ from dataclasses import dataclass
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.config.controls import ButtonDef, PanelDef, ParamDef
+from styles import AMBER, TEXT_DIM, mono_font
 from ui.common.numbers import ScopeDoubleSpinBox
 
 ParamWidget = QtWidgets.QDoubleSpinBox | QtWidgets.QSpinBox | QtWidgets.QCheckBox
@@ -48,7 +56,15 @@ LIVE_DEBOUNCE_MS = 150
 LIVE_MIN_INTERVAL_S = 0.1
 EDITED_STYLE = "border: 1px solid #FFB000; color: #FFB000;"  # amber = edited, not sent
 LIVE_STYLE = "QToolButton { background: #FFB000; color: #000; border-color: #FFB000; }"
-PRESET_PLACEHOLDER = "Presets…"
+REVERT_STYLE = (
+    f"QPushButton {{ color: {AMBER}; border-color: {AMBER}; background: transparent;"
+    " font-weight: bold; }"
+)
+PANEL_STYLE = (
+    "QCheckBox::indicator { width: 13px; height: 13px; }"
+    f" QLabel#column_label {{ color: {TEXT_DIM}; }}"
+)
+UNLINKED_MARK = " ≠"
 
 
 @dataclass(frozen=True)
@@ -120,22 +136,25 @@ class CommandPanel(QtWidgets.QWidget):
         self.panel = panel
         self.inputs: dict[str, dict[str, ParamWidget]] = {c: {} for c in panel.column_keys}
         self.buttons: list[QtWidgets.QPushButton] = []
-        self.links: dict[str, QtWidgets.QToolButton] = {}
+        self.links: dict[str, QtGui.QAction] = {}  # a row's link, from its label's menu
         self._sent: dict[str, dict[str, float]] = {}
         self._syncing = False
         self._presets: dict[str, dict[str, dict[str, float]]] = {}
         self._live_timers: dict[str, QtCore.QTimer] = {}
         self._last_live: dict[str, float] = {}
         self._button_widgets: dict[int, QtWidgets.QPushButton] = {}
+        self._by_label: dict[str, QtWidgets.QPushButton] = {}  # by the config's label
         self.labels: dict[str, QtWidgets.QLabel] = {}
         self._scrub_start: dict[str, dict[str, float]] = {}  # row -> column -> value
 
+        self.setStyleSheet(PANEL_STYLE)
         outer = QtWidgets.QVBoxLayout(self)
-        outer.setContentsMargins(8, 6, 8, 6)
+        outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(8)
 
-        # --- mode, link all ---
+        # --- Manual | Live, and Presets ▾ ---
         top = QtWidgets.QHBoxLayout()
+        top.setSpacing(0)
         self.manual_btn = QtWidgets.QToolButton()
         self.manual_btn.setText("Manual")
         self.live_btn = QtWidgets.QToolButton()
@@ -153,51 +172,66 @@ class CommandPanel(QtWidgets.QWidget):
         self.manual_btn.setChecked(True)
         self.live_btn.toggled.connect(self._on_live_toggled)
         top.addStretch()
-        self.link_all = QtWidgets.QCheckBox("Link columns")
-        self.link_all.setVisible(len(panel.columns) >= 2)
-        self.link_all.toggled.connect(self._on_link_all)
-        top.addWidget(self.link_all)
+        self.presets_btn = QtWidgets.QToolButton()
+        self.presets_btn.setText("Presets ▾")
+        self.presets_btn.setToolTip("Load a saved set of values (then send it), save or delete")
+        self.presets_btn.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.presets_menu = QtWidgets.QMenu(self.presets_btn)
+        self.presets_btn.setMenu(self.presets_menu)
+        top.addWidget(self.presets_btn)
         outer.addLayout(top)
 
-        # --- parameter grid ---
+        # --- parameter grid: the L=R box in the corner, then one row per parameter ---
         grid = QtWidgets.QGridLayout()
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(5)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(4)
         linkable = len(panel.columns) >= 2
-        first_input = 2 if linkable else 1
+        self.link_all = QtWidgets.QToolButton()
+        self.link_all.setCheckable(True)
+        self.link_all.setText(_link_text(panel.columns))
+        self.link_all.setToolTip(
+            "Link every row: the columns stay equal. A single row: right-click its label."
+        )
+        self.link_all.setVisible(linkable)
+        self.link_all.toggled.connect(self._on_link_all)
         row = 0
         if panel.columns:
+            if linkable:
+                grid.addWidget(self.link_all, row, 0)
             for i, col in enumerate(panel.columns):
-                grid.addWidget(QtWidgets.QLabel(f"<b>{col}</b>"), row, first_input + i)
+                heading = QtWidgets.QLabel(col)
+                heading.setObjectName("column_label")
+                grid.addWidget(heading, row, 1 + i)
             row += 1
         for param in panel.parameters:
             label: QtWidgets.QLabel
             if param.kind == "bool":
-                label = QtWidgets.QLabel(f"{param.label}:")
+                label = QtWidgets.QLabel(param.label)
             else:
-                scrub = ScrubLabel(f"{param.label}:")
+                scrub = ScrubLabel(param.label)
                 scrub.scrub_started.connect(lambda p=param.key: self._begin_scrub(p))
                 scrub.scrubbed.connect(lambda steps, p=param: self.scrub(p.key, steps))
                 label = scrub
             self.labels[param.key] = label
             grid.addWidget(label, row, 0)
             if linkable:
-                link = QtWidgets.QToolButton()
-                link.setText("⇄")
+                link = QtGui.QAction(f"Link {param.label} across columns", self)
                 link.setCheckable(True)
-                link.setToolTip(f"Keep {param.label} equal in every column")
-                link.setAccessibleName(f"Link {param.label}")
                 self.links[param.key] = link
-                grid.addWidget(link, row, 1)
+                label.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+                label.customContextMenuRequested.connect(
+                    lambda pos, lbl=label, a=link: self._row_menu(lbl, a, pos)
+                )
             for i, col in enumerate(panel.column_keys):
                 widget = self._input(param, col)
                 self.inputs[col][param.key] = widget
-                grid.addWidget(widget, row, first_input + i)
+                grid.addWidget(widget, row, 1 + i)
             row += 1
 
         # Column buttons under their column, stacked; the others span the panel.
         per_column: dict[str, int] = {}
         spanning: list[ButtonDef] = []
+        placed = [b.column for b in panel.buttons if b.column is not None]
         for button in panel.buttons:
             if button.column is None or not panel.columns:
                 spanning.append(button)
@@ -205,44 +239,30 @@ class CommandPanel(QtWidgets.QWidget):
             i = panel.columns.index(button.column)
             offset = per_column.get(button.column, 0)
             per_column[button.column] = offset + 1
-            grid.addWidget(self._button(button), row + offset, first_input + i)
+            short = placed.count(button.column) == 1  # alone under its column: "Send"
+            grid.addWidget(self._button(button, short), row + offset, 1 + i)
         row += max(per_column.values(), default=0)
-        span = len(panel.column_keys) + first_input
+        span = len(panel.column_keys) + 1
         for button in spanning:
             grid.addWidget(self._button(button), row, 0, 1, span)
             row += 1
+        grid.setColumnStretch(0, 0)
+        for i in range(len(panel.column_keys)):
+            grid.setColumnStretch(1 + i, 1)
         outer.addLayout(grid)
 
-        # --- edited vs sent ---
+        # --- edited vs sent: Revert N, only while something is edited ---
         status = QtWidgets.QHBoxLayout()
-        self.unsent_lbl = QtWidgets.QLabel("")
-        self.unsent_lbl.setStyleSheet(
-            "background: #FFB000; color: #000; padding: 1px 6px; font-weight: bold;"
-        )
-        self.unsent_lbl.setVisible(False)
-        status.addWidget(self.unsent_lbl)
         self.revert_btn = QtWidgets.QPushButton("Revert")
-        self.revert_btn.setToolTip("Back to the last sent values")
-        self.revert_btn.setEnabled(False)
+        self.revert_btn.setToolTip("Back to the last sent values (Esc)")
+        self.revert_btn.setStyleSheet(REVERT_STYLE)
+        self.revert_btn.setVisible(False)
         self.revert_btn.clicked.connect(self.revert)
         status.addWidget(self.revert_btn)
         status.addStretch()
         outer.addLayout(status)
-
-        # --- presets ---
-        presets = QtWidgets.QHBoxLayout()
-        self.preset_combo = QtWidgets.QComboBox()
-        self.preset_combo.setToolTip("Load a saved set of values (then send it)")
-        self.preset_combo.activated.connect(self._on_preset_chosen)
-        presets.addWidget(self.preset_combo, 1)
-        save = QtWidgets.QPushButton("Save as…")
-        save.clicked.connect(self._ask_preset_name)
-        presets.addWidget(save)
-        self.delete_preset_btn = QtWidgets.QPushButton("Delete")
-        self.delete_preset_btn.clicked.connect(self._delete_current_preset)
-        presets.addWidget(self.delete_preset_btn)
-        outer.addLayout(presets)
         outer.addStretch()
+        self._current_preset: str | None = None
         self.set_presets({})
 
         shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Return"), self)
@@ -277,12 +297,16 @@ class CommandPanel(QtWidgets.QWidget):
             widget.setSingleStep(param.step)
             widget.setValue(param.default)
         widget.setKeyboardTracking(False)
+        widget.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+        widget.setFont(mono_font())
         widget.setAccessibleName(f"{param.label} {col}".strip())
         widget.valueChanged.connect(lambda _=0, c=col, p=param.key: self._on_edit(c, p))
         return widget
 
-    def _button(self, button: ButtonDef) -> QtWidgets.QPushButton:
-        btn = QtWidgets.QPushButton(button.label)
+    def _button(self, button: ButtonDef, short: bool = False) -> QtWidgets.QPushButton:
+        btn = QtWidgets.QPushButton("Send" if short else button.label)
+        btn.setToolTip(button.label)
+        self._by_label[button.label] = btn
         btn.clicked.connect(lambda _checked=False, b=button: self._send(b))
         self.buttons.append(btn)
         self._button_widgets[id(button)] = btn
@@ -385,6 +409,7 @@ class CommandPanel(QtWidgets.QWidget):
             if checked:  # linking makes the columns equal: the first column wins
                 first = self.panel.column_keys[0]
                 self._on_edit(first, key)
+        self._sync_link_all()
 
     def _sync_link_all(self) -> None:
         if not self.links:
@@ -392,6 +417,14 @@ class CommandPanel(QtWidgets.QWidget):
         self.link_all.blockSignals(True)
         self.link_all.setChecked(all(link.isChecked() for link in self.links.values()))
         self.link_all.blockSignals(False)
+        for key, link in self.links.items():
+            param = next(p for p in self.panel.parameters if p.key == key)
+            self.labels[key].setText(param.label + ("" if link.isChecked() else UNLINKED_MARK))
+
+    def _row_menu(self, label: QtWidgets.QLabel, link: QtGui.QAction, pos: QtCore.QPoint) -> None:
+        menu = QtWidgets.QMenu(self)
+        menu.addAction(link)
+        menu.exec(label.mapToGlobal(pos))
 
     # --- edited vs sent ---
 
@@ -426,9 +459,8 @@ class CommandPanel(QtWidgets.QWidget):
                 widget.setStyleSheet(EDITED_STYLE if is_edited else "")
                 sent = self.last_sent(col, key)
                 widget.setToolTip(f"Last sent: {sent:g}" if sent is not None else "Not sent yet")
-        self.unsent_lbl.setText(f"{len(edited)} unsent")
-        self.unsent_lbl.setVisible(bool(edited))
-        self.revert_btn.setEnabled(bool(edited))
+        self.revert_btn.setText(f"Revert {len(edited)}")
+        self.revert_btn.setVisible(bool(edited))
 
     # --- sending ---
 
@@ -446,7 +478,8 @@ class CommandPanel(QtWidgets.QWidget):
             self._send(buttons[0])
 
     def button_for(self, label: str) -> QtWidgets.QPushButton | None:
-        return next((b for b in self.buttons if b.text() == label), None)
+        """The button of the config's `label` (shown as `Send` under its column)."""
+        return self._by_label.get(label)
 
     # --- live mode ---
 
@@ -496,13 +529,35 @@ class CommandPanel(QtWidgets.QWidget):
 
     def set_presets(self, presets: dict[str, dict[str, dict[str, float]]]) -> None:
         self._presets = dict(presets)
-        self.preset_combo.blockSignals(True)
-        self.preset_combo.clear()
-        self.preset_combo.addItem(PRESET_PLACEHOLDER, None)
+        if self._current_preset not in self._presets:
+            self._current_preset = None
+        self._build_presets_menu()
+
+    def _build_presets_menu(self) -> None:
+        """Presets ▾: each preset (the loaded one checked), Save as…, Delete ▸."""
+        menu = self.presets_menu
+        menu.clear()
         for name in sorted(self._presets):
-            self.preset_combo.addItem(name, name)
-        self.preset_combo.blockSignals(False)
-        self.delete_preset_btn.setEnabled(bool(self._presets))
+            act = menu.addAction(name)
+            assert act is not None
+            act.setCheckable(True)
+            act.setChecked(name == self._current_preset)
+            act.triggered.connect(lambda _=False, n=name: self.apply_preset(n))
+        if self._presets:
+            menu.addSeparator()
+        save = menu.addAction("Save as…")
+        assert save is not None
+        save.triggered.connect(self._ask_preset_name)
+        delete = menu.addMenu("Delete")
+        assert delete is not None
+        delete.setEnabled(bool(self._presets))
+        for name in sorted(self._presets):
+            act = delete.addAction(name)
+            assert act is not None
+            act.triggered.connect(lambda _=False, n=name: self.delete_preset(n))
+        self.presets_btn.setText(
+            f"{self._current_preset} ▾" if self._current_preset else "Presets ▾"
+        )
 
     def preset_names(self) -> list[str]:
         return sorted(self._presets)
@@ -511,36 +566,34 @@ class CommandPanel(QtWidgets.QWidget):
         values = self._presets.get(name)
         if values is not None:
             self.set_values(values, notify=True)
-            self.preset_combo.setCurrentIndex(max(self.preset_combo.findData(name), 0))
+            self._current_preset = name
+            self._build_presets_menu()
 
     def save_preset(self, name: str) -> None:
         name = name.strip()
         if not name:
             return
         self._presets[name] = self.values()
-        self.set_presets(self._presets)
-        self.preset_combo.setCurrentIndex(self.preset_combo.findData(name))
+        self._current_preset = name
+        self._build_presets_menu()
         self.preset_saved.emit(name, self.values())
 
     def delete_preset(self, name: str) -> None:
         if self._presets.pop(name, None) is not None:
-            self.set_presets(self._presets)
+            if self._current_preset == name:
+                self._current_preset = None
+            self._build_presets_menu()
             self.preset_deleted.emit(name)
-
-    def _on_preset_chosen(self, index: int) -> None:
-        name = self.preset_combo.itemData(index)
-        if isinstance(name, str):
-            self.apply_preset(name)
 
     def _ask_preset_name(self) -> None:
         name, ok = QtWidgets.QInputDialog.getText(self, "Save preset", "Preset name:")
         if ok:
             self.save_preset(name)
 
-    def _delete_current_preset(self) -> None:
-        name = self.preset_combo.currentData()
-        if isinstance(name, str):
-            self.delete_preset(name)
+
+def _link_text(columns: tuple[str, ...] | list[str]) -> str:
+    """The corner box: `L=R` for Left/Right, the columns' initials in general."""
+    return "=".join(c[:1].upper() for c in columns) if columns else ""
 
 
 def _value(widget: ParamWidget) -> float:

@@ -66,8 +66,11 @@ def test_generated_pid_panel_sends_config_defined_commands(qtbot: Any, tmp_path:
     assert isinstance(panel.inputs["Left"]["use_pi"], QtWidgets.QCheckBox)
     assert panel.inputs["Left"]["ki"].decimals() == 5  # C8: fine enough for small Ki
     assert panel.inputs["Right"]["rps"].minimum() == -50.0  # C8: reverse is allowed
-    labels = [b.text() for b in panel.buttons]
+    # Under its column a button reads Send; the config's label is its tooltip (R9.5).
+    assert [b.text() for b in panel.buttons] == ["Send", "Send", "Run Test (Both Motors)"]
+    labels = [b.toolTip() for b in panel.buttons]
     assert labels == ["Update Left PID", "Update Right PID", "Run Test (Both Motors)"]
+    assert panel.button_for("Update Right PID") is panel.buttons[1]
 
     panel.buttons[0].click()
     assert win.lbl_status.text() == "Not connected: 'Update Left PID' not sent"
@@ -87,9 +90,10 @@ def test_generated_pid_panel_sends_config_defined_commands(qtbot: Any, tmp_path:
     first = win.command_log.entries()[0]
     assert (first.number, first.detail, len(first.packet)) == (1, "first send", 41)
     assert win.plot.marker_count() == 1  # dashed line at the stream time it was sent
-    assert panel.edited() == [] and not panel.unsent_lbl.isVisibleTo(panel)
+    assert panel.edited() == [] and not panel.revert_btn.isVisibleTo(panel)
     panel.inputs["Left"]["kp"].setValue(3.0)
-    assert panel.edited() == [("Left", "kp")] and panel.unsent_lbl.text() == "1 unsent"
+    assert panel.edited() == [("Left", "kp")] and panel.revert_btn.text() == "Revert 1"
+    assert panel.revert_btn.isVisibleTo(panel)
     panel.revert()
     assert panel.inputs["Left"]["kp"].value() == 2.5 and panel.edited() == []
 
