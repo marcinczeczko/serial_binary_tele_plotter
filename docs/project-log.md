@@ -6,6 +6,34 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — R8.4 (part 1): the editor on a text profile
+
+- Profile row (all profiles): name, format (read-only), baud, edited into the `profile`
+  block. Text profiles: **Pattern** replaces ID and byte order, `LineView` replaces the
+  frame view (fixed text + value hexagons, shared `draw_block`), the X axis offers the
+  integer values and `(line number)` (Step hidden), the form edits a value.
+- `StreamDraft`: `set_pattern` (re-derives fields; kept slots keep type and signals),
+  `add_value_after`, `remove_value`, renames edit the slot; `_line` is the default X axis
+  of a counterless text stream. An invalid pattern isn't applied (red, status, Esc).
+- The Line view's last line comes from the ~1 Hz `LinkReport` (`last_lines`,
+  `last_unmatched`), set per chunk by `TextLineDecoder`: no per-line signal.
+- Tests: 405 (+19): draft ops, pattern text, last lines, and 10 `qt` editor tests
+  including an untouched text profile saving byte-identically (C4). Next: R8.4 part 2
+  (From console output…, Copy as printf).
+
+---
+
+## 2026-09-25 — R8.4 canvas revised
+
+- Canvas boards added for R8.4: the text stream editor's states (invalid pattern, no
+  match, line-number X axis, no line yet), the dashboard on a text profile, and the
+  Listen button's states; `PasteLine` gains an unticked card and an `i32` value.
+- Trimmed for a clean look: no source/age on the last line, no hints beyond `✗ no match`,
+  no helper text, no progress bar; tooltips instead. The spec records the decisions,
+  including where the editor's last line comes from (the ~1 Hz `LinkReport`).
+
+---
+
 ## 2026-09-25 — R8.3 Text-line decoder
 
 - **Text profiles (ADR-0010).** `core/protocol/text_line.py`: the pattern grammar

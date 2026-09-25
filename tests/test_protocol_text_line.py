@@ -215,3 +215,20 @@ def test_a_stream_without_a_pattern_is_not_decoded() -> None:
 def test_pattern_and_fields_must_agree() -> None:
     with pytest.raises(ValueError, match="don't match"):
         _decoder(s=_stream("{a},{b}", ("b", "f32"), ("a", "f32")))
+
+
+def test_the_newest_lines_are_kept_for_the_editor() -> None:
+    decoder = _decoder()
+    decoder.feed(b"IMU,1,0,0\nIMU,2,0,0\r\nbanner\nENV t=1C h=1%\n")
+    assert decoder.stats.last_lines == {"imu": "IMU,2,0,0", "env": "ENV t=1C h=1%"}
+    assert decoder.stats.last_unmatched == "banner"
+    snap = decoder.stats.snapshot()
+    decoder.feed(b"IMU,3,0,0\n")
+    assert snap.last_lines["imu"] == "IMU,2,0,0"  # a snapshot doesn't follow
+
+
+def test_pattern_text_writes_tokens_back() -> None:
+    from core.protocol.text_line import pattern_text
+
+    for text in ("ENV t={t}C h={h}%", "{{{a}}} x", "{a} , {b}"):
+        assert pattern_text(parse_pattern(text).tokens) == text

@@ -96,8 +96,9 @@ ui/panels/              container (owns the controls; MainWindow places them), c
                         lanes), command_panel (generated from `panels`: edited vs sent, linked rows, Live,
                         presets, label scrubbing, Esc revert), command_log,
                         timing, trigger (setup popup + step-response results)
-ui/config/              streams.json editor (ADR-0009): tab (toolbar, stream tabs, save), stream_editor
-                        (settings row, lanes tree, field form), frame_view (bus-decode drawing), paste_dialog
+ui/config/              streams.json editor (ADR-0009): tab (toolbar, profile row, stream tabs, save),
+                        stream_editor (settings row, lanes tree, field form), frame_view (bus-decode drawing),
+                        line_view (a text stream's pattern and last line, R8.4), paste_dialog
 tests/                  pytest: pure logic, stubbed-Qt legacy tests, `qt`-marked real-Qt tests
 tools/                  dev scripts (bench_pipeline.py)
 .github/workflows/      CI

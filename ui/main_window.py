@@ -623,6 +623,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_link.setText(text)
         self.lbl_link.setToolTip(tooltip)
         self.lbl_link.setStyleSheet("color: #FFB74D;" if has_problems else "")
+        if report["format"] == "text":  # the editor's Line view shows the newest lines
+            self.configurator.set_last_lines(report["last_lines"], report["last_unmatched"])
         self._update_activity()
 
     def _update_activity(self, clock: Callable[[], float] = time.monotonic) -> None:

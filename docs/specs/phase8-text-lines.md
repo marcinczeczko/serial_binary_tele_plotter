@@ -233,8 +233,9 @@ with `tools/bench_pipeline.py` and add a text case to it; a rough target is ≥ 
 
 ## R8.4 Editor for text profiles
 
-Everything here follows the canvas `Main` and `PasteLine` boards and the look of the
-existing editor (ADR-0009):
+Everything here follows the canvas boards `Main`, `Text stream editor states`,
+`PasteLine`, `Listening on the port` and `Dashboard on a text profile` (revised
+2026-09-25: states added, extra text cut), and the look of the existing editor (ADR-0009):
 
 - black background;
 - `#1b1306` decode strip;
@@ -262,9 +263,12 @@ The editor still edits a `StreamDraft` only.
   - Editing the pattern re-derives the fields. Slots that keep their name keep their
     field, type and signals. A new slot becomes a new field (number). A removed slot
     removes its field and signals, like removing a binary field.
-  - An invalid pattern shows the parse error in the status line and is not applied.
+  - An invalid pattern gets a red border and its parse error in the status line
+    (`· {ms} and {ax} need text between them`). It is not applied: the Line view keeps
+    the last valid pattern, dimmed, until the pattern is fixed or Esc reverts it.
 - **X axis**: a combo of the integer slots plus "(line number)", then `× time per tick`
-  (`format_seconds` / `parse_seconds` exist), then Step.
+  (`format_seconds` / `parse_seconds` exist), then Step. With "(line number)" the
+  Step field is hidden and the unit reads "per line".
 - **Controls**, as now.
 
 ### Line view (replaces the frame view for text)
@@ -273,8 +277,13 @@ The editor still edits a `StreamDraft` only.
   - fixed text as grey monospace;
   - each slot as a colored hexagon block, the same colors as the lanes (`field_colors`);
   - the selected slot inverted (white outline, filled color).
-- A second row shows `last line` (the most recent raw line received or pasted), with
-  `✓ matches` in green or `✗ no match` in grey.
+- A second row shows `last line`, then the line, then `✓ matches` in green or
+  `✗ no match` in grey. No source or age is shown. The line is:
+  - while connected, the newest line this stream matched, else the newest unmatched
+    line (most likely the one being fixed). The engine's ~1 Hz `LinkReport` carries
+    them (`last_lines: {key: line}` and `last_unmatched`); no per-line signal;
+  - otherwise the last line pasted or heard in "From console output…" for this layout;
+  - otherwise `none yet: connect, or paste console output`, in grey.
 - Clicking a block selects its field in the form. The form on the right is titled
   **Value** and holds:
   - Name;
@@ -288,7 +297,9 @@ The editor still edits a `StreamDraft` only.
 ### "From console output…" dialog
 
 - Left: a paste box, plus **Listen on the port for 5 s**. That button is enabled only
-  while connected. It collects raw lines from the engine: add an engine slot that
+  while connected (disabled, tooltip "Connect first"). While listening it reads
+  `Listening… 3 s` (Cancel closes the dialog and stops it); then the lines are added to
+  the box. No progress bar, no helper text. It collects raw lines from the engine: add an engine slot that
   captures raw lines for N seconds and emits them once, queued. It must not add a
   per-line signal.
 - Right: **Line patterns found**. One card per pattern, each with:
@@ -298,8 +309,9 @@ The editor still edits a `StreamDraft` only.
   - the pattern in monospace;
   - the line count;
   - the Line view blocks;
-  - a value table: name, type, range seen, and a note such as
-    `counts up by 10: X axis`.
+  - a value table: name, type, range seen, and `X axis, step 10` on the suggested axis
+    (no other notes: the type says signed or not);
+  - an unticked card is dimmed and not created.
 - Below the cards: `Not a pattern (seen once): …`.
 - Footer: `2 streams, 6 values from 9 lines. Values are named from the text next to
   them, else v1, v2…`, then Cancel and **Create N streams**, which adds them to the
@@ -356,7 +368,9 @@ The editor still edits a `StreamDraft` only.
 
 Host → board commands as text templates (`"PID {kp} {ki}\n"`) for text profiles, reusing
 the command panels. Until then, a text profile's panels can't send; show them disabled
-with a tooltip.
+(the reason in a tooltip, no text on the dock). A stream without a panel shows none, as
+today. The dashboard needs nothing else for text: the status bar's link readout (R8.3)
+already shows the line counters.
 
 ## Suggested PR split
 

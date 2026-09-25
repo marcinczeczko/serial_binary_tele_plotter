@@ -3,6 +3,8 @@ The configuration editor window's content (R7.1): streams.json, laid out like th
 
 - A toolbar: New stream, From C struct…, Copy as C struct, Delete, and Revert and Save
   (orange while there are unsaved changes, Ctrl+S).
+- The profile row (R8.4): the profile's name, its format (read-only: chosen at New
+  profile) and baud, edited into the document's `profile` block.
 - The streams as tabs, as on the dashboard, and the `StreamEditor` for the shown one.
 - A status line: the stream's size and its first problem, as validation sees it now.
 
@@ -14,6 +16,7 @@ A file with an older schema is saved migrated (R5.1).
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from typing import Any
@@ -23,9 +26,11 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from core.config import InvalidConfigError, StreamConfigLoader, save_document, validate_stream
 from core.config.cstruct import to_c_struct
 from core.config.draft import StreamDraft, unique_name
+from core.config.profile import FORMAT_LABELS, profile_of
 from core.protocol.constants import LOOP_CNTR_NAME
 from ui.config.paste_dialog import PasteStructDialog
 from ui.config.stream_editor import StreamEditor
+from ui.panels.connection import BAUD_RATES
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +39,9 @@ SAVE_DIRTY = (
     " color: white; font-weight: bold; }"
     " QPushButton:hover { background-color: #ff9d1a; }"
 )
+
+
+NO_BAUD = "—"  # the profile names no baud rate
 
 
 class ConfiguratorTab(QtWidgets.QWidget):
@@ -46,6 +54,9 @@ class ConfiguratorTab(QtWidgets.QWidget):
         self.loader = stream_loader
         self.filepath: str = str(stream_loader.path)
         self.drafts: dict[str, StreamDraft] = {}
+        self._profile: dict[str, Any] | None = None  # the `profile` block, as edited
+        self._last_lines: dict[str, str] = {}  # the newest line per stream (link report)
+        self._last_unmatched = ""
         self._saved: str = ""  # the document as loaded or saved, to tell unsaved changes
         self._build()
         self._take_document()
@@ -81,6 +92,36 @@ class ConfiguratorTab(QtWidgets.QWidget):
         line.setStyleSheet("background: #333;")
         layout.addWidget(line)
 
+        profile_row = QtWidgets.QWidget()
+        profile_row.setStyleSheet("background: #111;")
+        prow = QtWidgets.QHBoxLayout(profile_row)
+        prow.setContentsMargins(10, 5, 10, 5)
+        prow.setSpacing(8)
+        self.profile_name_edit = QtWidgets.QLineEdit()
+        self.profile_name_edit.setFixedWidth(150)
+        self.profile_name_edit.setToolTip("What the profile menu shows")
+        self.format_lbl = QtWidgets.QLabel("")
+        self.format_lbl.setStyleSheet("color: white; font-weight: bold;")
+        self.format_lbl.setToolTip("What the device sends; chosen when the profile is made")
+        self.profile_baud_combo = QtWidgets.QComboBox()
+        self.profile_baud_combo.setToolTip("The baud rate this profile connects at")
+        for text, widget in (
+            ("Profile:", self.profile_name_edit),
+            ("Format:", self.format_lbl),
+            ("Baud:", self.profile_baud_combo),
+        ):
+            lbl = QtWidgets.QLabel(text)
+            if text != "Profile:":
+                lbl.setContentsMargins(10, 0, 0, 0)
+            prow.addWidget(lbl)
+            prow.addWidget(widget)
+        prow.addStretch()
+        layout.addWidget(profile_row)
+        line3 = QtWidgets.QFrame()
+        line3.setFixedHeight(1)
+        line3.setStyleSheet("background: #333;")
+        layout.addWidget(line3)
+
         self.stream_tabs = QtWidgets.QTabBar()
         self.stream_tabs.setExpanding(False)
         self.stream_tabs.setDrawBase(False)
@@ -108,6 +149,8 @@ class ConfiguratorTab(QtWidgets.QWidget):
         self.delete_btn.clicked.connect(self.delete_stream)
         self.revert_btn.clicked.connect(self.revert)
         self.save_btn.clicked.connect(self.save_to_file)
+        self.profile_name_edit.editingFinished.connect(self._on_profile_name)
+        self.profile_baud_combo.activated.connect(self._on_profile_baud)
         self.stream_tabs.currentChanged.connect(self._on_tab_changed)
         self.editor.changed.connect(self._on_changed)
         self.editor.key_rename_requested.connect(self.rename_stream)
@@ -129,11 +172,22 @@ class ConfiguratorTab(QtWidgets.QWidget):
     def reload_document(self) -> None:
         """Edits the file the loader has now (a profile switch, R8.2), as loaded."""
         self.filepath = str(self.loader.path)
+        self._last_lines, self._last_unmatched = {}, ""  # another device's lines
         self._take_document()
+
+    @property
+    def is_text(self) -> bool:
+        return self.loader.profile.format == "text"
 
     def _take_document(self) -> None:
         # Edit a private copy of the raw document, including streams with errors, so they
         # can be fixed here.
+        block = self.loader.data.get("profile")
+        self._profile = copy.deepcopy(block) if isinstance(block, dict) else None
+        self._refresh_profile_row()
+        self.editor.set_format(self.loader.profile.format)
+        for w in (self.paste_btn, self.copy_btn):  # C structs are for binary frames
+            w.setVisible(not self.is_text)
         streams = self.loader.data.get("streams", {})
         self.drafts = {str(k): StreamDraft(v) for k, v in streams.items()}
         panels = self.loader.data.get("panels")
@@ -144,8 +198,66 @@ class ConfiguratorTab(QtWidgets.QWidget):
         self._on_changed()
 
     def document(self) -> dict[str, Any]:
-        """The document to save: as loaded, with the edited streams."""
-        return {**self.loader.data, "streams": {k: d.to_stream() for k, d in self.drafts.items()}}
+        """The document to save: as loaded, with the edited profile block and streams."""
+        doc = dict(self.loader.data)
+        if self._profile is not None:
+            doc["profile"] = copy.deepcopy(self._profile)
+        doc["streams"] = {k: d.to_stream() for k, d in self.drafts.items()}
+        return doc
+
+    # --- the profile row (R8.4) ---
+
+    def _profile_block(self) -> dict[str, Any]:
+        if self._profile is None:
+            self._profile = {}
+        return self._profile
+
+    def _edited_profile(self) -> Any:
+        doc = {"profile": self._profile} if self._profile is not None else {}
+        return profile_of(doc, self.loader.path)
+
+    def _refresh_profile_row(self) -> None:
+        profile = self._edited_profile()
+        if not self.profile_name_edit.hasFocus():
+            self.profile_name_edit.setText(profile.name)
+        self.format_lbl.setText(FORMAT_LABELS.get(profile.format, profile.format))
+        combo = self.profile_baud_combo
+        combo.clear()
+        if profile.baud is None:
+            combo.addItem(NO_BAUD)
+        combo.addItems(BAUD_RATES)
+        if profile.baud is not None and combo.findText(str(profile.baud)) < 0:
+            combo.addItem(str(profile.baud))
+        combo.setCurrentText(str(profile.baud) if profile.baud is not None else NO_BAUD)
+
+    def _on_profile_name(self) -> None:
+        name = self.profile_name_edit.text().strip()
+        current = self._edited_profile().name
+        if not name:
+            self.profile_name_edit.setText(current)
+        elif name != current:
+            self._profile_block()["name"] = name
+            self._on_changed()
+
+    def _on_profile_baud(self, _index: int) -> None:
+        text = self.profile_baud_combo.currentText()
+        if text.isdigit() and self._profile_block().get("baud") != int(text):
+            self._profile_block()["baud"] = int(text)
+            self._refresh_profile_row()
+            self._on_changed()
+
+    # --- last lines (R8.4) ---
+
+    def set_last_lines(self, lines: dict[str, str], unmatched: str) -> None:
+        """The newest line each stream matched and the newest unmatched one (~1 Hz)."""
+        self._last_lines = dict(lines)
+        self._last_unmatched = unmatched
+        self._show_last_line()
+
+    def _show_last_line(self) -> None:
+        key = self.current_key()
+        line = self._last_lines.get(key or "") or self._last_unmatched or None
+        self.editor.set_last_line(line)
 
     def _fingerprint(self) -> str:
         return json.dumps(self.document())
@@ -155,9 +267,9 @@ class ConfiguratorTab(QtWidgets.QWidget):
 
     # --- tabs ---
 
-    @staticmethod
-    def _tab_text(draft: StreamDraft) -> str:
-        return f"{draft.name or '(unnamed)'} · 0x{draft.stream_id:02X}"
+    def _tab_text(self, draft: StreamDraft) -> str:
+        name = draft.name or "(unnamed)"
+        return name if self.is_text else f"{name} · 0x{draft.stream_id:02X}"
 
     def _rebuild_tabs(self, select: str | None = None) -> None:
         tabs = self.stream_tabs
@@ -192,6 +304,7 @@ class ConfiguratorTab(QtWidgets.QWidget):
 
     def _show(self, key: str) -> None:
         self.editor.load(key, self.drafts[key])
+        self._show_last_line()
         self._update_status()
 
     # --- edits ---
@@ -218,13 +331,22 @@ class ConfiguratorTab(QtWidgets.QWidget):
             self.status_lbl.setToolTip("")
             return
         draft = self.drafts[key]
-        text = (
-            f"{key} · {len(draft.fields)} fields · {len(draft.signals)} signals"
-            f" · {draft.payload_size()} B"
-        )
+        if self.is_text:
+            text = f"{key} · {len(draft.fields)} values · {len(draft.signals)} signals"
+        else:
+            text = (
+                f"{key} · {len(draft.fields)} fields · {len(draft.signals)} signals"
+                f" · {draft.payload_size()} B"
+            )
         problems = validate_stream(key, draft.to_stream(), self.loader.profile.format)
         errors = [p for p in problems if p.severity == "error"]
         shown = errors or problems
+        if self.editor.pattern_error is not None:
+            self.status_lbl.setText(
+                f'{text} · <span style="color:#ff6b6b">{self.editor.pattern_error}</span>'
+            )
+            self.status_lbl.setToolTip("Not applied: fix the pattern, or Esc to drop the edit")
+            return
         if shown:
             first = shown[0].message
             more = f" (+{len(shown) - 1} more)" if len(shown) > 1 else ""
@@ -236,6 +358,9 @@ class ConfiguratorTab(QtWidgets.QWidget):
             self.status_lbl.setToolTip("")
 
     def _show_problem(self, message: str) -> None:
+        if self.editor.pattern_error is not None:
+            self._update_status()  # the stream line with the pattern's error
+            return
         self.status_lbl.setText(f'<span style="color:#ff6b6b">{message}</span>')
 
     def rename_stream(self, new_key: str) -> None:
@@ -261,6 +386,11 @@ class ConfiguratorTab(QtWidgets.QWidget):
 
     def create_stream(self) -> None:
         key = unique_name("new_stream", self.drafts)
+        if self.is_text:
+            fields = [{"name": "v1", "type": "f32"}]
+            stream = {"name": "New stream", "frame": {"pattern": "new,{v1}", "fields": fields}}
+            self._add_stream(key, {**stream, "signals": {}})
+            return
         taken = {d.stream_id for d in self.drafts.values()}
         stream_id = next((i for i in range(1, 256) if i not in taken), 0)
         self._add_stream(

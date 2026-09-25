@@ -7,6 +7,10 @@ itself, and every operation changes only the keys it's about. Everything else (u
 keys, key order, number formatting) is carried through untouched, so a stream that isn't
 edited saves byte-identically.
 
+A text stream (R8.4) is a stream with a `frame.pattern`: its fields are the pattern's
+slots, in order, so the operations that add, remove or rename a field edit the pattern
+too, and `set_pattern` edits the fields.
+
 Pure Python, no Qt: the widgets in `ui/config` call these operations and redraw.
 """
 
@@ -20,6 +24,13 @@ from typing import Any
 
 from core.acquisition.timebase import DEFAULT_SCALE_S
 from core.protocol.constants import LOOP_CNTR_NAME, STRUCT_TYPE_MAP
+from core.protocol.text_line import (
+    PatternError,
+    Slot,
+    default_time_field,
+    parse_pattern,
+    pattern_text,
+)
 
 # The dashboard's signal colors, in the order new signals take them.
 PALETTE = (
@@ -37,6 +48,7 @@ PALETTE = (
 LINE_STYLES = ("solid", "dashed", "dotted")
 LINE_WIDTH = 1  # 1 px draws fastest (P4)
 TIME_DEFAULTS: dict[str, Any] = {"field": LOOP_CNTR_NAME, "scale_s": DEFAULT_SCALE_S, "step": 1}
+NEW_VALUE_TYPE = "f32"  # a new text value is a number
 
 
 @dataclass(frozen=True)
@@ -117,20 +129,95 @@ class StreamDraft:
         else:
             self.data["controls"] = value
 
+    # --- text streams (R8.4) ---
+
+    @property
+    def pattern(self) -> str | None:
+        value = self._frame().get("pattern")
+        return value if isinstance(value, str) else None
+
+    @property
+    def is_text(self) -> bool:
+        return self.pattern is not None
+
+    def set_pattern(self, text: str) -> str | None:
+        """
+        Sets the pattern and re-derives the fields from its slots; returns why not (the
+        pattern is then unchanged), or None. A slot that keeps its name keeps its field,
+        type and signals; a new slot is a new number field; a removed slot's field goes,
+        with its signals, like removing a field.
+        """
+        try:
+            slots = parse_pattern(text).slots
+        except PatternError as e:
+            return str(e)
+        if text == self.pattern:
+            return None
+        by_name = {str(f.get("name")): f for f in self.fields if isinstance(f, dict)}
+        for name in [n for n in by_name if n not in slots]:
+            self._forget_field(name)
+        self._frame()["fields"] = [
+            by_name.get(name, {"name": name, "type": NEW_VALUE_TYPE}) for name in slots
+        ]
+        self._frame()["pattern"] = text
+        return None
+
+    def _tokens(self) -> list[str | Slot]:
+        return list(parse_pattern(self.pattern or "").tokens)
+
+    def add_value_after(self, index: int | None) -> int:
+        """Inserts `,{vN}` after value `index` (at the end for None); returns its index."""
+        tokens = self._tokens()
+        names = self.field_names()
+        n = len(names) + 1
+        while f"v{n}" in names:
+            n += 1
+        name = f"v{n}"
+        slot_positions = [i for i, t in enumerate(tokens) if isinstance(t, Slot)]
+        at = len(tokens) if index is None else slot_positions[index] + 1
+        tokens[at:at] = [",", Slot(name)]
+        self._frame()["pattern"] = pattern_text(tokens)
+        new_index = len(names) if index is None else min(index + 1, len(names))
+        self.fields.insert(new_index, {"name": name, "type": NEW_VALUE_TYPE})
+        return new_index
+
+    def remove_value(self, index: int) -> str | None:
+        """
+        Removes value `index` and the separator before it (after it, for the first);
+        returns why not (a pattern needs a value), or None.
+        """
+        tokens = self._tokens()
+        slot_positions = [i for i, t in enumerate(tokens) if isinstance(t, Slot)]
+        if len(slot_positions) <= 1:
+            return "a pattern needs at least one value"
+        at = slot_positions[index]
+        if index > 0:
+            lo, hi = slot_positions[index - 1] + 1, at + 1  # the text before it, and it
+        else:
+            lo, hi = at, slot_positions[1]  # it, and the text after it
+        del tokens[lo:hi]
+        self._frame()["pattern"] = pattern_text(tokens)
+        self.remove_field(index)
+        return None
+
     # --- time base (R2.5) ---
+
+    def _time_default(self, key: str) -> Any:
+        """A text stream without a counter slot counts lines (`_line`, R8.3)."""
+        return default_time_field(self.data) if key == "field" else TIME_DEFAULTS[key]
 
     def time_value(self, key: str) -> Any:
         time_cfg = self.data.get("time")
         if isinstance(time_cfg, dict) and key in time_cfg:
             return time_cfg[key]
-        return TIME_DEFAULTS[key]
+        return self._time_default(key)
 
     def set_time(self, key: str, value: Any) -> None:
         """Writes a time key only if the file had it or the value isn't the default."""
         time_cfg = self.data.get("time")
         if isinstance(time_cfg, dict) and key in time_cfg:
             time_cfg[key] = value
-        elif value != TIME_DEFAULTS[key]:
+        elif value != self._time_default(key):
             if not isinstance(time_cfg, dict):
                 time_cfg = self.data["time"] = {}
             time_cfg[key] = value
@@ -173,11 +260,18 @@ class StreamDraft:
         """Removes a field and the signals drawn from it."""
         name = self.field_names()[index]
         del self.fields[index]
+        self._forget_field(name)
+
+    def _forget_field(self, name: str) -> None:
+        """Drops what refers to a removed field: its signals, sim spec and time.field."""
         for key in self.signals_of_field(name):
             self.remove_signal(key)
         sim_fields = self._sim_fields()
         if sim_fields is not None:
             sim_fields.pop(name, None)
+        time_cfg = self.data.get("time")
+        if self.is_text and isinstance(time_cfg, dict) and time_cfg.get("field") == name:
+            del time_cfg["field"]  # back to the default X axis (the line number)
 
     def rename_field(self, index: int, new_name: str) -> str | None:
         """Renames a field and everything that refers to it; returns why not, or None."""
@@ -185,11 +279,14 @@ class StreamDraft:
         old = self.field_names()[index]
         if new_name == old:
             return None
-        if not re.fullmatch(r"[A-Za-z_]\w*", new_name):
+        if not re.fullmatch(r"[A-Za-z_]\w*", new_name) or (self.is_text and new_name == "_line"):
             return f"'{new_name}' is not a valid name (letters, digits and _)"
         if new_name in self.field_names():
             return f"there is already a field '{new_name}'"
         self.fields[index]["name"] = new_name
+        if self.is_text:
+            tokens = [Slot(new_name) if t == Slot(old) else t for t in self._tokens()]
+            self._frame()["pattern"] = pattern_text(tokens)
         for sig in self._signal_dicts().values():
             if sig.get("field") == old:
                 sig["field"] = new_name
