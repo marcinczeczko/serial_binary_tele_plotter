@@ -8,6 +8,9 @@ Stream editor (R7.1): one stream, laid out like the scope.
   it there; dragging a signal onto "Not plotted" removes it.
 - A form for the selected field and its signal.
 
+In a text profile (R8.4) a stream is a line pattern: Pattern replaces ID and byte order,
+`LineView` replaces the frame view, and the form edits a value (its slot in the pattern).
+
 Every edit is an operation on a `StreamDraft` (`core/config/draft.py`), so the editor
 never rebuilds a stream from its widgets and can't lose what it doesn't show (C4).
 """
@@ -22,15 +25,22 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from core.config import ENDIANNESS, MAX_PAYLOAD_BYTES
 from core.config.draft import LINE_STYLES, StreamDraft, unique_name
 from core.protocol.constants import STRUCT_TYPE_MAP
+from core.protocol.text_line import LINE_FIELD, Pattern, PatternError, parse_pattern
 from core.types import StreamConfig
 from ui.charts.lanes import DEFAULT_LANE, lane_layout
 from ui.common.color_button import ColorButton
 from ui.config.frame_view import TIME_FIELD, FrameView
+from ui.config.line_view import LineView
 from ui.panels.signals import DEFAULT_LANE_LABEL, NEW_LANE, ROLE_LANE, ROLE_SIGNAL, SignalTree
 
 ROLE_FIELD = QtCore.Qt.ItemDataRole.UserRole + 2
 UNPLOTTED_LANE = "__unplotted__"
 FIELD_MARK = "field:"  # ROLE_SIGNAL of a row for a field without a signal
+LINE_NUMBER = "(line number)"  # the X axis of a text stream without a counter
+# The value types the editor offers for text; a file's other types are shown as they are.
+TEXT_TYPES = (("f32", "number"), ("u32", "integer"), ("i32", "signed integer"))
+MONO_STYLE = "font-family: 'DejaVu Sans Mono', Menlo, monospace;"
+PATTERN_ERROR_STYLE = "QLineEdit { border: 1px solid #ff6b6b; " + MONO_STYLE + " }"
 MUTED = QtGui.QColor("#888888")
 DIM = QtGui.QColor("#666666")
 
@@ -142,6 +152,18 @@ def field_colors(draft: StreamDraft) -> dict[str, str]:
     return colors
 
 
+class PatternEdit(QtWidgets.QLineEdit):
+    """The Pattern field: Esc drops what was typed (a pattern is applied on leaving)."""
+
+    escaped = QtCore.pyqtSignal()
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent | None) -> None:  # noqa: N802
+        if event is not None and event.key() == QtCore.Qt.Key.Key_Escape:
+            self.escaped.emit()
+            return
+        super().keyPressEvent(event)
+
+
 class StreamEditor(QtWidgets.QWidget):
     changed = QtCore.pyqtSignal()  # the draft changed
     key_rename_requested = QtCore.pyqtSignal(str)  # the tab renames (it knows the other keys)
@@ -159,6 +181,9 @@ class StreamEditor(QtWidgets.QWidget):
         # a redraw left behind is never taken for an edit.
         self._typed: set[QtWidgets.QLineEdit] = set()
         self._panel_keys: list[str] = []
+        self._text = False  # the profile is text lines (R8.4)
+        self._pattern_error: str | None = None  # the Pattern typed doesn't parse
+        self._last_valid: Pattern | None = None  # what the line view shows meanwhile
         self._build()
         self.setEnabled(False)
 
@@ -181,6 +206,13 @@ class StreamEditor(QtWidgets.QWidget):
         self.id_spin.setFixedWidth(64)
         self.endian_combo = QtWidgets.QComboBox()
         self.endian_combo.addItems(ENDIANNESS)
+        self.pattern_edit = PatternEdit()
+        self.pattern_edit.setFixedWidth(300)
+        self.pattern_edit.setStyleSheet("QLineEdit { " + MONO_STYLE + " }")
+        self.pattern_edit.setToolTip(
+            "The line the board prints: fixed text and a {name} per value, e.g. "
+            "IMU,{ms},{ax},{ay}. Applied when you leave the field; Esc drops the edit."
+        )
         self.time_field_combo = QtWidgets.QComboBox()
         self.time_field_combo.setToolTip("The field that drives the X axis")
         self.time_scale_edit = QtWidgets.QLineEdit()
@@ -195,13 +227,17 @@ class StreamEditor(QtWidgets.QWidget):
             "How much the X-axis field goes up per frame: 1 for a loop counter. A larger "
             "jump is drawn as a gap (lost frames)."
         )
+        self.time_unit_lbl = QtWidgets.QLabel("per line")
+        self.time_unit_lbl.setStyleSheet("color: #888;")
         self.panel_combo = QtWidgets.QComboBox()  # the stream's `controls` panel (R5.2)
         self.set_panel_choices([])
+        self._row_labels: dict[QtWidgets.QWidget, QtWidgets.QLabel] = {}
         for label, widget in (
             ("Key:", self.key_edit),
             ("Name:", self.name_edit),
             ("ID:", self.id_spin),
             ("Byte order:", self.endian_combo),
+            ("Pattern:", self.pattern_edit),
             ("X axis:", self.time_field_combo),
             ("×", self.time_scale_edit),
             ("Step:", self.time_step_edit),
@@ -212,6 +248,9 @@ class StreamEditor(QtWidgets.QWidget):
                 lbl.setContentsMargins(8, 0, 0, 0)
             row.addWidget(lbl)
             row.addWidget(widget)
+            self._row_labels[widget] = lbl
+            if widget is self.time_scale_edit:
+                row.addWidget(self.time_unit_lbl)
         row.addStretch()
         layout.addLayout(row)
 
@@ -219,15 +258,17 @@ class StreamEditor(QtWidgets.QWidget):
         frame_box.setContentsMargins(8, 0, 8, 0)
         frame_box.setSpacing(3)
         head = QtWidgets.QHBoxLayout()
-        title = QtWidgets.QLabel("Frame")
-        title.setStyleSheet("color: #aaa; font-weight: bold;")
+        self.frame_title = QtWidgets.QLabel("Frame")
+        self.frame_title.setStyleSheet("color: #aaa; font-weight: bold;")
         self.size_lbl = QtWidgets.QLabel("")
-        head.addWidget(title)
+        head.addWidget(self.frame_title)
         head.addStretch()
         head.addWidget(self.size_lbl)
         frame_box.addLayout(head)
         self.frame_view = FrameView()
         frame_box.addWidget(self.frame_view)
+        self.line_view = LineView()
+        frame_box.addWidget(self.line_view)
         layout.addLayout(frame_box)
 
         split = QtWidgets.QSplitter()
@@ -262,6 +303,8 @@ class StreamEditor(QtWidgets.QWidget):
         self.id_spin.valueChanged.connect(self._on_id_changed)
         self.endian_combo.activated.connect(self._on_endianness)
         self.time_field_combo.activated.connect(self._on_time_field)
+        self.pattern_edit.editingFinished.connect(self._on_pattern)
+        self.pattern_edit.escaped.connect(self._revert_pattern)
         self.time_scale_edit.editingFinished.connect(self._on_time_scale)
         self.time_step_edit.editingFinished.connect(self._on_time_step)
         self.panel_combo.activated.connect(self._on_panel)
@@ -271,11 +314,14 @@ class StreamEditor(QtWidgets.QWidget):
             self.time_step_edit,
             self.label_edit,
             self.field_name_edit,
+            self.pattern_edit,
         ):
             edit.textEdited.connect(lambda _text, e=edit: self._typed.add(e))
             edit.editingFinished.connect(lambda e=edit: self._typed.discard(e))
         self.frame_view.field_clicked.connect(self._on_frame_clicked)
         self.frame_view.menu_requested.connect(self._show_field_menu)
+        self.line_view.field_clicked.connect(self._on_frame_clicked)
+        self.line_view.menu_requested.connect(self._show_field_menu)
         self.tree.currentItemChanged.connect(self._on_tree_current)
         self.tree.itemChanged.connect(self._on_tree_item_changed)
         self.tree.dropped.connect(self._on_dropped)
@@ -286,19 +332,19 @@ class StreamEditor(QtWidgets.QWidget):
         box.setMinimumWidth(300)
         outer = QtWidgets.QVBoxLayout(box)
         outer.setContentsMargins(12, 6, 10, 8)
-        title = QtWidgets.QLabel("Field")
-        title.setStyleSheet("color: #aaa; font-weight: bold;")
-        outer.addWidget(title)
+        self.form_title = QtWidgets.QLabel("Field")
+        self.form_title.setStyleSheet("color: #aaa; font-weight: bold;")
+        outer.addWidget(self.form_title)
 
         form = QtWidgets.QFormLayout()
         self.field_name_edit = QtWidgets.QLineEdit()
         self.field_type_combo = QtWidgets.QComboBox()
-        for key, (_, _, label) in STRUCT_TYPE_MAP.items():
-            self.field_type_combo.addItem(label, key)
+        self._fill_type_combo()
         self.field_byte_lbl = QtWidgets.QLabel("")
+        self.field_byte_title = QtWidgets.QLabel("Byte:")
         form.addRow("Name:", self.field_name_edit)
         form.addRow("Type:", self.field_type_combo)
-        form.addRow("Byte:", self.field_byte_lbl)
+        form.addRow(self.field_byte_title, self.field_byte_lbl)
         outer.addLayout(form)
 
         self.signal_box = QtWidgets.QWidget()
@@ -358,6 +404,49 @@ class StreamEditor(QtWidgets.QWidget):
         self.remove_field_btn.clicked.connect(self.remove_selected_field)
         return box
 
+    # --- the profile's format (R8.4) ---
+
+    @property
+    def is_text(self) -> bool:
+        return self._text
+
+    @property
+    def pattern_error(self) -> str | None:
+        """Why the Pattern typed isn't applied, while it isn't."""
+        return self._pattern_error
+
+    def set_format(self, fmt: str) -> None:
+        """Lays the editor out for a profile's format: binary frames or text lines."""
+        text = fmt == "text"
+        self._text = text
+        for widget in (self.id_spin, self.endian_combo):
+            widget.setVisible(not text)
+            self._row_labels[widget].setVisible(not text)
+        self.pattern_edit.setVisible(text)
+        self._row_labels[self.pattern_edit].setVisible(text)
+        self.frame_view.setVisible(not text)
+        self.line_view.setVisible(text)
+        self.frame_title.setText("Line" if text else "Frame")
+        self.form_title.setText("Value" if text else "Field")
+        self.field_byte_title.setText("Position:" if text else "Byte:")
+        self.add_field_btn.setText("Add value after" if text else "Add field after")
+        self.remove_field_btn.setText("Remove value" if text else "Remove field")
+        self.plot_btn.setText("Plot this value" if text else "Plot this field")
+        self.tree.setHeaderLabels(
+            ["Signal", "Value", "Type", "#"] if text else ["Signal", "Field", "Type", "Byte"]
+        )
+        self._fill_type_combo()
+
+    def _fill_type_combo(self) -> None:
+        self.field_type_combo.clear()
+        types = TEXT_TYPES if self._text else [(k, v[2]) for k, v in STRUCT_TYPE_MAP.items()]
+        for key, label in types:
+            self.field_type_combo.addItem(label, key)
+
+    def set_last_line(self, line: str | None) -> None:
+        """The last line seen for the shown stream (received or pasted), or None."""
+        self.line_view.set_line(line)
+
     # --- loading ---
 
     def set_panel_choices(self, keys: list[str]) -> None:
@@ -374,6 +463,8 @@ class StreamEditor(QtWidgets.QWidget):
         self.draft = draft
         self._typed.clear()
         self._field, self._signal = None, None
+        self._pattern_error = None
+        self._last_valid = None
         slots = draft.layout()
         if slots:
             self._select_field(slots[min(1, len(slots) - 1)].name)
@@ -404,6 +495,7 @@ class StreamEditor(QtWidgets.QWidget):
 
     def _flush(self) -> None:
         for widget, handler in (
+            (self.pattern_edit, self._on_pattern),
             (self.name_edit, self._on_name_edited),
             (self.time_scale_edit, self._on_time_scale),
             (self.time_step_edit, self._on_time_step),
@@ -421,16 +513,37 @@ class StreamEditor(QtWidgets.QWidget):
         try:
             self._refresh_stream_row()
             slots = self.draft.layout()
-            size = sum(s.size for s in slots)
-            self.size_lbl.setText(f"{size} / {MAX_PAYLOAD_BYTES} B")
-            self.size_lbl.setStyleSheet(
-                "color: #ff6b6b; font-weight: bold;" if size > MAX_PAYLOAD_BYTES else "color: #888;"
-            )
-            self.frame_view.set_frame(slots, field_colors(self.draft), self._field_index())
+            if self._text:
+                self.size_lbl.setText(f"{len(slots)} values")
+                self.size_lbl.setStyleSheet("color: #888;")
+                self.line_view.set_pattern(
+                    self._shown_pattern(),
+                    field_colors(self.draft),
+                    self._field_index(),
+                    dimmed=self._pattern_error is not None,
+                )
+            else:
+                size = sum(s.size for s in slots)
+                self.size_lbl.setText(f"{size} / {MAX_PAYLOAD_BYTES} B")
+                self.size_lbl.setStyleSheet(
+                    "color: #ff6b6b; font-weight: bold;"
+                    if size > MAX_PAYLOAD_BYTES
+                    else "color: #888;"
+                )
+                self.frame_view.set_frame(slots, field_colors(self.draft), self._field_index())
             self._rebuild_tree()
             self._refresh_form()
         finally:
             self._loading = False
+
+    def _shown_pattern(self) -> Pattern | None:
+        """The draft's pattern; while the one typed is invalid, the last valid one."""
+        try:
+            pattern = parse_pattern(self.draft.pattern or "")
+        except PatternError:
+            return self._last_valid
+        self._last_valid = pattern
+        return pattern
 
     def _refresh_stream_row(self) -> None:
         d = self.draft
@@ -438,17 +551,33 @@ class StreamEditor(QtWidgets.QWidget):
             self.key_edit.setText(self.current_stream_key or "")
         if not self.name_edit.hasFocus():
             self.name_edit.setText(d.name)
-        self.id_spin.setValue(d.stream_id)
-        if self.endian_combo.findText(d.endianness) < 0:
-            self.endian_combo.addItem(d.endianness)  # shown as is; validation reports it
-        self.endian_combo.setCurrentText(d.endianness)
-        names = d.field_names()
+        if self._text:
+            if self._pattern_error is None and not self.pattern_edit.hasFocus():
+                self.pattern_edit.setText(d.pattern or "")
+            self.pattern_edit.setStyleSheet(
+                PATTERN_ERROR_STYLE if self._pattern_error else "QLineEdit { " + MONO_STYLE + " }"
+            )
+        else:
+            self.id_spin.setValue(d.stream_id)
+            if self.endian_combo.findText(d.endianness) < 0:
+                self.endian_combo.addItem(d.endianness)  # shown as is; validation reports it
+            self.endian_combo.setCurrentText(d.endianness)
         time_field = str(d.time_value("field"))
         self.time_field_combo.clear()
-        self.time_field_combo.addItems(names)
-        if time_field not in names:
-            self.time_field_combo.addItem(time_field)  # stale: validation reports it
-        self.time_field_combo.setCurrentText(time_field)
+        for name, ftype in ((f.name, f.type) for f in d.layout()):
+            if not self._text or (
+                ftype in STRUCT_TYPE_MAP and STRUCT_TYPE_MAP[ftype][0] not in "fd"
+            ):
+                self.time_field_combo.addItem(name, name)  # text: integer values only
+        if self._text:
+            self.time_field_combo.addItem(LINE_NUMBER, LINE_FIELD)
+        if self.time_field_combo.findData(time_field) < 0:
+            self.time_field_combo.addItem(time_field, time_field)  # stale: validation says
+        self.time_field_combo.setCurrentIndex(self.time_field_combo.findData(time_field))
+        by_line = self._text and time_field == LINE_FIELD
+        self.time_unit_lbl.setVisible(by_line)
+        self.time_step_edit.setVisible(not by_line)
+        self._row_labels[self.time_step_edit].setVisible(not by_line)
         if not self.time_scale_edit.hasFocus():
             self.time_scale_edit.setText(format_seconds(d.time_value("scale_s")))
         if not self.time_step_edit.hasFocus():
@@ -497,7 +626,7 @@ class StreamEditor(QtWidgets.QWidget):
             time_field = self.draft.time_value("field")
             for slot in unplotted:
                 label = "X axis" if slot.name == time_field else ""
-                item = QtWidgets.QTreeWidgetItem([label, slot.name, slot.type, str(slot.offset)])
+                item = QtWidgets.QTreeWidgetItem([label, slot.name, slot.type, self._where(slot)])
                 item.setData(0, ROLE_SIGNAL, FIELD_MARK + slot.name)
                 item.setData(0, ROLE_FIELD, slot.name)
                 item.setFlags(
@@ -528,7 +657,7 @@ class StreamEditor(QtWidgets.QWidget):
                 str(sig.get("label", sid)),
                 field,
                 slot.type if slot else "?",
-                str(slot.offset) if slot else "",
+                self._where(slot) if slot else "",
             ]
         )
         item.setIcon(0, _line_icon(str(sig.get("color", "#fff")), str(line.get("style", ""))))
@@ -551,6 +680,10 @@ class StreamEditor(QtWidgets.QWidget):
         item.setForeground(3, DIM)
         return item
 
+    def _where(self, slot: Any) -> str:
+        """The tree's last column: a value's position (text), a field's byte offset."""
+        return str(slot.index + 1) if self._text else str(slot.offset)
+
     def _refresh_form(self) -> None:
         index = self._field_index()
         slot = next((s for s in self.draft.layout() if s.index == index), None)
@@ -569,14 +702,18 @@ class StreamEditor(QtWidgets.QWidget):
         if self.field_type_combo.findData(slot.type) < 0:
             self.field_type_combo.addItem(slot.type, slot.type)  # unknown: shown as is
         self.field_type_combo.setCurrentIndex(self.field_type_combo.findData(slot.type))
-        self.field_byte_lbl.setText(f"{slot.offset} (0x{slot.offset:02x}), {slot.size} B")
+        if self._text:
+            self.field_byte_lbl.setText(f"{slot.index + 1} of {len(self.draft.fields)}")
+        else:
+            self.field_byte_lbl.setText(f"{slot.offset} (0x{slot.offset:02x}), {slot.size} B")
 
         sig = self.draft.signal(self._signal) if self._signal else None
         self.signal_box.setVisible(sig is not None)
         is_time = slot.name == self.draft.time_value("field")
         self.not_plotted_lbl.setText("The X axis; not plotted." if is_time else "Not plotted.")
         self.not_plotted_lbl.setVisible(sig is None)
-        self.plot_btn.setText("Stop plotting" if sig is not None else "Plot this field")
+        thing = "value" if self._text else "field"
+        self.plot_btn.setText("Stop plotting" if sig is not None else f"Plot this {thing}")
         if sig is None:
             self.label_edit.setText("")
             return
@@ -654,6 +791,7 @@ class StreamEditor(QtWidgets.QWidget):
         self._loading = True
         try:
             self.frame_view.set_selected(self._field_index())
+            self.line_view.set_selected(self._field_index())
             self._refresh_form()
         finally:
             self._loading = False
@@ -688,8 +826,37 @@ class StreamEditor(QtWidgets.QWidget):
             self.changed.emit()
 
     def _on_time_field(self, _index: int) -> None:
-        self.draft.set_time("field", self.time_field_combo.currentText())
+        self.draft.set_time("field", str(self.time_field_combo.currentData()))
         self._edited()
+
+    def _on_pattern(self) -> None:
+        if self._loading or self.current_stream_key is None or not self._text:
+            return
+        text = self.pattern_edit.text()
+        self._typed.discard(self.pattern_edit)
+        if text == self.draft.pattern:
+            if self._pattern_error is not None:
+                self._pattern_error = None
+                self._edited()
+            return
+        error = self.draft.set_pattern(text)
+        self._pattern_error = error
+        if error is not None:
+            self.refresh()
+            self.problem.emit(f"Pattern: {error}")
+            return
+        if self._field not in self.draft.field_names():
+            names = self.draft.field_names()
+            self._select_field(names[0] if names else None)
+        self._edited()
+
+    def _revert_pattern(self) -> None:
+        """Esc in the Pattern field: back to the stream's pattern."""
+        self._typed.discard(self.pattern_edit)
+        self._pattern_error = None
+        self.pattern_edit.setText(self.draft.pattern or "")
+        self.refresh()
+        self.changed.emit()  # the status line drops the error
 
     def _on_time_scale(self) -> None:
         if self._loading or self.current_stream_key is None:
@@ -839,8 +1006,11 @@ class StreamEditor(QtWidgets.QWidget):
 
     def add_field_after(self) -> None:
         index = self._field_index()
-        at = (index + 1) if index is not None else len(self.draft.fields)
-        at = self.draft.add_field(at)
+        if self._text:
+            at = self.draft.add_value_after(index)
+        else:
+            at = (index + 1) if index is not None else len(self.draft.fields)
+            at = self.draft.add_field(at)
         self._select_field(self.draft.field_names()[at])
         self._edited()
         self.field_name_edit.setFocus()
@@ -850,7 +1020,13 @@ class StreamEditor(QtWidgets.QWidget):
         index = self._field_index()
         if index is None:
             return
-        self.draft.remove_field(index)
+        if self._text:
+            error = self.draft.remove_value(index)
+            if error is not None:
+                self.problem.emit(error)
+                return
+        else:
+            self.draft.remove_field(index)
         names = self.draft.field_names()
         self._select_field(names[min(index, len(names) - 1)] if names else None)
         self._edited()
@@ -865,14 +1041,23 @@ class StreamEditor(QtWidgets.QWidget):
 
     def _field_menu(self) -> QtWidgets.QMenu:
         menu = QtWidgets.QMenu(self)
+        thing = "value" if self._text else "field"
+        # A text value's place is its place in the pattern: edit the pattern to move it.
+        moves: tuple[tuple[str | None, Any], ...] = (
+            ()
+            if self._text
+            else (
+                ("Move earlier", lambda: self.move_selected_field(-1)),
+                ("Move later", lambda: self.move_selected_field(1)),
+            )
+        )
         for text, slot in (
-            ("Stop plotting" if self._signal else "Plot this field", self._toggle_plot),
+            ("Stop plotting" if self._signal else f"Plot this {thing}", self._toggle_plot),
             (None, None),
-            ("Add field after", self.add_field_after),
-            ("Move earlier", lambda: self.move_selected_field(-1)),
-            ("Move later", lambda: self.move_selected_field(1)),
+            (f"Add {thing} after", self.add_field_after),
+            *moves,
             (None, None),
-            ("Remove field", self.remove_selected_field),
+            (f"Remove {thing}", self.remove_selected_field),
         ):
             if text is None or slot is None:
                 menu.addSeparator()

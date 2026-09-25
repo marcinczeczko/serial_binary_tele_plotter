@@ -6,6 +6,23 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — R8.4 (part 1): the editor on a text profile
+
+- Profile row (all profiles): name, format (read-only), baud, edited into the `profile`
+  block. Text profiles: **Pattern** replaces ID and byte order, `LineView` replaces the
+  frame view (fixed text + value hexagons, shared `draw_block`), the X axis offers the
+  integer values and `(line number)` (Step hidden), the form edits a value.
+- `StreamDraft`: `set_pattern` (re-derives fields; kept slots keep type and signals),
+  `add_value_after`, `remove_value`, renames edit the slot; `_line` is the default X axis
+  of a counterless text stream. An invalid pattern isn't applied (red, status, Esc).
+- The Line view's last line comes from the ~1 Hz `LinkReport` (`last_lines`,
+  `last_unmatched`), set per chunk by `TextLineDecoder`: no per-line signal.
+- Tests: 405 (+19): draft ops, pattern text, last lines, and 10 `qt` editor tests
+  including an untouched text profile saving byte-identically (C4). Next: R8.4 part 2
+  (From console output…, Copy as printf).
+
+---
+
 ## 2026-09-25 — R8.4 canvas revised
 
 - Canvas boards added for R8.4: the text stream editor's states (invalid pattern, no

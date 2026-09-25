@@ -198,6 +198,7 @@ on the right. Docks can be closed (View menu), moved, or floated; the layout is 
      click) re-sends a row's exact packet.
 9. **File → Edit profile…** (Ctrl+,) opens the current profile in the stream editor, laid
    out like the scope:
+   - The profile row: its name, format (read-only: chosen at New profile) and baud.
    - Streams are tabs. One row holds the stream's key, name, ID, byte order, X axis and time
      per tick (`5 ms`, `1 µs`), step and **Controls** panel.
    - **Frame**: the payload as the device sends it, 32 bytes per row, each field in its
@@ -219,6 +220,16 @@ on the right. Docks can be closed (View menu), moved, or floated; the layout is 
      shown stream: fields that keep their name keep their label, color and lane.
    - **Copy as C struct** puts the stream on the clipboard as a packed struct with its ID
      and a `_Static_assert` on its size.
+   - In a **text profile**, **Pattern** replaces ID and byte order, and **Line** replaces
+     the frame: the pattern's fixed text, and a block per value in its signal's color.
+     Editing the pattern re-derives the values: one that keeps its name keeps its type and
+     signal, a new one is a number, a removed one goes with its signal. An invalid pattern
+     is outlined red, with the reason in the status line, and isn't applied (Esc drops
+     it). Under the blocks is the last line: the newest one the stream matched while
+     connected (else the newest unmatched one), with `✓ matches` or `✗ no match`. The X
+     axis offers the integer values and `(line number)`. The form edits a value: name,
+     type (number, integer, signed integer), position, and Add value after / Remove value,
+     which edit the pattern. The C struct buttons are for binary profiles only.
    - Save (Ctrl+S) is orange while there are unsaved changes; the status line shows the
      stream's size and its first problem as you edit. Saving updates `streams.json` (the
      previous file is kept as `streams.json.bak`); a file with errors isn't saved.

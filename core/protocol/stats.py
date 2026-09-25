@@ -46,9 +46,13 @@ class LinkStats:
     """Lines longer than MAX_LINE_BYTES, dropped."""
     value_errors: int = 0
     """Matched lines dropped because a value doesn't fit its field (1.5 in an integer)."""
+    last_lines: dict[str, str] = field(default_factory=dict)
+    """The newest line each text stream matched: the editor's Line view shows it (R8.4)."""
+    last_unmatched: str = ""
+    """The newest line no pattern matched (most likely the one being fixed)."""
 
     def snapshot(self) -> LinkStats:
-        return replace(self, frames_by_id=dict(self.frames_by_id))
+        return replace(self, frames_by_id=dict(self.frames_by_id), last_lines=dict(self.last_lines))
 
     @property
     def errors(self) -> int:
@@ -76,6 +80,8 @@ class LinkReport(TypedDict):
     lines_unmatched: int
     lines_overlong: int
     value_errors: int
+    last_lines: dict[str, str]
+    last_unmatched: str
 
 
 def make_link_report(
@@ -101,6 +107,8 @@ def make_link_report(
         "lines_unmatched": cur.lines_unmatched,
         "lines_overlong": cur.lines_overlong,
         "value_errors": cur.value_errors,
+        "last_lines": dict(cur.last_lines),
+        "last_unmatched": cur.last_unmatched,
     }
 
 

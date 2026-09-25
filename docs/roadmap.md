@@ -359,6 +359,8 @@ matching, inference, editor screens, acceptance tests) in
   integer as the X axis, ignores lines seen once), and "Copy as printf".
   *Done when:* pasting mixed console output creates one stream per repeated line layout
   that decodes those lines.
+  *In progress: part 1 (profile row, Pattern, X axis, Line view, value form) is built;
+  part 2 is "From console output…" and "Copy as printf".*
 - [ ] **R8.5 Text commands** (a later phase): host-to-board commands as text templates
   (`"PID {kp} {ki}\n"`) for text profiles.
 

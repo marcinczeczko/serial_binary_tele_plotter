@@ -132,6 +132,15 @@ def _regex(tokens: Sequence[str | Slot]) -> str:
     return "".join(parts)
 
 
+def pattern_text(tokens: Sequence[str | Slot]) -> str:
+    """Writes tokens back as a pattern (`{` and `}` in fixed text doubled): the editor's
+    way to change a pattern (R8.4)."""
+    return "".join(
+        f"{{{t.name}}}" if isinstance(t, Slot) else t.replace("{", "{{").replace("}", "}}")
+        for t in tokens
+    )
+
+
 def format_line(pattern: Pattern, values: Mapping[str, Any]) -> str:
     """
     The line a board would print for `values` (the simulator's output): integers as
@@ -218,6 +227,7 @@ class _TextStream:
     counter_step: float = 1.0
     lines: int = 0
     last_counter: int | None = None
+    last_line: str = ""
     rows: list[tuple[Any, ...]] = field(default_factory=list)
 
 
@@ -328,10 +338,12 @@ class TextLineDecoder:
             if stream.counter_index is not None:
                 self._track_counter(stream, int(values[stream.counter_index]))
             stream.rows.append((*values, stream.lines))
+            stream.last_line = line
             stream.lines = (stream.lines + 1) & 0xFFFFFFFF
             stats.frames_decoded += 1
             return
         stats.lines_unmatched += 1
+        stats.last_unmatched = line
 
     def _track_counter(self, stream: _TextStream, value: int) -> None:
         """Gaps and resets of an integer time slot, like the binary router's `loop_cntr`."""
@@ -352,4 +364,5 @@ class TextLineDecoder:
             if stream.rows:
                 out[stream.key] = np.array(stream.rows, dtype=stream.dtype)
                 stream.rows = []
+                self.stats.last_lines[stream.key] = stream.last_line
         return out

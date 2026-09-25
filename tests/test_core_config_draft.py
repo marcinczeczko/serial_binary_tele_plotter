@@ -124,3 +124,74 @@ def test_naming_a_new_lane_adds_it_last() -> None:
     groups = draft.to_stream()["groups"]
     assert groups["mag"] == {"label": "Magnetometer [uT]", "order": 3}
     assert groups["accel"] == {"label": "Accel [g]", "order": 1}
+
+
+# --- text streams (R8.4) ---
+
+TEXT_PROFILE = REPO_ROOT / "tests" / "fixtures" / "text_profile.json"
+
+
+def _text(key: str = "imu") -> dict[str, Any]:
+    stream: dict[str, Any] = json.loads(TEXT_PROFILE.read_text(encoding="utf-8"))["streams"][key]
+    return stream
+
+
+def test_an_untouched_text_draft_is_the_stream_it_was_made_from() -> None:
+    for key in ("imu", "env"):
+        original = _text(key)
+        assert json.dumps(StreamDraft(original).to_stream()) == json.dumps(original)
+
+
+def test_a_pattern_edit_keeps_unchanged_slots_and_their_signals() -> None:
+    draft = StreamDraft(_text())
+    draft.set_field_type(1, "f64")
+    assert draft.set_pattern("IMU,{ms},{ax},{gz},{az}") is None
+    assert draft.field_names() == ["ms", "ax", "gz", "az"]
+    assert draft.fields[1] == {"name": "ax", "type": "f64"}  # kept, with its type
+    assert draft.fields[2] == {"name": "gz", "type": "f32"}  # new: a number
+    assert set(draft.signals) == {"ax", "az"}  # ay's signal went with its slot
+    assert draft.time_value("field") == "ms"
+
+
+def test_an_invalid_pattern_is_refused_and_changes_nothing() -> None:
+    draft = StreamDraft(_text())
+    before = draft.to_stream()
+    assert draft.set_pattern("IMU,{ms}{ax}") == "'{ms}' and '{ax}' need fixed text between them"
+    assert draft.to_stream() == before
+
+
+def test_removing_the_time_slot_falls_back_to_the_line_number() -> None:
+    draft = StreamDraft(_text())
+    assert draft.set_pattern("IMU,{ax},{ay},{az}") is None
+    assert draft.time_value("field") == "_line"
+    assert "field" not in draft.data["time"]  # the line number is the default
+
+
+def test_renaming_a_value_renames_its_slot() -> None:
+    draft = StreamDraft(_text("env"))
+    assert draft.rename_field(0, "temp") is None
+    assert draft.pattern == "ENV t={temp}C h={h}%"
+    assert draft.signal("t")["field"] == "temp"
+    assert draft.rename_field(0, "_line") is not None
+
+
+def test_add_value_after_and_remove_value_edit_the_pattern() -> None:
+    draft = StreamDraft(_text("env"))
+    assert draft.add_value_after(0) == 1
+    assert draft.pattern == "ENV t={t},{v3}C h={h}%"
+    assert draft.field_names() == ["t", "v3", "h"]
+    assert draft.remove_value(1) is None
+    assert draft.pattern == "ENV t={t}C h={h}%"
+    assert draft.remove_value(0) is None  # the first: the separator after it goes
+    assert draft.pattern == "ENV t={h}%"
+    assert draft.remove_value(0) == "a pattern needs at least one value"
+    assert set(draft.signals) == {"h"}
+
+
+def test_the_line_number_is_the_default_x_axis_of_a_counterless_text_stream() -> None:
+    draft = StreamDraft(_text("env"))
+    assert draft.time_value("field") == "_line"
+    draft.set_time("field", "_line")
+    assert "field" not in draft.data["time"]
+    draft.set_time("field", "h")
+    assert draft.data["time"]["field"] == "h"

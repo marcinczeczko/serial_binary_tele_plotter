@@ -37,6 +37,47 @@ class Piece:
     rect: QtCore.QRectF
 
 
+def draw_block(
+    painter: QtGui.QPainter,
+    r: QtCore.QRectF,
+    name: str,
+    color_name: str,
+    selected: bool,
+    metrics: QtGui.QFontMetrics,
+    font: QtGui.QFont,
+) -> None:
+    """One value as a bus-decode hexagon: outlined in its color, filled when selected."""
+    point = min(POINT, r.width() / 3)
+    path = QtGui.QPainterPath()
+    path.moveTo(r.left() + point, r.top())
+    path.lineTo(r.right() - point, r.top())
+    path.lineTo(r.right(), r.center().y())
+    path.lineTo(r.right() - point, r.bottom())
+    path.lineTo(r.left() + point, r.bottom())
+    path.lineTo(r.left(), r.center().y())
+    path.closeSubpath()
+
+    color = QtGui.QColor(color_name)
+    if selected:
+        painter.setBrush(color)
+        painter.setPen(QtGui.QPen(QtGui.QColor("#ffffff"), 1))
+    else:
+        fill = QtGui.QColor(color)
+        fill.setAlpha(38)
+        painter.setBrush(fill)
+        painter.setPen(QtGui.QPen(color, 1))
+    painter.drawPath(path)
+
+    text_rect = r.adjusted(point + 2, 0, -point - 2, 0)
+    shown = metrics.elidedText(name, QtCore.Qt.TextElideMode.ElideRight, int(text_rect.width()))
+    bold = QtGui.QFont(font)
+    bold.setBold(selected)
+    painter.setFont(bold)
+    painter.setPen(QtGui.QColor("#000000") if selected else color)
+    painter.drawText(text_rect, int(QtCore.Qt.AlignmentFlag.AlignCenter), shown)
+    painter.setFont(font)
+
+
 class FrameView(QtWidgets.QWidget):
     field_clicked = QtCore.pyqtSignal(int)  # field index
     menu_requested = QtCore.pyqtSignal(int, QtCore.QPoint)  # field index, global position
@@ -142,39 +183,9 @@ class FrameView(QtWidgets.QWidget):
         metrics: QtGui.QFontMetrics,
         font: QtGui.QFont,
     ) -> None:
-        r = piece.rect
-        point = min(POINT, r.width() / 3)
-        path = QtGui.QPainterPath()
-        path.moveTo(r.left() + point, r.top())
-        path.lineTo(r.right() - point, r.top())
-        path.lineTo(r.right(), r.center().y())
-        path.lineTo(r.right() - point, r.bottom())
-        path.lineTo(r.left() + point, r.bottom())
-        path.lineTo(r.left(), r.center().y())
-        path.closeSubpath()
-
-        color = QtGui.QColor(self._colors.get(piece.slot.name, UNPLOTTED))
+        color = self._colors.get(piece.slot.name, UNPLOTTED)
         selected = piece.slot.index == self._selected
-        if selected:
-            painter.setBrush(color)
-            painter.setPen(QtGui.QPen(QtGui.QColor("#ffffff"), 1))
-        else:
-            fill = QtGui.QColor(color)
-            fill.setAlpha(38)
-            painter.setBrush(fill)
-            painter.setPen(QtGui.QPen(color, 1))
-        painter.drawPath(path)
-
-        text_rect = r.adjusted(point + 2, 0, -point - 2, 0)
-        name = metrics.elidedText(
-            piece.slot.name, QtCore.Qt.TextElideMode.ElideRight, int(text_rect.width())
-        )
-        bold = QtGui.QFont(font)
-        bold.setBold(selected)
-        painter.setFont(bold)
-        painter.setPen(QtGui.QColor("#000000") if selected else color)
-        painter.drawText(text_rect, int(QtCore.Qt.AlignmentFlag.AlignCenter), name)
-        painter.setFont(font)
+        draw_block(painter, piece.rect, piece.slot.name, color, selected, metrics, font)
 
     # --- input ---
 
