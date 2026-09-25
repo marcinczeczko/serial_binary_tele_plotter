@@ -73,7 +73,7 @@ class MainControlPanel(QtWidgets.QWidget):
         self.empty_controls.setWordWrap(True)
         self.empty_controls.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
         self.empty_controls.setContentsMargins(12, 12, 12, 12)
-        self.empty_controls.setStyleSheet("color: #9aa4b2;")
+        self.empty_controls.setStyleSheet("color: #9a9a9a;")
         self.controls_stack.addWidget(self.empty_controls)
         self.terminal = Terminal()  # a text profile's controls (R8.5)
         self.controls_stack.addWidget(self.terminal)

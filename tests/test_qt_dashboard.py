@@ -102,9 +102,9 @@ def test_stream_tabs_show_activity_and_the_time_button_the_window(
     tabs.set_activity("imu_6axis", 0)
     assert tabs.tabText(0) == "PID Telemetry · 200 Hz"
     assert tabs.tabText(2) == "IMU 6-Axis Raw · no data"
-    assert win.time_btn.text() == "5.000 ms · 2,000 samples"
+    assert win.time_btn.text() == "5 ms · 2000 samples"
     win.panel.time_panel.samples_sb.setValue(5000)
-    assert win.time_btn.text() == "5.000 ms · 5,000 samples"
+    assert win.time_btn.text() == "5 ms · 5000 samples"
 
     conn = win.panel.conn_panel
     conn.port_combo.setCurrentIndex(conn.port_combo.findText("VIRTUAL"))
@@ -121,6 +121,8 @@ def test_stream_tabs_show_activity_and_the_time_button_the_window(
 def test_readout_goes_to_the_signals_panel_and_markers_follow_the_stream(
     qtbot: Any, tmp_path: Path
 ) -> None:
+    from ui.common.numbers import format_number
+
     win = _window(qtbot, tmp_path)
     conn = win.panel.conn_panel
     conn.port_combo.setCurrentIndex(conn.port_combo.findText("VIRTUAL"))
@@ -133,7 +135,7 @@ def test_readout_goes_to_the_signals_panel_and_markers_follow_the_stream(
     t = win.plot.analysis_packet["time"]
     win.plot.move_cursor(float(t[100]))
     sig = win.panel.sig_panel
-    assert sig.cursor_lbl.text() == f"@ {float(t[100]):.3f} s"
+    assert sig.cursor_lbl.text() == f"@ {format_number(float(t[100]))} s"
     assert sig.value_text("left_measurement") not in ("", "n/a")
     win.panel.conn_panel.pause_btn.click()
     assert sig.cursor_lbl.text() == ""  # live again: no frozen readout

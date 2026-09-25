@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-ERROR_COLOR = "#FF9B9B"
+ERROR_COLOR = "#FF4040"
 MAX_ROWS = 500
 
 

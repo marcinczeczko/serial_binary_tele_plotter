@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.config.controls import ButtonDef, PanelDef, ParamDef
+from ui.common.numbers import ScopeDoubleSpinBox
 
 ParamWidget = QtWidgets.QDoubleSpinBox | QtWidgets.QSpinBox | QtWidgets.QCheckBox
 
@@ -45,7 +46,8 @@ SCRUB_FAST = 10.0  # with Shift
 SCRUB_FINE = 0.1  # with Alt
 LIVE_DEBOUNCE_MS = 150
 LIVE_MIN_INTERVAL_S = 0.1
-EDITED_STYLE = "border: 1px solid #B98225; background: #231D12; color: #FFE2AD;"
+EDITED_STYLE = "border: 1px solid #FFB000; color: #FFB000;"  # amber = edited, not sent
+LIVE_STYLE = "QToolButton { background: #FFB000; color: #000; border-color: #FFB000; }"
 PRESET_PLACEHOLDER = "Presets…"
 
 
@@ -215,8 +217,7 @@ class CommandPanel(QtWidgets.QWidget):
         status = QtWidgets.QHBoxLayout()
         self.unsent_lbl = QtWidgets.QLabel("")
         self.unsent_lbl.setStyleSheet(
-            "background: #F2A93B; color: #1A1408; border-radius: 8px; padding: 1px 7px;"
-            " font-weight: 600;"
+            "background: #FFB000; color: #000; padding: 1px 6px; font-weight: bold;"
         )
         self.unsent_lbl.setVisible(False)
         status.addWidget(self.unsent_lbl)
@@ -270,7 +271,7 @@ class CommandPanel(QtWidgets.QWidget):
             widget.setSingleStep(max(int(param.step), 1))
             widget.setValue(int(param.default))
         else:
-            widget = QtWidgets.QDoubleSpinBox()
+            widget = ScopeDoubleSpinBox()
             widget.setRange(param.minimum, param.maximum)
             widget.setDecimals(param.decimals)
             widget.setSingleStep(param.step)
@@ -457,9 +458,7 @@ class CommandPanel(QtWidgets.QWidget):
         (self.live_btn if live else self.manual_btn).setChecked(True)
 
     def _on_live_toggled(self, live: bool) -> None:
-        self.live_btn.setStyleSheet(
-            "QToolButton { background: #3A2C14; color: #F2C26B; font-weight: 600; }" if live else ""
-        )
+        self.live_btn.setStyleSheet(LIVE_STYLE if live else "")
         if not live:
             for timer in self._live_timers.values():
                 timer.stop()

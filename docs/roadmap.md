@@ -372,6 +372,50 @@ matching, inference, editor screens, acceptance tests) in
 
 ---
 
+## Phase 9: the scope view (ADR-0012)
+
+Added 2026-09-25 after a design review of the main view: the plot reads like a scope, the
+window around it doesn't. Phase 9 adopts a bench scope's visual language (one status bar of
+boxed labels, square flat controls, letters instead of icons, readouts in trace colour, an
+instrument font) and makes both side panes collapsible from edge tabs. Approved on the canvas
+(<https://claude.ai/artifact/C7HPkY66MjUYJHUyPfRzPM>); the spec is
+[`docs/specs/phase9-scope-view.md`](specs/phase9-scope-view.md), with open questions to settle
+in each item's PR.
+
+- [x] **R9.1 Look**: square, flat QSS (no rounded corners, flat greys, black plot), B612 and
+  B612 Mono bundled (OFL) and loaded at start-up, the scope palette in the bundled
+  `streams.json`, numbers with a dot separator and significant digits whatever the locale.
+  *Done when:* no widget has rounded corners, every number shows `0.12` not `0,1200`, and the
+  app starts with B612 on a machine without it installed.
+- [ ] **R9.2 Top bar**: one 36 px bar replaces the toolbar, the stream-tabs row and the status
+  bar: profile, port + Connect/Disconnect (baud only for serial, no ⟳), RUN/STOP box, stream
+  tabs with a data square, transient message, `H` window, rate/points, `T` trigger label, REC,
+  link health (errors only when non-zero).
+  *Done when:* every piece of state the three rows showed is in the bar or its tooltips, and
+  the window has no `QToolBar` or `QStatusBar`.
+- [ ] **R9.3 Panes and edge tabs**: a splitter with the Signals pane, the plot and the right
+  pane (Tune / Step, or the terminal); always-visible edge tabs `SIGNALS`, `TUNE`, `STEP`;
+  keys `[`, `]`, `\`; open state, view and widths kept per profile.
+  *Done when:* each pane opens and closes from its tab and its key, `\` gives a plot-only
+  window, and the state comes back after a restart and a profile switch.
+- [ ] **R9.4 Signals pane**: one row per L/R pair, swatches as toggles (R swatch and R trace
+  dashed), no counts, filter on Ctrl+F, the stopped readout in trace colour with an A/B/ΔT
+  header.
+  *Done when:* the bundled profile's 34 signals show as 17 rows, and a cursor readout shows
+  each shown signal's value at A in its colour.
+- [ ] **R9.5 Tune and Step panes**: Manual/Live segmented, `Presets ▼` menu, one `L=R` toggle,
+  square inputs without spin arrows, `Send` per column, `Revert N` only when edited, the send
+  log as plain lines (double-click resends); Step metrics as Now / Prev / change.
+  *Done when:* the pane has no always-visible disabled button, and every ADR-0008 behaviour
+  (edited vs sent, Live, presets, numbered sends, resend) still works.
+- [ ] **R9.6 Graticule and markers**: framed lanes, 10 dotted divisions, ticked centre
+  crosshair, the X unit on the last tick (no `Time [s]`), orange `T` markers for trigger level
+  and position, `A`/`B` cursor flags.
+  *Done when:* the markers show as designed and `bench_render.py` stays at one paint per frame
+  and ≥ 30 FPS, interleaved against `main`.
+
+---
+
 ## Suggested order and sizing
 
 | Order | Items | Size | Why this order |
@@ -387,3 +431,4 @@ matching, inference, editor screens, acceptance tests) in
 | 9 | R6.* | M | UX, once the config model (R5) defines the panels |
 | 10 | R7.* | M | The editor, once the dashboard (R6) sets the look |
 | 11 | R8.1 → R8.4 | M | Decoder slot first (no behaviour change), then profiles, then text |
+| 12 | R9.1 → R9.6 | M | Look first (everything inherits it), then the frame (panes, top bar), then the pieces |

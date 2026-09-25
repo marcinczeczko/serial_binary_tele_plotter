@@ -14,16 +14,18 @@ import html
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+from styles import MONO_FAMILY
+
 ENDINGS: dict[str, bytes] = {"LF": b"\n", "CR LF": b"\r\n", "CR": b"\r", "none": b""}
 DEFAULT_ENDING = "LF"
 MAX_ROWS = 500
 HISTORY = 50
-MONO = "'DejaVu Sans Mono', Menlo, monospace"
+MONO = f"'{MONO_FAMILY}', Menlo, 'DejaVu Sans Mono', monospace"
 SENT = "#ffffff"
-NUMBER = "#FFB74D"
+NUMBER = "#FFB000"
 REPLY = "#888888"
 TIME = "#666666"
-REFUSED = "#FF9B9B"
+REFUSED = "#FF4040"
 
 
 class TerminalInput(QtWidgets.QLineEdit):

@@ -27,6 +27,7 @@ from core.config.draft import LINE_STYLES, StreamDraft, unique_name
 from core.protocol.constants import STRUCT_TYPE_MAP
 from core.protocol.text_line import LINE_FIELD, Pattern, PatternError, parse_pattern
 from core.types import StreamConfig
+from styles import MONO_CSS
 from ui.charts.lanes import DEFAULT_LANE, lane_layout
 from ui.common.color_button import ColorButton
 from ui.config.frame_view import TIME_FIELD, FrameView
@@ -39,8 +40,8 @@ FIELD_MARK = "field:"  # ROLE_SIGNAL of a row for a field without a signal
 LINE_NUMBER = "(line number)"  # the X axis of a text stream without a counter
 # The value types the editor offers for text; a file's other types are shown as they are.
 TEXT_TYPES = (("f32", "number"), ("u32", "integer"), ("i32", "signed integer"))
-MONO_STYLE = "font-family: 'DejaVu Sans Mono', Menlo, monospace;"
-PATTERN_ERROR_STYLE = "QLineEdit { border: 1px solid #ff6b6b; " + MONO_STYLE + " }"
+MONO_STYLE = MONO_CSS
+PATTERN_ERROR_STYLE = "QLineEdit { border: 1px solid #FF4040; " + MONO_STYLE + " }"
 MUTED = QtGui.QColor("#888888")
 DIM = QtGui.QColor("#666666")
 
@@ -283,7 +284,7 @@ class StreamEditor(QtWidgets.QWidget):
         self.tree.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.setStyleSheet(
             "QTreeWidget { border: none; }"
-            " QTreeWidget::item:selected { background: #1f3b5c; color: white; }" + HEADER_STYLE
+            " QTreeWidget::item:selected { background: #333333; color: white; }" + HEADER_STYLE
         )
         header = self.tree.header()
         assert header is not None
@@ -526,7 +527,7 @@ class StreamEditor(QtWidgets.QWidget):
                 size = sum(s.size for s in slots)
                 self.size_lbl.setText(f"{size} / {MAX_PAYLOAD_BYTES} B")
                 self.size_lbl.setStyleSheet(
-                    "color: #ff6b6b; font-weight: bold;"
+                    "color: #FF4040; font-weight: bold;"
                     if size > MAX_PAYLOAD_BYTES
                     else "color: #888;"
                 )

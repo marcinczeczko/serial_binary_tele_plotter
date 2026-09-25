@@ -19,8 +19,10 @@ import math
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.types import StreamConfig
+from styles import mono_font
 from ui.charts.lanes import lane_layout
 from ui.charts.series import Readout
+from ui.common.numbers import format_number
 
 NEW_LANE = "__new__"
 DEFAULT_LANE_LABEL = "Main"
@@ -44,9 +46,9 @@ def _swatch(color: str) -> QtGui.QIcon:
 def format_value(value: float, delta: float | None = None) -> str:
     if not math.isfinite(value):
         return "n/a"
-    text = f"{value:+.3f}"
+    text = format_number(value, sign=True)
     if delta is not None and math.isfinite(delta):
-        text += f"  Δ {delta:+.3f}"
+        text += f"  Δ {format_number(delta, sign=True)}"
     return text
 
 
@@ -121,11 +123,11 @@ class SignalListPanel(QtWidgets.QWidget):
 
         header = QtWidgets.QHBoxLayout()
         self.count_lbl = QtWidgets.QLabel("")
-        self.count_lbl.setStyleSheet("color: #9aa4b2;")
+        self.count_lbl.setStyleSheet("color: #9a9a9a;")
         header.addWidget(self.count_lbl)
         header.addStretch()
         self.cursor_lbl = QtWidgets.QLabel("")
-        self.cursor_lbl.setStyleSheet("color: #9aa4b2;")
+        self.cursor_lbl.setStyleSheet("color: #9a9a9a;")
         header.addWidget(self.cursor_lbl)
         layout.addLayout(header)
 
@@ -222,7 +224,7 @@ class SignalListPanel(QtWidgets.QWidget):
                     VALUE_COLUMN,
                     QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter,
                 )
-                item.setFont(VALUE_COLUMN, QtGui.QFont("monospace"))
+                item.setFont(VALUE_COLUMN, mono_font())
                 lane_item.addChild(item)
                 self._items[sid] = item
             lane_item.setExpanded(expanded.get(key, True))
@@ -347,9 +349,9 @@ class SignalListPanel(QtWidgets.QWidget):
             for item in self._items.values():
                 item.setText(VALUE_COLUMN, "")
             return
-        header = f"@ {readout.t:.3f} s"
+        header = f"@ {format_number(readout.t)} s"
         if readout.dt is not None:
-            header += f"  Δt {readout.dt:+.3f}"
+            header += f"  Δt {format_number(readout.dt, sign=True)}"
         self.cursor_lbl.setText(header)
         for sid, item in self._items.items():
             if not self._visible.get(sid, True) or sid not in readout.values:

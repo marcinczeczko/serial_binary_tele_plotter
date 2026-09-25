@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.protocol.text_line import Pattern, Slot
+from styles import mono_font
 from ui.config.frame_view import BORDER, SCOPE_BG, UNPLOTTED, draw_block
 
 PAD = 8
@@ -27,7 +28,7 @@ TEXT = QtGui.QColor("#999999")
 LABEL = QtGui.QColor("#777777")
 LINE = QtGui.QColor("#bbbbbb")
 EMPTY = QtGui.QColor("#888888")
-MATCH = QtGui.QColor("#4cc38a")
+MATCH = QtGui.QColor("#3DFF6E")
 NO_MATCH = QtGui.QColor("#888888")
 NO_LINE = "none yet: connect, or paste console output"
 
@@ -96,8 +97,7 @@ class LineView(QtWidgets.QWidget):
     # --- geometry ---
 
     def _mono(self) -> QtGui.QFont:
-        mono = QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.SystemFont.FixedFont)
-        mono.setPointSizeF(max(7.0, self.font().pointSizeF() - 1.5))
+        mono = mono_font(max(7.0, self.font().pointSizeF() - 1.5))
         return mono
 
     def pieces(self) -> list[Piece]:
