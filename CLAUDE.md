@@ -61,7 +61,8 @@ styles.py               global dark theme (QSS)
 streams.json            schema 2: streams, commands, panels (single source of truth; ADR-0007)
 core/types.py           TypedDict config shapes, PlotMode, EngineState
 core/config/            document (load -> migrate -> validate -> save, StreamConfigLoader), streams (stream
-                        validation), controls (CommandDef/PanelDef parsing), migrate (schema versions)
+                        validation), controls (CommandDef/PanelDef parsing), migrate (schema versions),
+                        draft (StreamDraft: the editor's model), cstruct (C struct in and out)
 core/protocol/          wire format: constants, crc (CRC-8), frame_parser (sync/CRC, all IDs), record_decoder (numpy dtype),
                         router (multi-stream dispatch), handler (single-stream API), commands (encode/decode), stats
 core/transport/         Transport protocol, SerialTransport, SimTransport (the VIRTUAL port), ReplayTransport
@@ -85,7 +86,8 @@ ui/panels/              container (owns the controls; MainWindow places them), c
                         lanes), command_panel (generated from `panels`: edited vs sent, linked rows, Live,
                         presets, label scrubbing, Esc revert), command_log,
                         timing, trigger (setup popup + step-response results)
-ui/config/              in-app streams.json editor
+ui/config/              streams.json editor (ADR-0009): tab (toolbar, stream tabs, save), stream_editor
+                        (settings row, lanes tree, field form), frame_view (bus-decode drawing), paste_dialog
 tests/                  pytest: pure logic, stubbed-Qt legacy tests, `qt`-marked real-Qt tests
 tools/                  dev scripts (bench_pipeline.py)
 .github/workflows/      CI
@@ -130,6 +132,10 @@ hold these bytes verbatim (ADR-0006), so a wire change also affects replaying ol
   and record the numbers.
 - **The protocol and decoding layers (`core/protocol`) must not import Qt.** Keep them
   pure and unit-testable.
+- **The config editor edits a `StreamDraft`, never its widgets' contents.** Each edit is an
+  operation on the draft that touches only its keys; line edits apply what was typed, on
+  leaving or on a save/switch (ADR-0009). Keep new editor features on that path, so an
+  untouched stream still saves byte-identically (C4).
 - **Config-driven over hard-coded.** New stream or command shapes belong in
   `streams.json` and the config model, not in Python constants. A command's panel is a
   `panels` entry; the GUI encodes a press and hands the engine a finished packet

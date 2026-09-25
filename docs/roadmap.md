@@ -289,6 +289,31 @@ device had last received.
   capture in a table.
   *Done.*
 
+## Phase 7: configuration editor (ADR-0009)
+
+Added after the editor spike (2026-09-25): fields and signals were two lists joined by a
+drop-down, the byte layout wasn't visible, the editor didn't look like the scope, and a
+stream couldn't be started from the firmware's struct.
+
+- [x] **R7.1 Editor in the scope's look**: stream tabs, one row of stream settings, the
+  frame drawn like a bus decode, the signals by lane (with the fields not plotted), and a
+  form for the selected field. Edits go through a Qt-free `StreamDraft`, so an untouched
+  stream saves byte-identically and switching streams can't lose an edit.
+  *Done when:* the C4 round-trip and save tests pass on the new editor, and plotting,
+  renaming, moving between lanes and removing work from both the frame and the tree.
+  *Done.*
+- [x] **R7.2 From C struct…**: paste a struct (or its member lines) and get a stream with
+  every field in place, labels = field names; or replace the fields of the shown stream,
+  keeping the settings of fields that stay. Padding of an unpacked struct is kept as
+  `_pad` fields; what can't be read is listed, never guessed.
+  *Done when:* a pasted struct saves as a valid stream, and a replacement keeps the
+  signals of unchanged fields.
+  *Done.*
+- [x] **R7.3 Copy as C struct**: any stream as a packed struct with its ID and a size
+  check.
+  *Done when:* every bundled stream round-trips through it.
+  *Done.*
+
 ---
 
 ## Suggested order and sizing
@@ -304,3 +329,4 @@ device had last received.
 | 7 | R4.* | M | Needs the R2.1 transport interface |
 | 8 | R5.* | M | Can run in parallel with R3/R4 once R1.5 exists |
 | 9 | R6.* | M | UX, once the config model (R5) defines the panels |
+| 10 | R7.* | M | The editor, once the dashboard (R6) sets the look |

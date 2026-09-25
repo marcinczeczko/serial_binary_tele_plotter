@@ -1,66 +1,68 @@
 """
-Stream Editor Module.
+Stream editor (R7.1): one stream, laid out like the scope.
 
-Edits one stream definition. The editor is lossless (C4): it only overwrites the keys it
-shows (name, control panel, stream ID, endianness, time base, field names and types, signal
-label, field, color, visibility, line style and width, lane). Every other key in the stream,
-frame, time, field, signal or line object is carried through unchanged, in its original
-order. A time key is written only if it was in the file or its value differs from the
-default, so an untouched stream saves byte-identically.
+- One row of stream settings: key, name, ID, byte order, X axis and time per tick, controls.
+- The frame, as `FrameView` draws it: what the device sends, in wire order.
+- The signals by lane, like the dashboard's Signals dock, with the fields that aren't
+  plotted in their own group: how it's shown. Dragging a field or signal onto a lane plots
+  it there; dragging a signal onto "Not plotted" removes it.
+- A form for the selected field and its signal.
+
+Every edit is an operation on a `StreamDraft` (`core/config/draft.py`), so the editor
+never rebuilds a stream from its widgets and can't lose what it doesn't show (C4).
 """
 
 from __future__ import annotations
 
-import copy
 import re
 from typing import Any
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-# Core Imports
-from core.acquisition.timebase import DEFAULT_SCALE_S
-from core.config import ENDIANNESS
-from core.protocol.constants import LOOP_CNTR_NAME, STRUCT_TYPE_MAP
-from core.types import StreamConfig, StreamFrameField
-
-# Common UI Imports
-from ui.charts.telemetry_plot import DEFAULT_LINE_WIDTH
+from core.config import ENDIANNESS, MAX_PAYLOAD_BYTES
+from core.config.draft import LINE_STYLES, StreamDraft, unique_name
+from core.protocol.constants import STRUCT_TYPE_MAP
+from core.types import StreamConfig
+from ui.charts.lanes import DEFAULT_LANE, lane_layout
 from ui.common.color_button import ColorButton
+from ui.config.frame_view import TIME_FIELD, FrameView
+from ui.panels.signals import DEFAULT_LANE_LABEL, NEW_LANE, ROLE_LANE, ROLE_SIGNAL, SignalTree
 
-# Per-row storage of the original objects, so get_data() can round-trip unknown keys.
-ROLE_ORIGINAL = QtCore.Qt.ItemDataRole.UserRole
-ROLE_KEY = QtCore.Qt.ItemDataRole.UserRole + 1
-
-
-class _Original:
-    """
-    Opaque holder for a row's original dict.
-
-    Storing a plain dict as item data converts it to a QVariantMap, which sorts the keys.
-    That breaks the byte-identical round trip.
-    """
-
-    def __init__(self, data: dict[str, Any] | None) -> None:
-        self.data = data or {}
+ROLE_FIELD = QtCore.Qt.ItemDataRole.UserRole + 2
+UNPLOTTED_LANE = "__unplotted__"
+FIELD_MARK = "field:"  # ROLE_SIGNAL of a row for a field without a signal
+MUTED = QtGui.QColor("#888888")
+DIM = QtGui.QColor("#666666")
 
 
-def _original_of(value: Any) -> dict[str, Any]:
-    return copy.deepcopy(value.data) if isinstance(value, _Original) else {}
+def format_seconds(value: Any) -> str:
+    """5 ms, 1 µs, 0.5 s: the time per tick as people say it."""
+    if not isinstance(value, int | float) or isinstance(value, bool) or value <= 0:
+        return str(value)
+    if value >= 1:
+        return f"{value:g} s"
+    if value >= 1e-3:
+        return f"{value * 1e3:g} ms"
+    if value >= 1e-6:
+        return f"{value * 1e6:g} µs"
+    return f"{value:g} s"
 
 
-def _select_or_add(combo: QtWidgets.QComboBox, text: str) -> None:
-    """Selects `text`, adding it first if the combo doesn't offer it (never silently swap)."""
-    if combo.findText(text) < 0:
-        combo.addItem(text)
-    combo.setCurrentText(text)
+def parse_seconds(text: str) -> float | None:
+    """Reads `format_seconds` back; a bare number is in seconds."""
+    m = re.fullmatch(r"\s*([0-9.]+(?:[eE][-+]?\d+)?)\s*(s|ms|us|µs)?\s*", text)
+    if m is None:
+        return None
+    try:
+        number = float(m.group(1))
+    except ValueError:
+        return None
+    divisor = {"ms": 1e3, "us": 1e6, "µs": 1e6}.get(m.group(2) or "s", 1.0)
+    value = number / divisor
+    return value if value > 0 else None
 
 
-def _number_text(value: Any) -> str:
-    return repr(value) if isinstance(value, float) else str(value)
-
-
-def _parse_number(text: str) -> int | float | str:
-    """An int when the text is one (so `1` stays `1` in JSON), else a float, else the text."""
+def _parse_number(text: str) -> int | float | None:
     text = text.strip()
     try:
         return int(text)
@@ -69,470 +71,844 @@ def _parse_number(text: str) -> int | float | str:
     try:
         return float(text)
     except ValueError:
-        return text  # kept as typed; validation reports it
+        return None
 
 
-def _as_widget[W: QtWidgets.QWidget](widget: QtWidgets.QWidget | None, cls: type[W]) -> W:
-    """Narrows a cell/item widget returned by Qt to the type the editor placed there."""
-    if not isinstance(widget, cls):
-        raise TypeError(f"Expected {cls.__name__}, got {type(widget).__name__}")
-    return widget
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _line_icon(color: str, style: str) -> QtGui.QIcon:
+    pixmap = QtGui.QPixmap(22, 12)
+    pixmap.fill(QtGui.QColor(0, 0, 0, 0))
+    painter = QtGui.QPainter(pixmap)
+    pen = QtGui.QPen(QtGui.QColor(color), 3)
+    pen.setStyle(
+        {"dashed": QtCore.Qt.PenStyle.DashLine, "dotted": QtCore.Qt.PenStyle.DotLine}.get(
+            style, QtCore.Qt.PenStyle.SolidLine
+        )
+    )
+    painter.setPen(pen)
+    painter.drawLine(1, 6, 21, 6)
+    painter.end()
+    return QtGui.QIcon(pixmap)
+
+
+HEADER_STYLE = (
+    "QHeaderView::section { background: #000; color: #888; border: none;"
+    " border-bottom: 1px solid #333; padding: 2px 4px; }"
+)
+
+
+class HexSpinBox(QtWidgets.QSpinBox):
+    """A byte, shown as the firmware writes it: 0x04."""
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setRange(0, 255)
+        self.setPrefix("0x")
+
+    def textFromValue(self, v: int) -> str:  # noqa: N802
+        return f"{v:02X}"
+
+    def valueFromText(self, text: str | None) -> int:  # noqa: N802
+        digits = (text or "").removeprefix(self.prefix()).strip()
+        try:
+            return int(digits, 16)
+        except ValueError:
+            return self.value()
+
+    def validate(self, text: str | None, pos: int) -> tuple[QtGui.QValidator.State, str, int]:
+        digits = (text or "").removeprefix(self.prefix()).strip()
+        if digits == "":
+            return QtGui.QValidator.State.Intermediate, text or "", pos
+        try:
+            ok = 0 <= int(digits, 16) <= 255
+        except ValueError:
+            ok = False
+        state = QtGui.QValidator.State.Acceptable if ok else QtGui.QValidator.State.Invalid
+        return state, text or "", pos
+
+
+def field_colors(draft: StreamDraft) -> dict[str, str]:
+    """Each field's color in the frame view: its first signal's, the counter's own."""
+    colors: dict[str, str] = {}
+    for sig in draft.signals.values():
+        if isinstance(sig, dict) and isinstance(sig.get("field"), str):
+            colors.setdefault(sig["field"], str(sig.get("color", "#ffffff")))
+    time_field = draft.time_value("field")
+    if isinstance(time_field, str):
+        colors[time_field] = TIME_FIELD
+    return colors
 
 
 class StreamEditor(QtWidgets.QWidget):
-    """
-    The form for editing a single stream definition.
-    Manages Frame Table and a Flat Signal List.
-    """
+    changed = QtCore.pyqtSignal()  # the draft changed
+    key_rename_requested = QtCore.pyqtSignal(str)  # the tab renames (it knows the other keys)
+    problem = QtCore.pyqtSignal(str)  # an edit that was refused, and why
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.current_stream_key: str | None = None
-        self._original: dict[str, Any] = {}
-        self._lane_choices: list[str] = []
-        self.init_ui()
-        self.apply_styles()
+        self.draft = StreamDraft({"name": "", "frame": {"fields": []}})
+        self._field: str | None = None  # selected field
+        self._signal: str | None = None  # selected signal (of that field), if plotted
+        self._loading = False
+        self._flushing = False
+        # Line edits the user typed in and hasn't left: flush() applies only these, so text
+        # a redraw left behind is never taken for an edit.
+        self._typed: set[QtWidgets.QLineEdit] = set()
+        self._panel_keys: list[str] = []
+        self._build()
+        self.setEnabled(False)
 
-    def apply_styles(self) -> None:
-        self.setStyleSheet(
-            """
-            QTreeWidget, QTableWidget {
-                background-color: #121212;
-                border: 1px solid #333;
-                color: #e0e0e0;
-                gridline-color: #2a2a2a;
-                font-size: 13px;
-            }
-            QHeaderView::section {
-                background-color: #1a1a1a;
-                color: #bbb;
-                padding: 6px;
-                border: none;
-                border-bottom: 2px solid #333;
-                border-right: 1px solid #333;
-                font-weight: bold;
-            }
-            QTreeWidget::item, QTableWidget::item {
-                padding: 4px; border-bottom: 1px solid #1a1a1a; height: 32px;
-            }
-            QTreeWidget::item:hover, QTableWidget::item:hover { background-color: #1f1f1f; }
-            QTreeWidget::item:selected, QTableWidget::item:selected {
-                background-color: #2c3e50; color: white;
-            }
-            QComboBox, QLineEdit {
-                background-color: #121212; border: 1px solid #333; color: #4FC3F7; padding: 2px 5px;
-            }
-        """
-        )
+    # --- construction ---
 
-    def init_ui(self) -> None:
+    def _build(self) -> None:
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(6)
 
-        # --- Metadata Section ---
-        grp_info = QtWidgets.QGroupBox("Stream Metadata")
-        form = QtWidgets.QFormLayout(grp_info)
+        row = QtWidgets.QHBoxLayout()
+        row.setContentsMargins(8, 6, 8, 0)
+        row.setSpacing(6)
         self.key_edit = QtWidgets.QLineEdit()
+        self.key_edit.setFixedWidth(110)
+        self.key_edit.setToolTip("The stream's key in streams.json")
         self.name_edit = QtWidgets.QLineEdit()
-        self.id_spin = QtWidgets.QSpinBox()
-        self.id_spin.setRange(0, 255)
-        self.panel_combo = QtWidgets.QComboBox()  # the stream's `controls` panel (R5.2)
-        self.set_panel_choices([])
+        self.name_edit.setFixedWidth(170)
+        self.id_spin = HexSpinBox()
+        self.id_spin.setFixedWidth(64)
         self.endian_combo = QtWidgets.QComboBox()
         self.endian_combo.addItems(ENDIANNESS)
-
-        form.addRow("JSON Key:", self.key_edit)
-        form.addRow("Display Name:", self.name_edit)
-        form.addRow("Stream ID:", self.id_spin)
-        form.addRow("Endianness:", self.endian_combo)
-        form.addRow("Control Panel:", self.panel_combo)
-        layout.addWidget(grp_info)
-
-        # --- Time base (R2.5) ---
-        grp_time = QtWidgets.QGroupBox("Time Base")
-        time_form = QtWidgets.QFormLayout(grp_time)
         self.time_field_combo = QtWidgets.QComboBox()
-        self.time_field_combo.setToolTip("Frame field that drives the X axis.")
+        self.time_field_combo.setToolTip("The field that drives the X axis")
         self.time_scale_edit = QtWidgets.QLineEdit()
+        self.time_scale_edit.setFixedWidth(64)
         self.time_scale_edit.setToolTip(
-            "Seconds per tick of the time field: the MCU loop period for a loop counter "
-            "(0.005 = 5 ms), or 1e-6 for a microsecond timestamp."
+            "Time per tick of the X-axis field: the MCU loop period for a loop counter "
+            "(5 ms), or 1 µs for a microsecond timestamp"
         )
         self.time_step_edit = QtWidgets.QLineEdit()
+        self.time_step_edit.setFixedWidth(50)
         self.time_step_edit.setToolTip(
-            "Nominal increase of the time field per frame: 1 for a loop counter. A larger "
+            "How much the X-axis field goes up per frame: 1 for a loop counter. A larger "
             "jump is drawn as a gap (lost frames)."
         )
-        time_form.addRow("Time field:", self.time_field_combo)
-        time_form.addRow("Seconds per tick:", self.time_scale_edit)
-        time_form.addRow("Ticks per frame:", self.time_step_edit)
-        layout.addWidget(grp_time)
+        self.panel_combo = QtWidgets.QComboBox()  # the stream's `controls` panel (R5.2)
+        self.set_panel_choices([])
+        for label, widget in (
+            ("Key:", self.key_edit),
+            ("Name:", self.name_edit),
+            ("ID:", self.id_spin),
+            ("Byte order:", self.endian_combo),
+            ("X axis:", self.time_field_combo),
+            ("×", self.time_scale_edit),
+            ("Step:", self.time_step_edit),
+            ("Controls:", self.panel_combo),
+        ):
+            lbl = QtWidgets.QLabel(label)
+            if label not in ("Key:", "×"):
+                lbl.setContentsMargins(8, 0, 0, 0)
+            row.addWidget(lbl)
+            row.addWidget(widget)
+        row.addStretch()
+        layout.addLayout(row)
 
-        # --- Tabs ---
-        self.tabs = QtWidgets.QTabWidget()
-        layout.addWidget(self.tabs)
+        frame_box = QtWidgets.QVBoxLayout()
+        frame_box.setContentsMargins(8, 0, 8, 0)
+        frame_box.setSpacing(3)
+        head = QtWidgets.QHBoxLayout()
+        title = QtWidgets.QLabel("Frame")
+        title.setStyleSheet("color: #aaa; font-weight: bold;")
+        self.size_lbl = QtWidgets.QLabel("")
+        head.addWidget(title)
+        head.addStretch()
+        head.addWidget(self.size_lbl)
+        frame_box.addLayout(head)
+        self.frame_view = FrameView()
+        frame_box.addWidget(self.frame_view)
+        layout.addLayout(frame_box)
 
-        self.frame_widget = QtWidgets.QWidget()
-        self._init_frame_tab()
-        self.tabs.addTab(self.frame_widget, "1. Binary Frame Def")
+        split = QtWidgets.QSplitter()
+        split.setHandleWidth(1)
+        split.setStyleSheet("QSplitter::handle { background-color: #333; }")
+        self.tree = SignalTree()
+        self.tree.setColumnCount(4)
+        self.tree.setHeaderLabels(["Signal", "Field", "Type", "Byte"])
+        self.tree.setRootIsDecorated(True)
+        self.tree.setIndentation(14)
+        self.tree.setUniformRowHeights(True)
+        self.tree.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.setStyleSheet(
+            "QTreeWidget { border: none; }"
+            " QTreeWidget::item:selected { background: #1f3b5c; color: white; }" + HEADER_STYLE
+        )
+        header = self.tree.header()
+        assert header is not None
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        for col, width in ((1, 200), (2, 50), (3, 50)):
+            header.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeMode.Fixed)
+            header.resizeSection(col, width)
+        split.addWidget(self.tree)
+        split.addWidget(self._build_form())
+        split.setStretchFactor(0, 1)
+        split.setSizes([900, 340])
+        layout.addWidget(split, 1)
 
-        self.sig_widget = QtWidgets.QWidget()
-        self._init_signal_tab()
-        self.tabs.addTab(self.sig_widget, "2. Signals (Flat List)")
+        self.key_edit.editingFinished.connect(self._on_key_edited)
+        self.name_edit.editingFinished.connect(self._on_name_edited)
+        self.id_spin.valueChanged.connect(self._on_id_changed)
+        self.endian_combo.activated.connect(self._on_endianness)
+        self.time_field_combo.activated.connect(self._on_time_field)
+        self.time_scale_edit.editingFinished.connect(self._on_time_scale)
+        self.time_step_edit.editingFinished.connect(self._on_time_step)
+        self.panel_combo.activated.connect(self._on_panel)
+        for edit in (
+            self.name_edit,
+            self.time_scale_edit,
+            self.time_step_edit,
+            self.label_edit,
+            self.field_name_edit,
+        ):
+            edit.textEdited.connect(lambda _text, e=edit: self._typed.add(e))
+            edit.editingFinished.connect(lambda e=edit: self._typed.discard(e))
+        self.frame_view.field_clicked.connect(self._on_frame_clicked)
+        self.frame_view.menu_requested.connect(self._show_field_menu)
+        self.tree.currentItemChanged.connect(self._on_tree_current)
+        self.tree.itemChanged.connect(self._on_tree_item_changed)
+        self.tree.dropped.connect(self._on_dropped)
+        self.tree.customContextMenuRequested.connect(self._on_tree_menu)
 
-    def _init_frame_tab(self) -> None:
-        layout = QtWidgets.QVBoxLayout(self.frame_widget)
-        self.frame_table = QtWidgets.QTableWidget()
-        self.frame_table.setColumnCount(2)
-        self.frame_table.setHorizontalHeaderLabels(["Field Name (C++)", "Data Type"])
-        h = self.frame_table.horizontalHeader()
-        assert h is not None
-        h.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
-        h.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Fixed)
-        h.resizeSection(1, 150)
-        v = self.frame_table.verticalHeader()
-        assert v is not None
-        v.setVisible(False)
+    def _build_form(self) -> QtWidgets.QWidget:
+        box = QtWidgets.QWidget()
+        box.setMinimumWidth(300)
+        outer = QtWidgets.QVBoxLayout(box)
+        outer.setContentsMargins(12, 6, 10, 8)
+        title = QtWidgets.QLabel("Field")
+        title.setStyleSheet("color: #aaa; font-weight: bold;")
+        outer.addWidget(title)
 
-        btns = QtWidgets.QHBoxLayout()
-        b_add = QtWidgets.QPushButton("+ Add")
-        b_add.clicked.connect(lambda: self.add_frame_row())
-        b_del = QtWidgets.QPushButton("- Del")
-        b_del.clicked.connect(lambda: self.remove_table_row(self.frame_table))
-        # Keep the signals' "Field Map" choices in sync with the frame's field names.
-        self.frame_table.itemChanged.connect(lambda _item: self._refresh_field_combos())
-        btns.addWidget(b_add)
-        btns.addWidget(b_del)
-        btns.addStretch()
-        layout.addWidget(self.frame_table)
-        layout.addLayout(btns)
+        form = QtWidgets.QFormLayout()
+        self.field_name_edit = QtWidgets.QLineEdit()
+        self.field_type_combo = QtWidgets.QComboBox()
+        for key, (_, _, label) in STRUCT_TYPE_MAP.items():
+            self.field_type_combo.addItem(label, key)
+        self.field_byte_lbl = QtWidgets.QLabel("")
+        form.addRow("Name:", self.field_name_edit)
+        form.addRow("Type:", self.field_type_combo)
+        form.addRow("Byte:", self.field_byte_lbl)
+        outer.addLayout(form)
 
-    def _init_signal_tab(self) -> None:
-        layout = QtWidgets.QVBoxLayout(self.sig_widget)
+        self.signal_box = QtWidgets.QWidget()
+        sform = QtWidgets.QFormLayout(self.signal_box)
+        sform.setContentsMargins(0, 6, 0, 0)
+        self.label_edit = QtWidgets.QLineEdit()
+        self.lane_combo = QtWidgets.QComboBox()
+        self.lane_combo.setEditable(True)
+        self.lane_combo.setInsertPolicy(QtWidgets.QComboBox.InsertPolicy.NoInsert)
+        self.lane_combo.setToolTip("Pick a lane, or type a new lane's name")
+        self.color_btn = ColorButton()
+        self.style_combo = QtWidgets.QComboBox()
+        self.style_combo.addItems(LINE_STYLES)
+        self.width_spin = QtWidgets.QSpinBox()
+        self.width_spin.setRange(1, 5)
+        self.width_spin.setSuffix(" px")
+        line = QtWidgets.QHBoxLayout()
+        line.addWidget(self.style_combo, 1)
+        line.addWidget(self.width_spin)
+        self.shown_chk = QtWidgets.QCheckBox("when the stream opens")
+        sform.addRow("Label:", self.label_edit)
+        sform.addRow("Lane:", self.lane_combo)
+        sform.addRow("Color:", self.color_btn)
+        sform.addRow("Line:", line)
+        sform.addRow("Shown:", self.shown_chk)
+        outer.addWidget(self.signal_box)
 
-        self.sig_tree = QtWidgets.QTreeWidget()
-        self.sig_tree.setRootIsDecorated(False)
+        self.not_plotted_lbl = QtWidgets.QLabel("Not plotted.")
+        self.not_plotted_lbl.setStyleSheet("color: #888;")
+        outer.addWidget(self.not_plotted_lbl)
+        outer.addStretch()
 
-        # Cols: Label | Field | Color | Vis | Style
-        self.sig_cols = ["Label Name", "Field Map", "Color", "Vis", "Style", "Width", "Lane"]
-        self.sig_tree.setColumnCount(len(self.sig_cols))
-        self.sig_tree.setHeaderLabels(self.sig_cols)
+        self.plot_btn = QtWidgets.QPushButton("Plot this field")
+        buttons = QtWidgets.QHBoxLayout()
+        self.add_field_btn = QtWidgets.QPushButton("Add field after")
+        self.remove_field_btn = QtWidgets.QPushButton("Remove field")
+        buttons.addWidget(self.add_field_btn)
+        buttons.addWidget(self.remove_field_btn)
+        outer.addWidget(self.plot_btn)
+        outer.addLayout(buttons)
 
-        h = self.sig_tree.header()
-        assert h is not None
-        h.resizeSection(0, 200)
-        h.resizeSection(1, 150)
-        h.resizeSection(2, 80)
-        h.resizeSection(3, 40)
+        self.field_name_edit.editingFinished.connect(self._on_field_name)
+        self.field_type_combo.activated.connect(self._on_field_type)
+        self.label_edit.editingFinished.connect(self._on_label)
+        self.lane_combo.activated.connect(self._on_lane_picked)
+        lane_edit = self.lane_combo.lineEdit()
+        assert lane_edit is not None
+        lane_edit.editingFinished.connect(self._on_lane_typed)
+        self.color_btn.colorChanged.connect(lambda c: self._set_signal("color", c))
+        self.style_combo.activated.connect(
+            lambda _i: self._set_signal("style", self.style_combo.currentText())
+        )
+        self.width_spin.valueChanged.connect(lambda v: self._set_signal("width", v))
+        self.shown_chk.toggled.connect(lambda on: self._set_signal("visible", on))
+        self.plot_btn.clicked.connect(self._toggle_plot)
+        self.add_field_btn.clicked.connect(self.add_field_after)
+        self.remove_field_btn.clicked.connect(self.remove_selected_field)
+        return box
 
-        btns = QtWidgets.QHBoxLayout()
-        b_sig = QtWidgets.QPushButton("📈 Add Signal")
-        b_sig.clicked.connect(lambda: self.add_signal_item())
-        b_rem = QtWidgets.QPushButton("❌ Remove")
-        b_rem.clicked.connect(self.remove_tree_item)
-        btns.addWidget(b_sig)
-        btns.addWidget(b_rem)
-        btns.addStretch()
-        layout.addWidget(self.sig_tree)
-        layout.addLayout(btns)
+    # --- loading ---
 
     def set_panel_choices(self, keys: list[str]) -> None:
         """The document's panels a stream can show (`controls`), plus none."""
-        current = self.panel_combo.currentData()
+        self._panel_keys = list(keys)
         self.panel_combo.clear()
         self.panel_combo.addItem("(none)", None)
         for key in keys:
             self.panel_combo.addItem(key, key)
-        self.panel_combo.setCurrentIndex(max(self.panel_combo.findData(current), 0))
 
-    def load_data(self, key: str, data: StreamConfig) -> None:
+    def load(self, key: str, draft: StreamDraft) -> None:
+        """Shows a stream; `draft` is edited in place (the tab keeps it)."""
         self.current_stream_key = key
-        self._original = copy.deepcopy(dict(data))
-        frame = data.get("frame", {})
+        self.draft = draft
+        self._typed.clear()
+        self._field, self._signal = None, None
+        slots = draft.layout()
+        if slots:
+            self._select_field(slots[min(1, len(slots) - 1)].name)
+        self.setEnabled(True)
+        self.refresh()
 
-        self.key_edit.setText(key)
-        self.name_edit.setText(data.get("name", ""))
-        controls = data.get("controls")
-        if isinstance(controls, str) and self.panel_combo.findData(controls) < 0:
-            self.panel_combo.addItem(controls, controls)  # an unknown panel is kept as is
-        self.panel_combo.setCurrentIndex(
-            max(self.panel_combo.findData(controls if isinstance(controls, str) else None), 0)
-        )
-        _select_or_add(self.endian_combo, frame.get("endianness", "little"))
-        self.id_spin.setValue(frame.get("stream_id", 0))
-
-        # Frame
-        self.frame_table.blockSignals(True)
-        self.frame_table.setRowCount(0)
-        for f in frame.get("fields", []):
-            self.add_frame_row(f.get("name", ""), f.get("type", "f32"), original=dict(f))
-        self.frame_table.blockSignals(False)
-
-        # Time base
-        raw_time = data.get("time")
-        time_cfg: dict[str, Any] = dict(raw_time) if isinstance(raw_time, dict) else {}
-        self._refresh_time_field_combo(str(time_cfg.get("field", LOOP_CNTR_NAME)))
-        self.time_scale_edit.setText(_number_text(time_cfg.get("scale_s", DEFAULT_SCALE_S)))
-        self.time_step_edit.setText(_number_text(time_cfg.get("step", 1)))
-
-        # Signals (flat list). Lane choices: the described groups, then any in use.
-        groups = data.get("groups")
-        lanes = list(groups) if isinstance(groups, dict) else []
-        for sdata in data.get("signals", {}).values():
-            group = sdata.get("group") if isinstance(sdata, dict) else None
-            if isinstance(group, str) and group and group not in lanes:
-                lanes.append(group)
-        self._lane_choices = lanes
-        self.sig_tree.clear()
-        for skey, sdata in data.get("signals", {}).items():
-            line = sdata.get("line", {})
-            row = {
-                "label": sdata.get("label", skey),
-                "field": sdata.get("field", ""),
-                "color": sdata.get("color", "#FFFFFF"),
-                "visible": sdata.get("visible", True),
-                "style": line.get("style", "solid"),
-                "width": line.get("width", DEFAULT_LINE_WIDTH),
-                "lane": sdata.get("group", "") if isinstance(sdata.get("group"), str) else "",
-            }
-            self.add_signal_row(row, key=skey, original=dict(sdata))
+    def load_data(self, key: str, data: StreamConfig | dict[str, Any]) -> None:
+        self.load(key, StreamDraft(data))
 
     def get_data(self) -> tuple[str, StreamConfig]:
-        """Returns (key, stream): the loaded stream with the edited values overlaid."""
-        data: dict[str, Any] = copy.deepcopy(self._original)
-        data["name"] = self.name_edit.text()
+        """(key, stream): the draft, with any line edit still being typed applied."""
+        self.flush()
+        return self.key_edit.text(), self.draft.to_stream()  # type: ignore[return-value]
+
+    def clear(self) -> None:
+        self.current_stream_key = None
+        self.setEnabled(False)
+
+    def flush(self) -> None:
+        """Applies line edits the user hasn't left yet (before a save or a switch)."""
+        if self._flushing:
+            return
+        self._flushing = True
+        try:
+            self._flush()
+        finally:
+            self._flushing = False
+
+    def _flush(self) -> None:
+        for widget, handler in (
+            (self.name_edit, self._on_name_edited),
+            (self.time_scale_edit, self._on_time_scale),
+            (self.time_step_edit, self._on_time_step),
+            (self.label_edit, self._on_label),
+            (self.field_name_edit, self._on_field_name),
+        ):
+            if widget in self._typed:
+                handler()
+
+    # --- redraw ---
+
+    def refresh(self) -> None:
+        """Redraws everything from the draft, keeping the selection."""
+        self._loading = True
+        try:
+            self._refresh_stream_row()
+            slots = self.draft.layout()
+            size = sum(s.size for s in slots)
+            self.size_lbl.setText(f"{size} / {MAX_PAYLOAD_BYTES} B")
+            self.size_lbl.setStyleSheet(
+                "color: #ff6b6b; font-weight: bold;" if size > MAX_PAYLOAD_BYTES else "color: #888;"
+            )
+            self.frame_view.set_frame(slots, field_colors(self.draft), self._field_index())
+            self._rebuild_tree()
+            self._refresh_form()
+        finally:
+            self._loading = False
+
+    def _refresh_stream_row(self) -> None:
+        d = self.draft
+        if not self.key_edit.hasFocus():
+            self.key_edit.setText(self.current_stream_key or "")
+        if not self.name_edit.hasFocus():
+            self.name_edit.setText(d.name)
+        self.id_spin.setValue(d.stream_id)
+        if self.endian_combo.findText(d.endianness) < 0:
+            self.endian_combo.addItem(d.endianness)  # shown as is; validation reports it
+        self.endian_combo.setCurrentText(d.endianness)
+        names = d.field_names()
+        time_field = str(d.time_value("field"))
+        self.time_field_combo.clear()
+        self.time_field_combo.addItems(names)
+        if time_field not in names:
+            self.time_field_combo.addItem(time_field)  # stale: validation reports it
+        self.time_field_combo.setCurrentText(time_field)
+        if not self.time_scale_edit.hasFocus():
+            self.time_scale_edit.setText(format_seconds(d.time_value("scale_s")))
+        if not self.time_step_edit.hasFocus():
+            self.time_step_edit.setText(str(d.time_value("step")))
+        controls = d.controls
+        if controls is not None and self.panel_combo.findData(controls) < 0:
+            self.panel_combo.addItem(controls, controls)  # an unknown panel is kept as is
+        self.panel_combo.setCurrentIndex(max(self.panel_combo.findData(controls), 0))
+
+    def _rebuild_tree(self) -> None:
+        tree = self.tree
+        tree.blockSignals(True)
+        tree.clear()
+        slots = {s.name: s for s in self.draft.layout()}
+        specs, assignment = lane_layout(self.draft.data)
+        bold = QtGui.QFont(tree.font())
+        bold.setBold(True)
+        current: QtWidgets.QTreeWidgetItem | None = None
+        lane_flags = QtCore.Qt.ItemFlag.ItemIsEnabled | QtCore.Qt.ItemFlag.ItemIsDropEnabled
+        for spec in specs:
+            members = [sid for sid, lane in assignment.items() if lane == spec.key]
+            shown = sum(1 for sid in members if self.draft.signal(sid).get("visible", True))
+            label = spec.label or DEFAULT_LANE_LABEL
+            lane_item = QtWidgets.QTreeWidgetItem([label, f"{shown}/{len(members)}"])
+            lane_item.setFont(0, bold)
+            lane_item.setForeground(1, MUTED)
+            lane_item.setData(0, ROLE_LANE, spec.key)
+            lane_item.setFlags(lane_flags)
+            tree.addTopLevelItem(lane_item)
+            for sid in members:
+                item = self._signal_item(sid, slots)
+                lane_item.addChild(item)
+                if sid == self._signal:
+                    current = item
+            lane_item.setExpanded(True)
+
+        plotted = {str(s.get("field")) for s in self.draft.signals.values() if isinstance(s, dict)}
+        unplotted = [s for s in slots.values() if s.name not in plotted]
+        if unplotted:
+            lane_item = QtWidgets.QTreeWidgetItem(["Not plotted", str(len(unplotted))])
+            lane_item.setFont(0, bold)
+            lane_item.setForeground(1, MUTED)
+            lane_item.setData(0, ROLE_LANE, UNPLOTTED_LANE)
+            lane_item.setFlags(lane_flags)
+            tree.addTopLevelItem(lane_item)
+            time_field = self.draft.time_value("field")
+            for slot in unplotted:
+                label = "X axis" if slot.name == time_field else ""
+                item = QtWidgets.QTreeWidgetItem([label, slot.name, slot.type, str(slot.offset)])
+                item.setData(0, ROLE_SIGNAL, FIELD_MARK + slot.name)
+                item.setData(0, ROLE_FIELD, slot.name)
+                item.setFlags(
+                    QtCore.Qt.ItemFlag.ItemIsEnabled
+                    | QtCore.Qt.ItemFlag.ItemIsSelectable
+                    | QtCore.Qt.ItemFlag.ItemIsDragEnabled
+                )
+                for col in (1, 2):
+                    item.setForeground(col, MUTED)
+                item.setForeground(3, DIM)
+                lane_item.addChild(item)
+                if self._signal is None and slot.name == self._field:
+                    current = item
+            lane_item.setExpanded(True)
+        tree.blockSignals(False)
+        if current is not None:
+            tree.blockSignals(True)
+            tree.setCurrentItem(current)
+            tree.blockSignals(False)
+
+    def _signal_item(self, sid: str, slots: dict[str, Any]) -> QtWidgets.QTreeWidgetItem:
+        sig = self.draft.signal(sid)
+        field = str(sig.get("field", ""))
+        slot = slots.get(field)
+        line = _as_dict(sig.get("line"))
+        item = QtWidgets.QTreeWidgetItem(
+            [
+                str(sig.get("label", sid)),
+                field,
+                slot.type if slot else "?",
+                str(slot.offset) if slot else "",
+            ]
+        )
+        item.setIcon(0, _line_icon(str(sig.get("color", "#fff")), str(line.get("style", ""))))
+        item.setData(0, ROLE_SIGNAL, sid)
+        item.setData(0, ROLE_FIELD, field)
+        item.setFlags(
+            QtCore.Qt.ItemFlag.ItemIsEnabled
+            | QtCore.Qt.ItemFlag.ItemIsSelectable
+            | QtCore.Qt.ItemFlag.ItemIsUserCheckable
+            | QtCore.Qt.ItemFlag.ItemIsDragEnabled
+            | QtCore.Qt.ItemFlag.ItemIsDropEnabled
+        )
+        visible = sig.get("visible", True)
+        item.setCheckState(
+            0, QtCore.Qt.CheckState.Checked if visible else QtCore.Qt.CheckState.Unchecked
+        )
+        item.setToolTip(0, "Checked: shown when the stream opens")
+        for col in (1, 2):
+            item.setForeground(col, MUTED)
+        item.setForeground(3, DIM)
+        return item
+
+    def _refresh_form(self) -> None:
+        index = self._field_index()
+        slot = next((s for s in self.draft.layout() if s.index == index), None)
+        for w in (self.field_name_edit, self.field_type_combo, self.add_field_btn):
+            w.setEnabled(slot is not None)
+        self.remove_field_btn.setEnabled(slot is not None)
+        self.plot_btn.setEnabled(slot is not None)
+        if slot is None:
+            self.field_name_edit.setText("")
+            self.field_byte_lbl.setText("")
+            self.signal_box.hide()
+            self.not_plotted_lbl.hide()
+            return
+        if not self.field_name_edit.hasFocus():
+            self.field_name_edit.setText(slot.name)
+        if self.field_type_combo.findData(slot.type) < 0:
+            self.field_type_combo.addItem(slot.type, slot.type)  # unknown: shown as is
+        self.field_type_combo.setCurrentIndex(self.field_type_combo.findData(slot.type))
+        self.field_byte_lbl.setText(f"{slot.offset} (0x{slot.offset:02x}), {slot.size} B")
+
+        sig = self.draft.signal(self._signal) if self._signal else None
+        self.signal_box.setVisible(sig is not None)
+        is_time = slot.name == self.draft.time_value("field")
+        self.not_plotted_lbl.setText("The X axis; not plotted." if is_time else "Not plotted.")
+        self.not_plotted_lbl.setVisible(sig is None)
+        self.plot_btn.setText("Stop plotting" if sig is not None else "Plot this field")
+        if sig is None:
+            self.label_edit.setText("")
+            return
+        if not self.label_edit.hasFocus():
+            self.label_edit.setText(str(sig.get("label", "")))
+        self._fill_lane_combo(str(sig.get("group", DEFAULT_LANE)))
+        self.color_btn.set_color(str(sig.get("color", "#FFFFFF")))
+        line = _as_dict(sig.get("line"))
+        style = str(line.get("style", "solid"))
+        if self.style_combo.findText(style) < 0:
+            self.style_combo.addItem(style)
+        self.style_combo.setCurrentText(style)
+        width = line.get("width", 1)
+        self.width_spin.setValue(int(width) if isinstance(width, int | float) else 1)
+        self.shown_chk.setChecked(bool(sig.get("visible", True)))
+
+    def _lanes(self) -> list[tuple[str, str]]:
+        """(key, label) of every lane: in use (display order), then described but unused."""
+        specs, _ = lane_layout(self.draft.data)
+        lanes = [(s.key, s.label or DEFAULT_LANE_LABEL) for s in specs]
+        if not any(k == DEFAULT_LANE for k, _ in lanes):
+            lanes.insert(0, (DEFAULT_LANE, DEFAULT_LANE_LABEL))
+        groups = self.draft.data.get("groups")
+        for key in groups if isinstance(groups, dict) else ():
+            if not any(k == key for k, _ in lanes):
+                lanes.append((key, self.draft.lane_label(key) or key))
+        return lanes
+
+    def _fill_lane_combo(self, lane: str) -> None:
+        self.lane_combo.clear()
+        for key, label in self._lanes():
+            self.lane_combo.addItem(label, key)
+        self.lane_combo.setCurrentIndex(max(self.lane_combo.findData(lane), 0))
+
+    # --- selection ---
+
+    def _field_index(self) -> int | None:
+        names = self.draft.field_names()
+        return names.index(self._field) if self._field in names else None
+
+    def _select_field(self, field: str | None, signal: str | None = None) -> None:
+        self._field = field
+        if signal is None and field is not None:
+            signal = next(iter(self.draft.signals_of_field(field)), None)
+        self._signal = signal
+
+    @property
+    def selected_field(self) -> str | None:
+        return self._field
+
+    @property
+    def selected_signal(self) -> str | None:
+        return self._signal
+
+    def select(self, field: str, signal: str | None = None) -> None:
+        self.flush()
+        self._select_field(field, signal)
+        self.refresh()
+
+    def _on_frame_clicked(self, index: int) -> None:
+        self.select(self.draft.field_names()[index])
+
+    def _on_tree_current(
+        self, current: QtWidgets.QTreeWidgetItem | None, _previous: Any = None
+    ) -> None:
+        if current is None or self._loading:
+            return
+        field = current.data(0, ROLE_FIELD)
+        if not isinstance(field, str):
+            return  # a lane row
+        sid = current.data(0, ROLE_SIGNAL)
+        signal = None if not isinstance(sid, str) or sid.startswith(FIELD_MARK) else sid
+        self.flush()
+        self._field, self._signal = field, signal
+        self._loading = True
+        try:
+            self.frame_view.set_selected(self._field_index())
+            self._refresh_form()
+        finally:
+            self._loading = False
+
+    # --- edits ---
+
+    def _edited(self) -> None:
+        self.flush()  # text still being typed elsewhere isn't overwritten by the redraw
+        self.refresh()
+        self.changed.emit()
+
+    def _on_key_edited(self) -> None:
+        text = self.key_edit.text().strip()
+        if self.current_stream_key is not None and text and text != self.current_stream_key:
+            self.key_rename_requested.emit(text)
+
+    def _on_name_edited(self) -> None:
+        if self._loading or self.current_stream_key is None:
+            return
+        if self.name_edit.text() != self.draft.name:
+            self.draft.name = self.name_edit.text()
+            self.changed.emit()
+
+    def _on_id_changed(self, value: int) -> None:
+        if not self._loading and value != self.draft.stream_id:
+            self.draft.stream_id = value
+            self.changed.emit()
+
+    def _on_endianness(self, _index: int) -> None:
+        if self.endian_combo.currentText() != self.draft.endianness:
+            self.draft.endianness = self.endian_combo.currentText()
+            self.changed.emit()
+
+    def _on_time_field(self, _index: int) -> None:
+        self.draft.set_time("field", self.time_field_combo.currentText())
+        self._edited()
+
+    def _on_time_scale(self) -> None:
+        if self._loading or self.current_stream_key is None:
+            return
+        text = self.time_scale_edit.text()
+        current = self.draft.time_value("scale_s")
+        if text.strip() == format_seconds(current):
+            return
+        value = parse_seconds(text)
+        if value is None:
+            self.problem.emit(f"'{text}' is not a time per tick (e.g. 5 ms, 1 µs, 0.005)")
+            self.time_scale_edit.setText(format_seconds(current))
+            return
+        if value != current:
+            self.draft.set_time("scale_s", value)
+            self.changed.emit()
+        self.time_scale_edit.setText(format_seconds(value))
+
+    def _on_time_step(self) -> None:
+        if self._loading or self.current_stream_key is None:
+            return
+        text = self.time_step_edit.text()
+        current = self.draft.time_value("step")
+        if text.strip() == str(current):
+            return
+        value = _parse_number(text)
+        if value is None or value <= 0:
+            self.problem.emit(f"'{text}' is not a step (a positive number, 1 for a counter)")
+            self.time_step_edit.setText(str(current))
+            return
+        self.draft.set_time("step", value)
+        self.changed.emit()
+
+    def _on_panel(self, _index: int) -> None:
         controls = self.panel_combo.currentData()
-        if isinstance(controls, str):
-            data["controls"] = controls
+        self.draft.controls = controls if isinstance(controls, str) else None
+        self.changed.emit()
+
+    def _on_field_name(self) -> None:
+        index = self._field_index()
+        if self._loading or index is None:
+            return
+        text = self.field_name_edit.text().strip()
+        if text == self._field:
+            return
+        error = self.draft.rename_field(index, text)
+        if error is not None:
+            self.problem.emit(error)
+            self.field_name_edit.setText(self._field or "")
+            return
+        self._field = text
+        self._edited()
+
+    def _on_field_type(self, _index: int) -> None:
+        index = self._field_index()
+        if index is not None:
+            self.draft.set_field_type(index, str(self.field_type_combo.currentData()))
+            self._edited()
+
+    def _on_label(self) -> None:
+        if self._loading or self._signal is None:
+            return
+        text = self.label_edit.text()
+        if text != self.draft.signal(self._signal).get("label"):
+            self.draft.set_signal(self._signal, "label", text)
+            self._edited()
+
+    def _set_signal(self, attr: str, value: Any) -> None:
+        if self._loading or self._signal is None:
+            return
+        if attr in ("style", "width"):
+            line = self.draft.signal(self._signal).get("line")
+            old = line.get(attr) if isinstance(line, dict) else None
         else:
-            data.pop("controls", None)
+            old = self.draft.signal(self._signal).get(attr)
+        if old != value:
+            self.draft.set_signal(self._signal, attr, value)
+            self._edited()
 
-        frame = data["frame"] if isinstance(data.get("frame"), dict) else {}
-        frame["stream_id"] = self.id_spin.value()
-        frame["endianness"] = self.endian_combo.currentText()
-        fields: list[StreamFrameField] = []
-        for r in range(self.frame_table.rowCount()):
-            name = self._frame_name(r)
-            if not name:
-                continue
-            name_item = self.frame_table.item(r, 0)
-            field = _original_of(name_item.data(ROLE_ORIGINAL) if name_item else None)
-            type_combo = _as_widget(self.frame_table.cellWidget(r, 1), QtWidgets.QComboBox)
-            field["name"] = name
-            field["type"] = type_combo.currentData() or type_combo.currentText()
-            fields.append(field)  # type: ignore[arg-type]
-        frame["fields"] = fields
-        data["frame"] = frame
-        self._put_time(data)
+    def _on_lane_picked(self, index: int) -> None:
+        lane = self.lane_combo.itemData(index)
+        if isinstance(lane, str):
+            self._set_signal("group", lane)
 
-        signals: dict[str, dict[str, Any]] = {}
-        root = self.sig_tree.invisibleRootItem()
-        assert root is not None
-        for i in range(root.childCount()):
-            item = root.child(i)
-            assert item is not None
-            sig = _original_of(item.data(0, ROLE_ORIGINAL))
+    def _on_lane_typed(self) -> None:
+        if self._loading or self._signal is None:
+            return
+        text = self.lane_combo.currentText().strip()
+        if not text:
+            return
+        for key, label in self._lanes():
+            if text in (label, key):
+                self._set_signal("group", key)
+                return
+        key = self.new_lane(text)
+        self._set_signal("group", key)
 
-            label = item.text(0)
-            fld = _as_widget(self.sig_tree.itemWidget(item, 1), QtWidgets.QComboBox).currentText()
-            vis_box = _as_widget(self.sig_tree.itemWidget(item, 3), QtWidgets.QWidget)
-            vis = _as_widget(vis_box.findChild(QtWidgets.QCheckBox), QtWidgets.QCheckBox)
-            sig["label"] = label
-            sig["field"] = fld
-            sig["color"] = _as_widget(self.sig_tree.itemWidget(item, 2), ColorButton).text()
-            sig["visible"] = vis.isChecked()
-            line = sig["line"] if isinstance(sig.get("line"), dict) else {}
-            line["style"] = _as_widget(
-                self.sig_tree.itemWidget(item, 4), QtWidgets.QComboBox
-            ).currentText()
-            line["width"] = _as_widget(
-                self.sig_tree.itemWidget(item, 5), QtWidgets.QSpinBox
-            ).value()
-            sig["line"] = line
-            lane = _as_widget(self.sig_tree.itemWidget(item, 6), QtWidgets.QComboBox)
-            lane_text = lane.currentText().strip()
-            if lane_text:
-                sig["group"] = lane_text
-            else:
-                sig.pop("group", None)  # the default lane
-
-            key = item.data(0, ROLE_KEY)
-            if not isinstance(key, str) or not key or key in signals:
-                key = self._unique_signal_key(fld or label, signals)
-                item.setData(0, ROLE_KEY, key)
-            signals[key] = sig
-        data["signals"] = signals
-        return self.key_edit.text(), data  # type: ignore[return-value]
-
-    def _put_time(self, data: dict[str, Any]) -> None:
-        """Writes the time base, touching only keys that were there or now differ."""
-        original = data.get("time")
-        time_cfg: dict[str, Any] = copy.deepcopy(original) if isinstance(original, dict) else {}
-        edited: list[tuple[str, Any, Any]] = [
-            ("field", self.time_field_combo.currentText(), LOOP_CNTR_NAME),
-            ("scale_s", _parse_number(self.time_scale_edit.text()), DEFAULT_SCALE_S),
-            ("step", _parse_number(self.time_step_edit.text()), 1),
-        ]
-        for key, value, default in edited:
-            if key in time_cfg or value != default:
-                time_cfg[key] = value
-        if time_cfg or isinstance(original, dict):
-            data["time"] = time_cfg
-
-    def _refresh_time_field_combo(self, current: str | None = None) -> None:
-        """Lists the frame's fields as time field choices, keeping the selection."""
-        combo = self.time_field_combo
-        current = combo.currentText() if current is None else current
-        fields = self.get_fields()
-        combo.blockSignals(True)
-        combo.clear()
-        combo.addItems(fields)
-        if current and current not in fields:
-            combo.addItem(current)  # stale choice stays visible; validation flags it
-        combo.setCurrentText(current)
-        combo.blockSignals(False)
-
-    @staticmethod
-    def _unique_signal_key(base: str, taken: dict[str, Any]) -> str:
-        """Signal keys identify signals, so two signals on one field must not collide (C4d)."""
-        stem = re.sub(r"[^a-zA-Z0-9_]", "", base) or "signal"
-        key, n = stem, 2
-        while key in taken:
-            key, n = f"{stem}_{n}", n + 1
+    def new_lane(self, label: str | None = None) -> str:
+        """Adds a lane (named `label`, else "Lane N"); returns its key."""
+        taken = {k for k, _ in self._lanes()}
+        if label is None:
+            n = len(taken) + 1
+            while f"lane{n}" in taken:
+                n += 1
+            label = f"Lane {n}"
+        key = unique_name(label.lower(), taken, fallback="lane")
+        self.draft.set_lane_label(key, label)
         return key
 
-    # --- Helpers ---
-    def add_frame_row(
-        self, name: str = "", ftype: str = "f32", original: dict[str, Any] | None = None
-    ) -> None:
-        r = self.frame_table.rowCount()
-        self.frame_table.insertRow(r)
-        item = QtWidgets.QTableWidgetItem(name)
-        item.setData(ROLE_ORIGINAL, _Original(original))
-        self.frame_table.setItem(r, 0, item)
-        combo = QtWidgets.QComboBox()
-        for k, v in STRUCT_TYPE_MAP.items():
-            combo.addItem(v[2], k)
-        if combo.findData(ftype) < 0:
-            combo.addItem(ftype, ftype)  # keep unknown types visible; validation reports them
-        combo.setCurrentIndex(combo.findData(ftype))
-        self.frame_table.setCellWidget(r, 1, combo)
-        self._refresh_field_combos()
-
-    def remove_table_row(self, t: QtWidgets.QTableWidget) -> None:
-        if t.currentRow() >= 0:
-            t.removeRow(t.currentRow())
-            self._refresh_field_combos()
-
-    def _refresh_field_combos(self) -> None:
-        """Re-lists frame fields in every signal's "Field Map", keeping each selection."""
-        self._refresh_time_field_combo()
-        fields = self.get_fields()
-        root = self.sig_tree.invisibleRootItem()
-        if root is None:
+    def _on_tree_item_changed(self, item: QtWidgets.QTreeWidgetItem, column: int) -> None:
+        sid = item.data(0, ROLE_SIGNAL)
+        if column != 0 or not isinstance(sid, str) or sid.startswith(FIELD_MARK):
             return
-        for i in range(root.childCount()):
-            item = root.child(i)
-            combo = self.sig_tree.itemWidget(item, 1) if item is not None else None
-            if not isinstance(combo, QtWidgets.QComboBox):
+        visible = item.checkState(0) == QtCore.Qt.CheckState.Checked
+        if visible != self.draft.signal(sid).get("visible", True):
+            self.draft.set_signal(sid, "visible", visible)
+            self._signal, self._field = sid, str(self.draft.signal(sid).get("field"))
+            self._edited()
+
+    def _on_dropped(self, sid: str, lane: str) -> None:
+        """A drag onto a lane: plot a field there, move a signal, or stop plotting it."""
+        if sid.startswith(FIELD_MARK):
+            if lane == UNPLOTTED_LANE:
+                return
+            field = sid[len(FIELD_MARK) :]
+            lane = self.new_lane() if lane == NEW_LANE else lane
+            self._field, self._signal = field, self.draft.add_signal(field, lane or None)
+        elif lane == UNPLOTTED_LANE:
+            field = str(self.draft.signal(sid).get("field"))
+            self.draft.remove_signal(sid)
+            self._select_field(field)
+        else:
+            lane = self.new_lane() if lane == NEW_LANE else lane
+            self.draft.set_signal(sid, "group", lane)
+            self._signal = sid
+        self._edited()
+
+    def _toggle_plot(self) -> None:
+        if self._field is None:
+            return
+        if self._signal is not None:
+            self.draft.remove_signal(self._signal)
+            self._select_field(self._field)
+        else:
+            self._signal = self.draft.add_signal(self._field)
+        self._edited()
+
+    def add_field_after(self) -> None:
+        index = self._field_index()
+        at = (index + 1) if index is not None else len(self.draft.fields)
+        at = self.draft.add_field(at)
+        self._select_field(self.draft.field_names()[at])
+        self._edited()
+        self.field_name_edit.setFocus()
+        self.field_name_edit.selectAll()
+
+    def remove_selected_field(self) -> None:
+        index = self._field_index()
+        if index is None:
+            return
+        self.draft.remove_field(index)
+        names = self.draft.field_names()
+        self._select_field(names[min(index, len(names) - 1)] if names else None)
+        self._edited()
+
+    def move_selected_field(self, delta: int) -> None:
+        index = self._field_index()
+        if index is not None:
+            self.draft.move_field(index, index + delta)
+            self._edited()
+
+    # --- menus ---
+
+    def _field_menu(self) -> QtWidgets.QMenu:
+        menu = QtWidgets.QMenu(self)
+        for text, slot in (
+            ("Stop plotting" if self._signal else "Plot this field", self._toggle_plot),
+            (None, None),
+            ("Add field after", self.add_field_after),
+            ("Move earlier", lambda: self.move_selected_field(-1)),
+            ("Move later", lambda: self.move_selected_field(1)),
+            (None, None),
+            ("Remove field", self.remove_selected_field),
+        ):
+            if text is None or slot is None:
+                menu.addSeparator()
                 continue
-            current = combo.currentText()
-            combo.blockSignals(True)
-            combo.clear()
-            combo.addItems(fields)
-            if current and current not in fields:
-                combo.addItem(current)  # stale mapping stays visible; validation flags it
-            combo.setCurrentText(current)
-            combo.blockSignals(False)
+            action = menu.addAction(text)
+            assert action is not None
+            action.triggered.connect(slot)
+        return menu
 
-    def _frame_name(self, row: int) -> str:
-        item = self.frame_table.item(row, 0)
-        return item.text() if item is not None else ""
+    def _show_field_menu(self, _index: int, pos: QtCore.QPoint) -> None:
+        self._field_menu().exec(pos)
 
-    def get_fields(self) -> list[str]:
-        return [
-            self._frame_name(r).strip()
-            for r in range(self.frame_table.rowCount())
-            if self._frame_name(r).strip()
-        ]
+    def _on_tree_menu(self, pos: QtCore.QPoint) -> None:
+        item = self.tree.itemAt(pos)
+        viewport = self.tree.viewport()
+        if item is None or viewport is None:
+            return
+        global_pos = viewport.mapToGlobal(pos)
+        lane = item.data(0, ROLE_LANE)
+        if isinstance(lane, str):
+            if lane not in (UNPLOTTED_LANE, DEFAULT_LANE):  # the default lane has no entry
+                menu = QtWidgets.QMenu(self)
+                action = menu.addAction("Rename lane…")
+                assert action is not None
+                action.triggered.connect(lambda: self.rename_lane(lane))
+                menu.exec(global_pos)
+            return
+        self._on_tree_current(item)
+        self._field_menu().exec(global_pos)
 
-    def add_signal_item(self) -> None:
-        # Adds directly to root (flat list)
-        self.add_signal_row()
-
-    def add_signal_row(
-        self,
-        d: dict[str, Any] | None = None,
-        key: str | None = None,
-        original: dict[str, Any] | None = None,
-    ) -> None:
-        if not d:
-            d = {
-                "label": "New Signal",
-                "field": "",
-                "color": "#4FC3F7",
-                "visible": True,
-                "style": "solid",
-                "width": DEFAULT_LINE_WIDTH,
-            }
-
-        item = QtWidgets.QTreeWidgetItem(self.sig_tree)
-        item.setText(0, d["label"])
-        item.setData(0, ROLE_KEY, key)
-        item.setData(0, ROLE_ORIGINAL, _Original(original))
-        item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsEditable)
-
-        # Style row
-        for c in range(len(self.sig_cols)):
-            item.setSizeHint(c, QtCore.QSize(0, 30))
-            item.setForeground(c, QtGui.QBrush(QtGui.QColor("#e0e0e0")))
-
-        # Col 1: Field Map
-        cb_fld = QtWidgets.QComboBox()
-        cb_fld.addItems(self.get_fields())
-        if d["field"] and d["field"] not in self.get_fields():
-            cb_fld.addItem(d["field"])
-        cb_fld.setCurrentText(d["field"])
-
-        # Col 3: Visible Checkbox
-        chk = QtWidgets.QCheckBox()
-        chk.setChecked(d["visible"])
-        w_chk = QtWidgets.QWidget()
-        chk_layout = QtWidgets.QHBoxLayout(w_chk)
-        chk_layout.setContentsMargins(0, 0, 0, 0)
-        chk_layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        chk_layout.addWidget(chk)
-
-        # Col 4: Style
-        cb_sty = QtWidgets.QComboBox()
-        cb_sty.addItems(["solid", "dashed", "dotted"])
-        cb_sty.setCurrentText(d["style"])
-
-        # Col 5: Line width (1 px draws fastest; see P4)
-        sb_width = QtWidgets.QSpinBox()
-        sb_width.setRange(1, 5)
-        sb_width.setValue(int(d["width"]))
-
-        self.sig_tree.setItemWidget(item, 1, cb_fld)
-        self.sig_tree.setItemWidget(item, 2, ColorButton(d["color"]))
-        self.sig_tree.setItemWidget(item, 3, w_chk)
-        self.sig_tree.setItemWidget(item, 4, cb_sty)
-        self.sig_tree.setItemWidget(item, 5, sb_width)
-
-        # Col 6: Lane (signals[*].group); empty is the default lane, a new name a new lane
-        cb_lane = QtWidgets.QComboBox()
-        cb_lane.setEditable(True)
-        cb_lane.addItem("")
-        cb_lane.addItems(self._lane_choices)
-        lane = d.get("lane", "")
-        if lane and cb_lane.findText(lane) < 0:
-            cb_lane.addItem(lane)
-        cb_lane.setCurrentText(lane)
-        self.sig_tree.setItemWidget(item, 6, cb_lane)
-
-    def remove_tree_item(self) -> None:
-        # Removes selected signal
-        for item in self.sig_tree.selectedItems():
-            index = self.sig_tree.indexOfTopLevelItem(item)
-            self.sig_tree.takeTopLevelItem(index)
+    def rename_lane(self, lane: str, label: str | None = None) -> None:
+        if label is None:
+            current = self.draft.lane_label(lane) or lane or DEFAULT_LANE_LABEL
+            label, ok = QtWidgets.QInputDialog.getText(self, "Rename lane", "Lane:", text=current)
+            if not ok:
+                return
+        if label.strip():
+            self.draft.set_lane_label(lane, label.strip())
+            self._edited()

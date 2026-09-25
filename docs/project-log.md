@@ -6,6 +6,28 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — Phase 7: configuration editor in the scope's look, C structs (R7.1–R7.3)
+
+- **Editor (R7.1, ADR-0009).** Rebuilt after a design spike; denser drafts (live values,
+  lane previews, hint cards) were rejected as too much information.
+  - Streams as tabs, the stream's settings on one row (`× 5 ms` time per tick), the frame
+    drawn like a bus decode (32 B per row, a hexagon per field in its signal's color), the
+    signals by lane like the Signals dock (plus "Not plotted"), and a form for the field.
+  - Drag a field onto a lane to plot it, a signal onto "Not plotted" to remove it. Save
+    turns orange with unsaved changes; Revert; Ctrl+S; problems show in the status line.
+  - Edits go through a Qt-free `StreamDraft` (`core/config/draft.py`) instead of rebuilding
+    the stream from widgets. Found while testing: a label left in the form by the previous
+    stream was applied to a newly plotted field; now only typed text is applied.
+- **From C struct… (R7.2) and Copy as C struct (R7.3)** (`core/config/cstruct.py`): new
+  stream or replace fields; unpacked padding kept as `_pad` fields; long, pointers,
+  bit-fields and nested structs listed, not guessed. All bundled streams round-trip.
+- Tests: 316 with Qt (+40: model, parser, editor); 255 + 61 skipped without. The old
+  editor tests were rewritten for the new widgets, keeping what they check (byte-identical
+  save, edits surviving a switch, refused invalid save, time base, lanes, schema 1).
+  Plot and data path untouched (no benchmark change).
+
+---
+
 ## 2026-09-25 — Dashboard UX follow-up: scrubbing, drag between lanes, Esc (R6.2, R6.4)
 
 The three items ADR-0008 left out:
