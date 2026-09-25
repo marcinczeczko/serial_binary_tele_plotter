@@ -38,9 +38,9 @@ from ui.panels.connection import BAUD_RATES
 logger = logging.getLogger(__name__)
 
 SAVE_DIRTY = (
-    "QPushButton { background-color: #f08c00; border: 1px solid #f0a030;"
-    " color: white; font-weight: bold; }"
-    " QPushButton:hover { background-color: #ff9d1a; }"
+    "QPushButton { background: #FFB000; border: 1px solid #FFB000; color: #000;"
+    " font-weight: bold; }"
+    " QPushButton:hover { background: #FFC233; border-color: #FFC233; }"
 )
 
 
@@ -87,7 +87,7 @@ class ConfiguratorTab(QtWidgets.QWidget):
         self.printf_btn.setToolTip("The C line that prints this stream's pattern")
         self.delete_btn = QtWidgets.QPushButton("Delete stream")
         self.dirty_lbl = QtWidgets.QLabel("")
-        self.dirty_lbl.setStyleSheet("color: #f0a030; font-weight: bold;")
+        self.dirty_lbl.setStyleSheet("color: #FFB000; font-weight: bold;")
         self.revert_btn = QtWidgets.QPushButton("Revert")
         self.save_btn = QtWidgets.QPushButton("Save")
         self.save_btn.setToolTip("Save streams.json (Ctrl+S)")
@@ -425,14 +425,14 @@ class ConfiguratorTab(QtWidgets.QWidget):
         shown = errors or problems
         if self.editor.pattern_error is not None:
             self.status_lbl.setText(
-                f'{text} · <span style="color:#ff6b6b">{self.editor.pattern_error}</span>'
+                f'{text} · <span style="color:#FF4040">{self.editor.pattern_error}</span>'
             )
             self.status_lbl.setToolTip("Not applied: fix the pattern, or Esc to drop the edit")
             return
         if shown:
             first = shown[0].message
             more = f" (+{len(shown) - 1} more)" if len(shown) > 1 else ""
-            color = "#ff6b6b" if errors else "#f0a030"
+            color = "#FF4040" if errors else "#FFB000"
             self.status_lbl.setText(f'{text} · <span style="color:{color}">{first}{more}</span>')
             self.status_lbl.setToolTip("\n".join(str(p) for p in problems))
         else:
@@ -443,7 +443,7 @@ class ConfiguratorTab(QtWidgets.QWidget):
         if self.editor.pattern_error is not None:
             self._update_status()  # the stream line with the pattern's error
             return
-        self.status_lbl.setText(f'<span style="color:#ff6b6b">{message}</span>')
+        self.status_lbl.setText(f'<span style="color:#FF4040">{message}</span>')
 
     def rename_stream(self, new_key: str) -> None:
         old = self.current_key()

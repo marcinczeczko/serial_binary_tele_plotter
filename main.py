@@ -46,7 +46,9 @@ def main() -> int:
     args, qt_args = parse_args(sys.argv[1:])
     app = QtWidgets.QApplication(sys.argv[:1] + qt_args)
 
-    # Apply the global dark theme
+    # Numbers read and write with a dot whatever the system locale (ADR-0012), then the scope
+    # look: square flat styling and the bundled B612 fonts.
+    QtCore.QLocale.setDefault(QtCore.QLocale.c())
     apply_dark_theme(app)
 
     # Pick the config file: --config, then the last used one, then the bundled default (C10).

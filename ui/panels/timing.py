@@ -13,7 +13,9 @@ from __future__ import annotations
 
 from PyQt6 import QtCore, QtWidgets
 
-_OVERRIDE_STYLE = "QDoubleSpinBox { color: #FFB74D; }"
+from ui.common.numbers import ScopeDoubleSpinBox
+
+_OVERRIDE_STYLE = "QDoubleSpinBox { color: #FFB000; }"
 
 
 class TimeConfigPanel(QtWidgets.QWidget):
@@ -36,7 +38,7 @@ class TimeConfigPanel(QtWidgets.QWidget):
         self._configured_ms: float | None = None
 
         # --- Period of the shown stream ---
-        self.period_sb = QtWidgets.QDoubleSpinBox()
+        self.period_sb = ScopeDoubleSpinBox()
         self.period_sb.setDecimals(3)
         self.period_sb.setRange(0.001, 60_000.0)
         self.period_sb.setValue(5.0)

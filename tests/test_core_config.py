@@ -297,3 +297,18 @@ def test_commands_and_panels_are_ignored_in_a_text_profile(tmp_path):
     path.write_text(json.dumps(doc), encoding="utf-8")
     loader = StreamConfigLoader(path)
     assert loader.commands == {} and loader.panels == {}
+
+
+def test_bundled_profile_uses_the_scope_palette():
+    """R9.1: scope colours on black; a motor's left and right copies share a hue."""
+    from core.config import DEFAULT_CONFIG_PATH
+
+    streams = StreamConfigLoader(DEFAULT_CONFIG_PATH).list_streams()
+    signals = streams["pid"]["signals"]
+    assert signals["left_measurement"]["color"] == "#FFE81A"
+    assert signals["left_setpoint"]["color"] == "#00E5FF"
+    for cfg in streams.values():
+        sigs = cfg["signals"]
+        for key, sig in sigs.items():
+            if key.startswith("left_") and "right_" + key[5:] in sigs:
+                assert sig["color"] == sigs["right_" + key[5:]]["color"], key

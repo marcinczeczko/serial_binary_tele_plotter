@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.config.draft import FieldSlot
+from styles import mono_font
 
 BYTES_PER_ROW = 32
 GUTTER = 44
@@ -21,7 +22,7 @@ ROW_GAP = 5
 TICKS_HEIGHT = 14
 PAD = 8
 POINT = 5  # how far a hexagon's ends stick out
-SCOPE_BG = QtGui.QColor("#1b1306")
+SCOPE_BG = QtGui.QColor("#000000")
 BORDER = QtGui.QColor("#333333")
 TICK_TEXT = QtGui.QColor("#777777")
 OFFSET_TEXT = QtGui.QColor("#888888")
@@ -154,8 +155,7 @@ class FrameView(QtWidgets.QWidget):
         painter.setPen(BORDER)
         painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
 
-        mono = QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.SystemFont.FixedFont)
-        mono.setPointSizeF(max(7.0, self.font().pointSizeF() - 1.5))
+        mono = mono_font(max(7.0, self.font().pointSizeF() - 1.5))
         painter.setFont(mono)
         bw = self.byte_width()
         painter.setPen(TICK_TEXT)

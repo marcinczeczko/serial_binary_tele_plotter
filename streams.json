@@ -480,7 +480,7 @@
                 "left_target_setpoint": {
                     "label": "L: Target Setpoint",
                     "field": "left_target_setpoint",
-                    "color": "#4FC3F7",
+                    "color": "#C8C8C8",
                     "visible": true,
                     "line": {
                         "style": "dotted",
@@ -491,7 +491,7 @@
                 "left_delta_ticks": {
                     "label": "L: Delta Ticks",
                     "field": "left_delta_ticks",
-                    "color": "#BA68C8",
+                    "color": "#D080FF",
                     "visible": false,
                     "line": {
                         "style": "solid",
@@ -502,7 +502,7 @@
                 "left_setpoint": {
                     "label": "L: Setpoint",
                     "field": "left_setpoint",
-                    "color": "#4FC3F7",
+                    "color": "#00E5FF",
                     "visible": true,
                     "line": {
                         "style": "dashed",
@@ -513,7 +513,7 @@
                 "left_measurement": {
                     "label": "L: Measurement",
                     "field": "left_measurement",
-                    "color": "#81C784",
+                    "color": "#FFE81A",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -524,7 +524,7 @@
                 "left_measurementRaw": {
                     "label": "L: Meas Raw",
                     "field": "left_measurementRaw",
-                    "color": "#43A047",
+                    "color": "#A6A040",
                     "visible": false,
                     "line": {
                         "style": "dotted",
@@ -535,7 +535,7 @@
                 "left_error": {
                     "label": "L: Error",
                     "field": "left_error",
-                    "color": "#BA68C8",
+                    "color": "#FF4FD8",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -546,7 +546,7 @@
                 "left_integral": {
                     "label": "L: Integral",
                     "field": "left_integral",
-                    "color": "#64B5F6",
+                    "color": "#A070FF",
                     "visible": false,
                     "line": {
                         "style": "solid",
@@ -557,7 +557,7 @@
                 "left_u_ff": {
                     "label": "L: U_FF",
                     "field": "left_u_ff",
-                    "color": "#4FC3F7",
+                    "color": "#3D8BFF",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -568,7 +568,7 @@
                 "left_u_pi": {
                     "label": "L: U_PI",
                     "field": "left_u_pi",
-                    "color": "#66f46d",
+                    "color": "#3DFF6E",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -579,7 +579,7 @@
                 "left_u_virtual": {
                     "label": "L: U_VIRTUAL",
                     "field": "left_u_virtual",
-                    "color": "#4FC3F7",
+                    "color": "#35C9B0",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -590,7 +590,7 @@
                 "left_u_sat": {
                     "label": "L: U_SAT",
                     "field": "left_u_sat",
-                    "color": "#f49600",
+                    "color": "#C8B400",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -601,7 +601,7 @@
                 "left_pTerm": {
                     "label": "L: P Term",
                     "field": "left_pTerm",
-                    "color": "#E57373",
+                    "color": "#FF8FA0",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -612,7 +612,7 @@
                 "left_iTerm": {
                     "label": "L: I Term",
                     "field": "left_iTerm",
-                    "color": "#64B5F6",
+                    "color": "#B388FF",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -623,7 +623,7 @@
                 "left_aw_term": {
                     "label": "L: AW Term",
                     "field": "left_aw_term",
-                    "color": "#f46de9",
+                    "color": "#FF80C0",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -634,7 +634,7 @@
                 "left_outputRaw": {
                     "label": "L: Output Raw",
                     "field": "left_outputRaw",
-                    "color": "#FFB74D",
+                    "color": "#FF9E8A",
                     "visible": false,
                     "line": {
                         "style": "dotted",
@@ -645,7 +645,7 @@
                 "left_output": {
                     "label": "L: Output",
                     "field": "left_output",
-                    "color": "#FFB74D",
+                    "color": "#FF5A5A",
                     "visible": true,
                     "line": {
                         "style": "dotted",
@@ -656,7 +656,7 @@
                 "left_pwm_cmd": {
                     "label": "L: PWM cmd",
                     "field": "left_pwm_cmd",
-                    "color": "#FFB74D",
+                    "color": "#FF5A5A",
                     "visible": true,
                     "line": {
                         "style": "dotted",
@@ -667,7 +667,7 @@
                 "right_target_setpoint": {
                     "label": "R: Target Setpoint",
                     "field": "right_target_setpoint",
-                    "color": "#4FC3F7",
+                    "color": "#C8C8C8",
                     "visible": true,
                     "line": {
                         "style": "dotted",
@@ -678,7 +678,7 @@
                 "right_delta_ticks": {
                     "label": "R: Delta Ticks",
                     "field": "right_delta_ticks",
-                    "color": "#BA68C8",
+                    "color": "#D080FF",
                     "visible": false,
                     "line": {
                         "style": "solid",
@@ -689,7 +689,7 @@
                 "right_setpoint": {
                     "label": "R: Setpoint",
                     "field": "right_setpoint",
-                    "color": "#4FC3F7",
+                    "color": "#00E5FF",
                     "visible": true,
                     "line": {
                         "style": "dashed",
@@ -700,7 +700,7 @@
                 "right_measurement": {
                     "label": "R: Measurement",
                     "field": "right_measurement",
-                    "color": "#81C784",
+                    "color": "#FFE81A",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -711,7 +711,7 @@
                 "right_measurementRaw": {
                     "label": "R: Meas Raw",
                     "field": "right_measurementRaw",
-                    "color": "#43A047",
+                    "color": "#A6A040",
                     "visible": false,
                     "line": {
                         "style": "dotted",
@@ -722,7 +722,7 @@
                 "right_error": {
                     "label": "R: Error",
                     "field": "right_error",
-                    "color": "#BA68C8",
+                    "color": "#FF4FD8",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -733,7 +733,7 @@
                 "right_integral": {
                     "label": "R: Integral",
                     "field": "right_integral",
-                    "color": "#64B5F6",
+                    "color": "#A070FF",
                     "visible": false,
                     "line": {
                         "style": "solid",
@@ -744,7 +744,7 @@
                 "right_u_ff": {
                     "label": "R: U_FF",
                     "field": "right_u_ff",
-                    "color": "#4FC3F7",
+                    "color": "#3D8BFF",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -755,7 +755,7 @@
                 "right_u_pi": {
                     "label": "R: U_PI",
                     "field": "right_u_pi",
-                    "color": "#4FC3F7",
+                    "color": "#3DFF6E",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -766,7 +766,7 @@
                 "right_u_virtual": {
                     "label": "R: U_VIRTUAL",
                     "field": "right_u_virtual",
-                    "color": "#4FC3F7",
+                    "color": "#35C9B0",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -777,7 +777,7 @@
                 "right_u_sat": {
                     "label": "R: U_SAT",
                     "field": "right_u_sat",
-                    "color": "#4FC3F7",
+                    "color": "#C8B400",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -788,7 +788,7 @@
                 "right_iTerm": {
                     "label": "R: I Term",
                     "field": "right_iTerm",
-                    "color": "#64B5F6",
+                    "color": "#B388FF",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -799,7 +799,7 @@
                 "right_pTerm": {
                     "label": "R: P Term",
                     "field": "right_pTerm",
-                    "color": "#E57373",
+                    "color": "#FF8FA0",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -810,7 +810,7 @@
                 "right_aw_term": {
                     "label": "R: AW Term",
                     "field": "right_aw_term",
-                    "color": "#4FC3F7",
+                    "color": "#FF80C0",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -821,7 +821,7 @@
                 "right_outputRaw": {
                     "label": "R: Output Raw",
                     "field": "right_outputRaw",
-                    "color": "#FFB74D",
+                    "color": "#FF9E8A",
                     "visible": false,
                     "line": {
                         "style": "dotted",
@@ -832,7 +832,7 @@
                 "right_output": {
                     "label": "R: Output",
                     "field": "right_output",
-                    "color": "#FFB74D",
+                    "color": "#FF5A5A",
                     "visible": true,
                     "line": {
                         "style": "dotted",
@@ -843,7 +843,7 @@
                 "right_pwm_cmd": {
                     "label": "R: PWM cmd",
                     "field": "right_pwm_cmd",
-                    "color": "#FFB74D",
+                    "color": "#FF5A5A",
                     "visible": true,
                     "line": {
                         "style": "dotted",
@@ -1033,7 +1033,7 @@
                 "left_target_setpoint": {
                     "label": "L: Target Setpoint",
                     "field": "left_target_setpoint",
-                    "color": "#4FC3F7",
+                    "color": "#C8C8C8",
                     "visible": true,
                     "line": {
                         "style": "dotted",
@@ -1044,7 +1044,7 @@
                 "left_setpoint": {
                     "label": "L: Setpoint",
                     "field": "left_setpoint",
-                    "color": "#4FC3F7",
+                    "color": "#00E5FF",
                     "visible": true,
                     "line": {
                         "style": "dashed",
@@ -1055,7 +1055,7 @@
                 "left_measurement": {
                     "label": "L: Measurement",
                     "field": "left_measurement",
-                    "color": "#00f900",
+                    "color": "#FFE81A",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -1066,7 +1066,7 @@
                 "left_integral": {
                     "label": "L: Integral",
                     "field": "left_integral",
-                    "color": "#0433ff",
+                    "color": "#A070FF",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -1077,7 +1077,7 @@
                 "left_u_ff": {
                     "label": "L: U_FF",
                     "field": "left_u_ff",
-                    "color": "#ff9300",
+                    "color": "#3D8BFF",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -1088,7 +1088,7 @@
                 "left_u_pi": {
                     "label": "L: U_PI",
                     "field": "left_u_pi",
-                    "color": "#ff2600",
+                    "color": "#3DFF6E",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -1099,7 +1099,7 @@
                 "left_u_virtual": {
                     "label": "L: U_VIRTUAL",
                     "field": "left_u_virtual",
-                    "color": "#942192",
+                    "color": "#35C9B0",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -1110,7 +1110,7 @@
                 "left_u_sat": {
                     "label": "L: U_SAT",
                     "field": "left_u_sat",
-                    "color": "#ffffff",
+                    "color": "#C8B400",
                     "visible": true,
                     "line": {
                         "style": "dashed",
@@ -1121,7 +1121,7 @@
                 "right_target_setpoint": {
                     "label": "R: Target Setpoint",
                     "field": "right_target_setpoint",
-                    "color": "#4FC3F7",
+                    "color": "#C8C8C8",
                     "visible": true,
                     "line": {
                         "style": "dotted",
@@ -1132,7 +1132,7 @@
                 "right_setpoint": {
                     "label": "R: Setpoint",
                     "field": "right_setpoint",
-                    "color": "#4FC3F7",
+                    "color": "#00E5FF",
                     "visible": true,
                     "line": {
                         "style": "dashed",
@@ -1143,7 +1143,7 @@
                 "right_measurement": {
                     "label": "R: Measurement",
                     "field": "right_measurement",
-                    "color": "#00f900",
+                    "color": "#FFE81A",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -1154,7 +1154,7 @@
                 "right_integral": {
                     "label": "R: Integral",
                     "field": "right_integral",
-                    "color": "#0433ff",
+                    "color": "#A070FF",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -1165,7 +1165,7 @@
                 "right_u_ff": {
                     "label": "R: U_FF",
                     "field": "right_u_ff",
-                    "color": "#ff9300",
+                    "color": "#3D8BFF",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -1176,7 +1176,7 @@
                 "right_u_pi": {
                     "label": "R: U_PI",
                     "field": "right_u_pi",
-                    "color": "#ff2600",
+                    "color": "#3DFF6E",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -1187,7 +1187,7 @@
                 "right_u_virtual": {
                     "label": "R: U_VIRTUAL",
                     "field": "right_u_virtual",
-                    "color": "#942192",
+                    "color": "#35C9B0",
                     "visible": true,
                     "line": {
                         "style": "solid",
@@ -1198,7 +1198,7 @@
                 "right_u_sat": {
                     "label": "R: U_SAT",
                     "field": "right_u_sat",
-                    "color": "#ffffff",
+                    "color": "#C8B400",
                     "visible": true,
                     "line": {
                         "style": "dashed",
@@ -1209,7 +1209,7 @@
                 "left_pwm_cmd": {
                     "label": "L: PWM_CMD",
                     "field": "left_pwm_cmd",
-                    "color": "#00fdff",
+                    "color": "#FF5A5A",
                     "visible": true,
                     "line": {
                         "style": "dashed",
@@ -1320,7 +1320,7 @@
                     "label": "Acc X",
                     "field": "acc_x",
                     "group": "accel",
-                    "color": "#EF5350",
+                    "color": "#FFE81A",
                     "line": {
                         "style": "solid",
                         "width": 1
@@ -1335,7 +1335,7 @@
                     "label": "Acc Y",
                     "field": "acc_y",
                     "group": "accel",
-                    "color": "#66BB6A",
+                    "color": "#00E5FF",
                     "line": {
                         "style": "solid",
                         "width": 1
@@ -1350,7 +1350,7 @@
                     "label": "Acc Z",
                     "field": "acc_z",
                     "group": "accel",
-                    "color": "#42A5F5",
+                    "color": "#FF4FD8",
                     "line": {
                         "style": "solid",
                         "width": 1
@@ -1365,7 +1365,7 @@
                     "label": "Gyro X",
                     "field": "gyro_x",
                     "group": "gyro",
-                    "color": "#FFCA28",
+                    "color": "#3D8BFF",
                     "line": {
                         "style": "dashed",
                         "width": 1
@@ -1380,7 +1380,7 @@
                     "label": "Gyro Z",
                     "field": "gyro_z",
                     "group": "gyro",
-                    "color": "#AB47BC",
+                    "color": "#3DFF6E",
                     "line": {
                         "style": "dashed",
                         "width": 1

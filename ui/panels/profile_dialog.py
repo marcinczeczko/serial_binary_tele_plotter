@@ -13,6 +13,7 @@ from PyQt6 import QtWidgets
 
 from core.config.profile import FORMAT_LABELS, new_profile_document, profile_filename
 from core.protocol.link import BINARY, LINK_FORMATS
+from styles import MONO_CSS
 from ui.panels.connection import BAUD_RATES
 
 
@@ -58,7 +59,7 @@ class ProfileDialog(QtWidgets.QDialog):
         form.addRow("Start from:", self.start_combo)
 
         self.path_lbl = QtWidgets.QLabel("")
-        self.path_lbl.setStyleSheet("color: #888; font-family: monospace;")
+        self.path_lbl.setStyleSheet("color: #888; " + MONO_CSS)
         self.path_lbl.setWordWrap(True)
         form.addRow("Saved as:", self.path_lbl)
 

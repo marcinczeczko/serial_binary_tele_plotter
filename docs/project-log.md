@@ -6,6 +6,30 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — R9.1 Look: square, flat, B612, scope palette, dot decimals
+
+- `styles.py` is the scope look (ADR-0012 decision 3): colour tokens, a flat grey palette and
+  one square QSS for every widget type (buttons, inputs, combos, menus, tabs, headers,
+  scroll bars, check indicators). Inline styles lost their rounded corners and hues moved to
+  the language: amber = edited (PID inputs, Live, unsent, dirty Save), red = stopped/fault,
+  orange = trigger; `Connect` is lit and `Disconnect` grey (finding 2).
+- B612 / B612 Mono (SIL OFL 1.1, with `OFL.txt`) bundled in `assets/fonts/`: 534 kB for
+  Regular + Bold of each. `load_fonts()` registers them at start-up; `mono_font()` replaces
+  the `monospace` / system fixed fonts.
+- Numbers (finding 12): `ui/common/numbers.py` `format_number` and `ScopeDoubleSpinBox`
+  (C locale, trailing zeros dropped, a typed comma accepted); `main.py` sets the C locale as
+  the default. PID panel, time window, trigger, readouts: `0.12`, not `0,1200`.
+- `streams.json`: the scope palette (Measurement `#FFE81A`, Setpoint `#00E5FF`, …; L and R
+  share a hue until R9.4 dashes R). Colours only; the v1 fixture follows so the migration
+  test still pins the file.
+- Tests: `tests/test_qt_scope_look.py` (fonts load, no non-zero `border-radius` anywhere,
+  spin boxes under a Polish locale) and a palette test. The plot code is untouched apart
+  from colours (anchor line grey, trigger orange) and `bench_render.py` doesn't load the
+  theme, so it wasn't rerun. `test_serial_transport_over_a_real_pty` fails on macOS on `main`
+  too (pty ioctl), unrelated.
+
+---
+
 ## 2026-09-25 — Phase 9 planned: the scope view (design approved)
 
 - Design review of the main view: 19 findings (always-on zero counters, labels shown twice,

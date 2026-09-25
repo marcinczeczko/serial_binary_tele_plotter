@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+from styles import MONO_CSS
+
 
 class ColorButton(QtWidgets.QPushButton):
     """
@@ -37,11 +39,11 @@ class ColorButton(QtWidgets.QPushButton):
         self.setStyleSheet(
             f"""
             QPushButton {{
-                background-color: {self.hex_color}; 
-                color: {text_col}; 
-                border: 1px solid #555; 
-                border-radius: 2px;
-                font-family: monospace;
+                background-color: {self.hex_color};
+                color: {text_col};
+                border: 1px solid #555;
+                border-radius: 0;
+                {MONO_CSS}
                 font-weight: bold;
                 padding: 0px;
             }}

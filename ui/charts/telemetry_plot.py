@@ -46,8 +46,8 @@ AXIS_WIDTH = 64  # px: equal left-axis widths keep the lanes' time axes aligned
 RANGE_UPDATE_INTERVAL_S = 0.2
 MIN_BUCKETS = 300  # before the view has a real width
 CURSOR_RATE_HZ = 60  # mouse-move readout updates per second (P7)
-MARKER_COLOR = "#F2A93B"
-TRIGGER_COLOR = "#F2A93B"
+MARKER_COLOR = "#FFB000"
+TRIGGER_COLOR = "#FF9A1A"
 MODE_LABELS = {"auto": "Auto (fit view)", "auto-grow": "Auto-grow", "manual": "Manual"}
 
 _PEN_STYLES = {
@@ -103,7 +103,7 @@ class Lane:
         self.anchor = pg.InfiniteLine(
             angle=90,
             movable=True,
-            pen=pg.mkPen("#00E676", style=QtCore.Qt.PenStyle.DashLine, width=2),
+            pen=pg.mkPen("#C8C8C8", style=QtCore.Qt.PenStyle.DashLine, width=2),
         )
         self.anchor.setVisible(False)
         for item in (self.cursor, self.anchor):

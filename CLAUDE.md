@@ -17,8 +17,8 @@ so you can work without hardware.
 3. `docs/reviews/2026-09-24-architecture-review.md`: known defects, with stable IDs
    (`C*` correctness, `P*` performance, `A*` architecture, `T*` tooling).
 4. `docs/adr/`: design decisions. ADR-0002 is the target pipeline.
-5. `docs/specs/`: working specs for the next roadmap items. **Phase 9 is next (R9.1–R9.6):
-   the scope view, `docs/specs/phase9-scope-view.md` (ADR-0012, proposed). Start with R9.1.**
+5. `docs/specs/`: working specs for the next roadmap items. **Phase 9 is in progress (R9.1–R9.6):
+   the scope view, `docs/specs/phase9-scope-view.md` (ADR-0012, proposed). R9.1 done; next R9.3.**
 
 Before starting non-trivial work, check whether a roadmap item or finding already covers
 it, and reference its ID in commits and PRs.
@@ -62,7 +62,9 @@ fix one, remove its xfail.
 
 ```
 main.py                 QApplication bootstrap, SIGINT handling
-styles.py               global dark theme (QSS)
+styles.py               the scope look (ADR-0012): square flat QSS, colour tokens, bundled B612 / B612 Mono
+                        loaded at start-up (`load_fonts`, `mono_font`)
+assets/fonts/           B612 and B612 Mono TTFs with OFL.txt (SIL OFL 1.1)
 streams.json            schema 3: the bundled `diffbot` device profile: profile, streams, commands, panels
                         (single source of truth; ADR-0007, ADR-0010)
 core/types.py           TypedDict config shapes, PlotMode, EngineState
@@ -102,6 +104,8 @@ ui/config/              streams.json editor (ADR-0009): tab (toolbar, profile ro
                         stream_editor (settings row, lanes tree, field form), frame_view (bus-decode drawing),
                         line_view (a text stream's pattern and last line, R8.4), paste_dialog,
                         console_dialog (From console output…: paste or listen, infer streams)
+ui/common/              color_button, numbers (format_number, ScopeDoubleSpinBox: dot decimal, significant
+                        digits, whatever the locale; use it for every float input)
 tests/                  pytest: pure logic, stubbed-Qt legacy tests, `qt`-marked real-Qt tests
 tools/                  dev scripts (bench_pipeline.py)
 .github/workflows/      CI

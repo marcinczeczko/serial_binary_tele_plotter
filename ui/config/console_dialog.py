@@ -81,7 +81,7 @@ class PatternCard(QtWidgets.QFrame):
         grid.setVerticalSpacing(2)
         for row, value in enumerate(found.values):
             cells = (value.name, value.type, value.range_text, value.note)
-            styles = ("color: white;", "color: #888;", "color: #888;", "color: #f0a030;")
+            styles = ("color: white;", "color: #888;", "color: #888;", "color: #FFB000;")
             for col, (text, style) in enumerate(zip(cells, styles, strict=True)):
                 lbl = QtWidgets.QLabel(text)
                 lbl.setStyleSheet(style + (MONO_STYLE if col < 3 else ""))

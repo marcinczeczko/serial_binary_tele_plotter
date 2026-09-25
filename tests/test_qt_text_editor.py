@@ -122,7 +122,7 @@ def test_an_invalid_pattern_is_not_applied_and_esc_drops_it(qtbot: Any, profile:
     assert editor.pattern_error == "'{ms}' and '{ax}' need fixed text between them"
     assert editor.draft.pattern == "IMU,{ms},{ax},{ay},{az}"  # not applied
     assert editor.pattern_edit.text() == "IMU,{ms}{ax},{ay},{az}"  # still there to fix
-    assert "#ff6b6b" in editor.pattern_edit.styleSheet()
+    assert "#FF4040" in editor.pattern_edit.styleSheet()
     assert "need fixed text between them" in tab.status_lbl.text()
     assert editor.line_view._dimmed
     assert not tab.is_dirty()

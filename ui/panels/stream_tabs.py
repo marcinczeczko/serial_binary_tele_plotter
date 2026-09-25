@@ -15,8 +15,8 @@ from typing import Any
 
 from PyQt6 import QtGui, QtWidgets
 
-ACTIVE_COLOR = "#E3E7EE"
-IDLE_COLOR = "#7D8796"
+ACTIVE_COLOR = "#E0E0E0"
+IDLE_COLOR = "#8A8A8A"
 
 
 class StreamTabs(QtWidgets.QTabBar):

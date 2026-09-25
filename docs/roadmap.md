@@ -382,7 +382,7 @@ instrument font) and makes both side panes collapsible from edge tabs. Approved 
 [`docs/specs/phase9-scope-view.md`](specs/phase9-scope-view.md), with open questions to settle
 in each item's PR.
 
-- [ ] **R9.1 Look**: square, flat QSS (no rounded corners, flat greys, black plot), B612 and
+- [x] **R9.1 Look**: square, flat QSS (no rounded corners, flat greys, black plot), B612 and
   B612 Mono bundled (OFL) and loaded at start-up, the scope palette in the bundled
   `streams.json`, numbers with a dot separator and significant digits whatever the locale.
   *Done when:* no widget has rounded corners, every number shows `0.12` not `0,1200`, and the

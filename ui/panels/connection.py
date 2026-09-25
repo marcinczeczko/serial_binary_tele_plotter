@@ -20,6 +20,7 @@ from serial.tools import list_ports
 
 from core.config import Profile, ProfileEntry
 
+PAUSED_STYLE = "QPushButton { background: #D32020; color: #fff; border-color: #D32020; }"
 BAUD_RATES = ("9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600")
 
 
@@ -88,39 +89,16 @@ class ConnectionPanel(QtWidgets.QWidget):
         btn_layout = QtWidgets.QHBoxLayout()
 
         # 1. Connect Button
-        # We need extensive styling here to handle the visual state when the button
-        # is both Checked (Connected) AND Hovered.
+        # Scope style (ADR-0012): `Connect` is lit (it's the action you want), `Disconnect` grey.
         self.connect_btn = QtWidgets.QPushButton("Connect")
         self.connect_btn.setCheckable(True)
         self.connect_btn.setStyleSheet(
-            """
-            /* --- DEFAULT STATE (Disconnected) - GREEN --- */
-            QPushButton { 
-                background-color: #2E7D32; 
-                font-weight: bold; 
-                color: white; 
-                border-radius: 3px;
-                padding: 5px;
-                border: 1px solid #1b5e20;
-            }
-            
-            /* Hover (Disconnected) - Lighter Green */
-            QPushButton:hover { 
-                background-color: #388E3C; 
-            }
-
-            /* --- CHECKED STATE (Connected) - RED --- */
-            QPushButton:checked { 
-                background-color: #C62828; 
-                border: 1px solid #b71c1c;
-            }
-            
-            /* Hover (Connected) - Lighter Red */
-            /* KEY FIX: Specific rule for checked+hover to prevent reverting to green */
-            QPushButton:checked:hover { 
-                background-color: #E53935; 
-            }
-            """
+            "QPushButton { background: #d6d6d6; color: #000; border: 1px solid #d6d6d6;"
+            " font-weight: bold; }"
+            " QPushButton:hover { background: #ffffff; border-color: #ffffff; }"
+            " QPushButton:checked { background: #222; color: #bdbdbd; border-color: #484848;"
+            " font-weight: normal; }"
+            " QPushButton:checked:hover { background: #2c2c2c; border-color: #6a6a6a; }"
         )
         self.connect_btn.toggled.connect(self._on_connect_toggled)
 
@@ -259,6 +237,4 @@ class ConnectionPanel(QtWidgets.QWidget):
     def _style_pause(self, paused: bool) -> None:
         self.pause_btn.setText("Resume" if paused else "Pause")
         # Highlight the button while paused, to show the view is not live.
-        self.pause_btn.setStyleSheet(
-            "background-color: #F57F17; color: black; font-weight: bold;" if paused else ""
-        )
+        self.pause_btn.setStyleSheet(PAUSED_STYLE if paused else "")

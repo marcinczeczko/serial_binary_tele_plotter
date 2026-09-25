@@ -11,11 +11,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PyQt6 import QtCore, QtGui, QtWidgets
+from PyQt6 import QtCore, QtWidgets
 
 from core.config import ENDIANNESS
 from core.config.cstruct import ParsedStruct, parse_c_struct, replace_fields, stream_from_struct
 from core.config.draft import StreamDraft, unique_name
+from styles import mono_font
 from ui.config.frame_view import FrameView
 from ui.config.stream_editor import HEADER_STYLE, HexSpinBox, field_colors
 
@@ -49,9 +50,7 @@ class PasteStructDialog(QtWidgets.QDialog):
         title.setStyleSheet("color: #aaa; font-weight: bold;")
         left.addWidget(title)
         self.source_edit = QtWidgets.QPlainTextEdit()
-        self.source_edit.setFont(
-            QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.SystemFont.FixedFont)
-        )
+        self.source_edit.setFont(mono_font())
         self.source_edit.setPlaceholderText(
             "#define TELEM_ID 0x04\n\ntypedef struct __attribute__((packed)) {\n"
             "    uint32_t loop_cntr;\n    float    x, y;\n} frame_t;"
@@ -182,8 +181,8 @@ class PasteStructDialog(QtWidgets.QDialog):
             self.fields_tree.addTopLevelItem(
                 QtWidgets.QTreeWidgetItem([slot.name, slot.type, str(slot.offset)])
             )
-        lines = [f'<span style="color:#ff6b6b">{_html(p)}</span>' for p in parsed.problems]
-        lines += [f'<span style="color:#f0a030">{_html(n)}</span>' for n in parsed.notes]
+        lines = [f'<span style="color:#FF4040">{_html(p)}</span>' for p in parsed.problems]
+        lines += [f'<span style="color:#FFB000">{_html(n)}</span>' for n in parsed.notes]
         self.problems_lbl.setText("<br>".join(lines))
         self.problems_lbl.setVisible(bool(lines))
         n = len(parsed.fields)

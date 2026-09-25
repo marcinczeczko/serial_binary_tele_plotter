@@ -21,11 +21,13 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from core.analysis.step_response import SETTLE_BAND, StepMetrics
 from core.analysis.trigger import EDGES, TriggerSpec
 from core.types import StreamConfig
+from styles import mono_font
+from ui.common.numbers import ScopeDoubleSpinBox
 
 EDGE_ARROWS = {"rising": "↗", "falling": "↘", "either": "↕"}
 EDGE_OPS = {"rising": ">", "falling": "<", "either": "×"}
-BETTER = "#7FD8AA"
-WORSE = "#F2C26B"
+BETTER = "#3DFF6E"
+WORSE = "#FFB000"
 METRIC_ROWS = (
     ("Rise time 10–90 %", "rise"),
     ("Overshoot", "overshoot"),
@@ -89,7 +91,7 @@ class TriggerPanel(QtCore.QObject):
         rlayout.addWidget(self.overlay_chk)
         self.metrics_lbl = QtWidgets.QLabel("Arm the trigger (toolbar) to capture a step.")
         self.metrics_lbl.setWordWrap(True)
-        self.metrics_lbl.setStyleSheet("color: #9aa4b2;")
+        self.metrics_lbl.setStyleSheet("color: #9a9a9a;")
         rlayout.addWidget(self.metrics_lbl)
         self.metrics_table = QtWidgets.QTableWidget(len(METRIC_ROWS), 3)
         self.metrics_table.setHorizontalHeaderLabels(["This capture", "Previous", "Change"])
@@ -101,10 +103,6 @@ class TriggerPanel(QtCore.QObject):
         header = self.metrics_table.horizontalHeader()
         assert header is not None
         header.setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Stretch)
-        self.metrics_table.setStyleSheet(
-            "QHeaderView::section { background: #1b1f27; color: #c9d0da; border: none;"
-            " padding: 4px; }"
-        )
         rlayout.addWidget(self.metrics_table)
         rlayout.addStretch()
 
@@ -218,7 +216,7 @@ class TriggerPanel(QtCore.QObject):
     def _set_cell(self, row: int, column: int, text: str, color: str | None = None) -> None:
         item = QtWidgets.QTableWidgetItem(text)
         if column < 2:
-            item.setFont(QtGui.QFont("monospace"))
+            item.setFont(mono_font())
         if color is not None:
             item.setForeground(QtGui.QColor(color))
         self.metrics_table.setItem(row, column, item)
@@ -274,7 +272,7 @@ def _change(key: str, now: float | None, before: float | None) -> tuple[str, str
 def _spin(
     value: float, lo: float, hi: float, decimals: int = 3, suffix: str = ""
 ) -> QtWidgets.QDoubleSpinBox:
-    sb = QtWidgets.QDoubleSpinBox()
+    sb = ScopeDoubleSpinBox()
     sb.setRange(lo, hi)
     sb.setDecimals(decimals)
     sb.setValue(value)

@@ -25,6 +25,9 @@ Primary use cases:
   profile. The bundled `streams.json` is the `diffbot` profile.
 - **Text lines**: a text profile plots boards that print lines (`IMU,120,0.51,-0.02`,
   `ENV t=24.5C h=41%`, any layout) instead of binary frames. Each stream is a line pattern.
+- A bench-scope look: square flat controls, a pure black plot, scope colours on black and
+  the bundled B612 / B612 Mono cockpit-display fonts (no install needed). Numbers use a dot
+  and only the digits that matter (`0.12`, not `0,1200`) whatever the system locale.
 - Serial connection management with port scanning and baud rate selection.
 - Analysis mode: pause the plot, scrub with the cursor, click to set an anchor for delta (Δ)
   readouts across all signals.
@@ -618,7 +621,8 @@ Example — a minimal stream definition:
 serial_binary_tele_plotter/
 ├── main.py                    # Entry point, QApplication setup, --config
 ├── streams.json               # Stream and signal definitions (source of truth)
-├── styles.py                  # Global dark theme
+├── styles.py                  # The scope look: square flat QSS, palette, B612 fonts
+├── assets/fonts/              # B612 and B612 Mono (SIL OFL 1.1, OFL.txt), loaded at start-up
 ├── core/                      # protocol/, transport/, simulation/ are Qt-free
 │   ├── types.py               # Shared TypedDicts and Enums
 │   ├── config/                # streams.json: document (load, migrate, validate, save),

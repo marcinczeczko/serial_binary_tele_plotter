@@ -43,6 +43,7 @@ from ui.app_settings import (
 from ui.charts.live_feed import LiveFeed
 from ui.charts.telemetry_plot import TelemetryPlot
 from ui.charts.trigger_controller import TriggerController
+from ui.common.numbers import format_number
 from ui.config.tab import ConfiguratorTab
 from ui.panels.command_log import CommandLog, LogEntry
 from ui.panels.command_panel import CommandPanel, SendRequest
@@ -217,7 +218,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_cursor = QtWidgets.QLabel("")
         self.lbl_link = QtWidgets.QLabel("")  # in the toolbar
         self.lbl_rec = QtWidgets.QLabel("")
-        self.lbl_rec.setStyleSheet("color: #F44336; font-weight: bold;")
+        self.lbl_rec.setStyleSheet("color: #FF4040; font-weight: bold;")
 
         self.status_bar.addWidget(self.lbl_status)
         self.status_bar.addPermanentWidget(self.lbl_rec)
@@ -324,7 +325,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.panel.reload_streams()
         except ValueError as e:
             self.lbl_status.setText(f"Could not reload streams.json: {e}")
-            self.lbl_status.setStyleSheet("color: #F44336; font-weight: bold;")
+            self.lbl_status.setStyleSheet("color: #FF4040; font-weight: bold;")
             return
         self._apply_profile()
         self._configure_engine_streams()
@@ -365,7 +366,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.lbl_status.setText("streams.json: " + "; ".join(parts) + " (hover for details)")
         self.lbl_status.setToolTip("\n".join(details))
-        self.lbl_status.setStyleSheet("color: #FFB74D; font-weight: bold;")
+        self.lbl_status.setStyleSheet("color: #FFB000; font-weight: bold;")
 
     # --- device profiles (R8.2) ------------------------------------------------------------
 
@@ -538,8 +539,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _update_time_button(self) -> None:
         tp = self.panel.time_panel
-        self.time_btn.setText(f"{tp.get_period():.3f} ms · {tp.get_samples():,} samples")
-        self.time_btn.setStyleSheet("color: #FFB74D;" if tp.is_overridden() else "")
+        self.time_btn.setText(f"{format_number(tp.get_period())} ms · {tp.get_samples()} samples")
+        self.time_btn.setStyleSheet("color: #FFB000;" if tp.is_overridden() else "")
 
     def _on_period_changed(self, period_ms: float) -> None:
         """The user overrode the shown stream's period: re-time that stream (all history)."""
@@ -582,7 +583,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             self._set_pause_state(False, update_status=False)
             self.lbl_status.setText("Disconnected")
-            self.lbl_status.setStyleSheet("color: #F44336; font-weight: bold;")
+            self.lbl_status.setStyleSheet("color: #FF4040; font-weight: bold;")
 
     def _on_engine_state_changed(self, state: EngineState) -> None:
         self.engine_state = state
@@ -593,7 +594,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.panel.conn_panel.set_connected(running)
         self._update_menus()
         if running:
-            self.lbl_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
+            self.lbl_status.setStyleSheet("color: #3DFF6E; font-weight: bold;")
             # A new session starts new stream time: markers of the last one no longer apply.
             self._markers.clear()
             self.plot.set_markers([])
@@ -619,13 +620,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.panel.conn_panel.set_connected(False)
         self._set_pause_state(False, update_status=False)
         self.lbl_status.setText(message)
-        self.lbl_status.setStyleSheet("color: #F44336; font-weight: bold;")
+        self.lbl_status.setStyleSheet("color: #FF4040; font-weight: bold;")
 
     def _on_link_stats(self, report: LinkReport) -> None:
         text, tooltip, has_problems = format_link_report(report)
         self.lbl_link.setText(text)
         self.lbl_link.setToolTip(tooltip)
-        self.lbl_link.setStyleSheet("color: #FFB74D;" if has_problems else "")
+        self.lbl_link.setStyleSheet("color: #FFB000;" if has_problems else "")
         if report["format"] == "text":  # the editor's Line view shows the newest lines
             self.configurator.set_last_lines(report["last_lines"], report["last_unmatched"])
             if report["replies"] or report["replies_dropped"]:  # the terminal's (R8.5)
@@ -764,7 +765,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _command_status(self, text: str, error: bool = False) -> None:
         self.lbl_status.setText(text)
-        self.lbl_status.setStyleSheet("color: #F44336; font-weight: bold;" if error else "")
+        self.lbl_status.setStyleSheet("color: #FF4040; font-weight: bold;" if error else "")
 
     # --- menus: recording, replay, export (R4.1-R4.3) -----------------------------------
 
@@ -857,7 +858,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if recording and self._rec_started is not None:
             elapsed = int(time.monotonic() - self._rec_started)
             self.record_btn.setText(f"● REC {elapsed // 60:02d}:{elapsed % 60:02d}")
-            self.record_btn.setStyleSheet("QToolButton { color: #FF8F8F; font-weight: 600; }")
+            self.record_btn.setStyleSheet("QToolButton { color: #FF4040; font-weight: 600; }")
         else:
             self.record_btn.setText("● Record")
             self.record_btn.setStyleSheet("")
@@ -867,9 +868,9 @@ class MainWindow(QtWidgets.QMainWindow):
         panel = self.panel.trigger_panel
         state = panel.state
         if state == "armed":
-            text, style = f"{panel.summary()} · ARMED", "color: #F2C26B; font-weight: 600;"
+            text, style = f"{panel.summary()} · ARMED", "color: #FF9A1A; font-weight: 600;"
         elif state == "fired":
-            text, style = f"{panel.summary()} · capturing…", "color: #F2C26B;"
+            text, style = f"{panel.summary()} · capturing…", "color: #FF9A1A;"
         else:
             text, style = "Trigger", ""
         self.trigger_btn.setText(text)
@@ -1078,7 +1079,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.step_dock.raise_()
         text = f"Triggered at {t_trig:.3f} s (paused; Resume for live view)"
         self.lbl_status.setText(text + (f": {note}" if note else ""))
-        self.lbl_status.setStyleSheet("color: #FFB74D; font-weight: bold;")
+        self.lbl_status.setStyleSheet("color: #FFB000; font-weight: bold;")
 
     def closeEvent(self, event: QtGui.QCloseEvent | None) -> None:
         """
