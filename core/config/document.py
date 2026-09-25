@@ -88,6 +88,21 @@ def validate_config(data: Any) -> list[ConfigProblem]:
     else:
         problems.extend(shared_id_problems(streams))
 
+    if fmt == "text":
+        # A text board is driven from the terminal (R8.5, ADR-0011): commands and panels
+        # would send it binary packets.
+        present = [k for k in ("commands", "panels") if doc.get(k)]
+        if present:
+            problems.append(
+                ConfigProblem(
+                    "warning",
+                    None,
+                    f"{' and '.join(present)} ignored: a text profile sends from the terminal; "
+                    "commands and panels are for binary profiles",
+                )
+            )
+        return problems
+
     raw_commands = doc.get("commands")
     commands, command_problems = parse_commands(raw_commands)
     declared = set(raw_commands) if isinstance(raw_commands, dict) else set()
@@ -189,6 +204,9 @@ class StreamConfigLoader:
             for key, stream in self.data["streams"].items()
             if key not in broken
         }
+        if self.profile.format == "text":  # sends from the terminal (R8.5)
+            self.commands, self.panels = {}, {}
+            return
         raw_commands = self.data.get("commands")
         self.commands, _ = parse_commands(raw_commands)
         declared = set(raw_commands) if isinstance(raw_commands, dict) else set()

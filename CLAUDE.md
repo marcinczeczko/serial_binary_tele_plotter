@@ -17,8 +17,8 @@ so you can work without hardware.
 3. `docs/reviews/2026-09-24-architecture-review.md`: known defects, with stable IDs
    (`C*` correctness, `P*` performance, `A*` architecture, `T*` tooling).
 4. `docs/adr/`: design decisions. ADR-0002 is the target pipeline.
-5. `docs/specs/`: working specs for the next roadmap items. **Phase 8's text lines are done
-   (R8.1–R8.4). R8.5, text commands, is the next item; it has no spec yet.**
+5. `docs/specs/`: working specs for the next roadmap items. **Phase 8 is done (R8.1–R8.5):
+   device profiles, text-line streams and the terminal. No roadmap item is open.**
 
 Before starting non-trivial work, check whether a roadmap item or finding already covers
 it, and reference its ID in commits and PRs.
@@ -95,7 +95,8 @@ ui/panels/              container (owns the controls; MainWindow places them), c
                         starting with the profile menu), profile_dialog (New profile),
                         stream_tabs, signals (lane-grouped list = legend + cursor readout, drag between
                         lanes), command_panel (generated from `panels`: edited vs sent, linked rows, Live,
-                        presets, label scrubbing, Esc revert), command_log,
+                        presets, label scrubbing, Esc revert), command_log, terminal (a text profile's
+                        input line and replies, R8.5),
                         timing, trigger (setup popup + step-response results)
 ui/config/              streams.json editor (ADR-0009): tab (toolbar, profile row, stream tabs, save),
                         stream_editor (settings row, lanes tree, field form), frame_view (bus-decode drawing),

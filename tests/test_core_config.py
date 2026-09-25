@@ -283,3 +283,17 @@ def test_a_text_stream_has_no_payload_limit():
     pattern = ",".join(f"{{v{i}}}" for i in range(40))
     stream = {"name": "wide", "frame": {"pattern": pattern, "fields": fields}}
     assert validate_stream("wide", stream, "text") == []
+
+
+def test_commands_and_panels_are_ignored_in_a_text_profile(tmp_path):
+    doc = _text_doc()
+    bundled = json.loads((Path(__file__).parent.parent / "streams.json").read_text("utf-8"))
+    doc["commands"], doc["panels"] = bundled["commands"], bundled["panels"]
+    assert _messages(validate_config(doc), "warning") == [
+        "commands and panels ignored: a text profile sends from the terminal; "
+        "commands and panels are for binary profiles"
+    ]
+    path = tmp_path / "text.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    loader = StreamConfigLoader(path)
+    assert loader.commands == {} and loader.panels == {}

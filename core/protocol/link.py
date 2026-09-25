@@ -19,7 +19,7 @@ Pure Python, no Qt.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Protocol
 
 import numpy as np
@@ -38,6 +38,11 @@ class LinkDecoder(Protocol):
     @property
     def stats(self) -> LinkStats: ...
 
+    @property
+    def replies(self) -> Sequence[str]:
+        """The newest lines no stream matched, oldest first (text: the board's replies)."""
+        ...
+
     def configure(self, streams: dict[str, StreamConfig]) -> None: ...
 
     def reset(self) -> None: ...
@@ -55,6 +60,10 @@ class BinaryFrameDecoder:
     @property
     def stats(self) -> LinkStats:
         return self.parser.stats
+
+    @property
+    def replies(self) -> Sequence[str]:
+        return ()  # binary frames have no replies
 
     def configure(self, streams: dict[str, StreamConfig]) -> None:
         self.router.configure(streams)

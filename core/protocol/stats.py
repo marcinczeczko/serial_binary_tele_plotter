@@ -8,6 +8,7 @@ instead of failing silently. Pure Python, no Qt: the engine snapshots it periodi
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import TypedDict
 
@@ -82,13 +83,32 @@ class LinkReport(TypedDict):
     value_errors: int
     last_lines: dict[str, str]
     last_unmatched: str
+    replies: list[str]
+    """Unmatched lines since the previous report, oldest first (the terminal's, R8.5)."""
+    replies_dropped: int
+    """Unmatched lines since the previous report that `replies` doesn't hold."""
+
+
+MAX_REPLIES_PER_REPORT = 100
 
 
 def make_link_report(
-    prev: LinkStats, cur: LinkStats, samples_delta: int, dt_s: float, fmt: str = "binary"
+    prev: LinkStats,
+    cur: LinkStats,
+    samples_delta: int,
+    dt_s: float,
+    fmt: str = "binary",
+    recent_unmatched: Sequence[str] = (),
 ) -> LinkReport:
-    """Builds a report with rates computed over the interval since `prev`."""
+    """
+    Builds a report with rates computed over the interval since `prev`. `recent_unmatched`
+    is the decoder's ring of the newest unmatched lines (text profiles), from which the
+    report takes those since `prev`, at most MAX_REPLIES_PER_REPORT.
+    """
     dt = max(dt_s, 1e-6)
+    new = max(0, cur.lines_unmatched - prev.lines_unmatched)
+    available = list(recent_unmatched)[-new:] if new else []
+    replies = available[-MAX_REPLIES_PER_REPORT:]
     return {
         "format": fmt,
         "bytes_per_s": (cur.bytes_rx - prev.bytes_rx) / dt,
@@ -109,6 +129,8 @@ def make_link_report(
         "value_errors": cur.value_errors,
         "last_lines": dict(cur.last_lines),
         "last_unmatched": cur.last_unmatched,
+        "replies": replies,
+        "replies_dropped": new - len(replies),
     }
 
 

@@ -466,8 +466,17 @@ with a warning. The 255 B payload limit doesn't apply. A `pattern` in a binary p
 is ignored, with a warning.
 
 `VIRTUAL` prints the shown stream's lines (`\r\n` endings) at its period, plus a
-`# sim tick` line once a second that no pattern matches. It ignores commands: text
-commands are a later phase. Recordings of a text profile replay as text.
+`# sim tick` line once a second that no pattern matches, and answers each line it's sent
+with `ok: <line>`. Recordings of a text profile replay as text.
+
+**Terminal.** A text profile sends from the **Terminal** in the Controls dock, as in a
+serial monitor: type a line and press Enter. It's sent with the line ending chosen next
+to the input (`LF`, `CR LF`, `CR` or `none`, remembered per profile), numbered (`▲ 3`)
+and marked on the plot like a panel send. Up/Down recall the lines sent this session,
+Esc clears the input. Only ASCII is sent; anything else is refused, not changed. The
+board's replies, the lines no stream pattern matches, appear in grey under what you sent
+(about once a second, at most 100 at a time). A text profile's `commands` and `panels`
+are ignored, with a warning: they would send binary packets.
 
 ### Simulator (`VIRTUAL` port)
 

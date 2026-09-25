@@ -6,7 +6,8 @@ The dashboard's controls and their logic (R6.1): the main window places the piec
   time panel).
 - `sig_panel`: the Signals dock (left), grouped by lane, with the cursor readout.
 - `controls_stack`: the Controls dock (right). It shows the control panel the shown
-  stream names in `controls`, one generated per streams.json `panels` entry (R5.2).
+  stream names in `controls`, one generated per streams.json `panels` entry (R5.2); for
+  a text profile, the `terminal` instead (R8.5).
 - `trigger_panel`: its `setup` opens from the toolbar's Trigger button, and its `results`
   (step response) is a tab of the right dock.
 
@@ -25,6 +26,7 @@ from ui.panels.command_panel import CommandPanel
 from ui.panels.connection import ConnectionPanel
 from ui.panels.signals import SignalListPanel
 from ui.panels.stream_tabs import StreamTabs
+from ui.panels.terminal import Terminal
 from ui.panels.timing import TimeConfigPanel
 from ui.panels.trigger import TriggerPanel
 from ui.ui_state import UiState, apply_view_overrides
@@ -73,6 +75,11 @@ class MainControlPanel(QtWidgets.QWidget):
         self.empty_controls.setContentsMargins(12, 12, 12, 12)
         self.empty_controls.setStyleSheet("color: #9aa4b2;")
         self.controls_stack.addWidget(self.empty_controls)
+        self.terminal = Terminal()  # a text profile's controls (R8.5)
+        self.controls_stack.addWidget(self.terminal)
+        self.terminal.ending_changed.connect(self._remember_ending)
+        if ui_state is not None:
+            self.terminal.set_ending(ui_state.line_ending())
         # Owned here until the main window places them (never left to garbage collection).
         for widget in (
             self.conn_panel,
@@ -152,6 +159,24 @@ class MainControlPanel(QtWidgets.QWidget):
         if self.ui_state is not None:
             self.ui_state.delete_preset(key, name)
 
+    def _remember_ending(self, name: str) -> None:
+        if self.ui_state is not None:
+            self.ui_state.set_line_ending(name)
+
+    @property
+    def is_text(self) -> bool:
+        return self.stream_loader.profile.format == "text"
+
+    def show_controls(self) -> None:
+        """The terminal (text profile), else the shown stream's panel, else the hint."""
+        if self.is_text:
+            self.controls_stack.setCurrentWidget(self.terminal)
+            self.controls_changed.emit("Terminal")
+            return
+        panel = self.current_control_panel()
+        self.controls_stack.setCurrentWidget(panel if panel is not None else self.empty_controls)
+        self.controls_changed.emit(panel.panel.title if panel is not None else "")
+
     def _remember_live(self, key: str, live: bool) -> None:
         if self.ui_state is not None:
             self.ui_state.set_panel_live(key, live)
@@ -180,9 +205,7 @@ class MainControlPanel(QtWidgets.QWidget):
         if self.ui_state is not None:
             self.ui_state.set_stream(sid)
 
-        panel = self.current_control_panel()
-        self.controls_stack.setCurrentWidget(panel if panel is not None else self.empty_controls)
-        self.controls_changed.emit(panel.panel.title if panel is not None else "")
+        self.show_controls()
 
         self.sig_panel.rebuild_list(cfg)
         self.trigger_panel.set_signals(cfg)
@@ -225,6 +248,8 @@ class MainControlPanel(QtWidgets.QWidget):
         an empty plot.
         """
         self._build_control_panels()
+        if self.ui_state is not None:
+            self.terminal.set_ending(self.ui_state.line_ending())
         self.stream_tabs.blockSignals(True)
         self.stream_tabs.clear()
         for sid, s in self.stream_loader.list_streams().items():
@@ -238,8 +263,7 @@ class MainControlPanel(QtWidgets.QWidget):
             self._on_stream_selection(idx)
             return
         empty: StreamConfig = {"name": "", "frame": {"fields": []}, "signals": {}}
-        self.controls_stack.setCurrentWidget(self.empty_controls)
-        self.controls_changed.emit("")
+        self.show_controls()
         self.sig_panel.rebuild_list(empty)
         self.trigger_panel.set_signals(empty)
         self.stream_changed.emit(empty)

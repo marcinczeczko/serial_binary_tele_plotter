@@ -322,10 +322,20 @@ def test_text_lines_print_the_pattern_and_decode_back() -> None:
     assert decoder.stats.counter_gaps == decoder.stats.value_errors == 0
 
 
-def test_a_text_sim_transport_prints_lines_and_ignores_commands() -> None:
+def test_a_text_sim_transport_prints_lines() -> None:
     clock = _Clock()
     sim = _transport(_text_stream(), clock)
     sim.set_text(True)
     clock.now += 0.05
     assert sim.read(0.05).startswith(b"# sim tick\r\nIMU,0,")
-    sim.write(b"PID 1 2\n")  # text commands are R8.5: nothing happens, nothing raises
+    sim.write(b"PID 1 2\n")  # no binary command parsing: answered as text (R8.5)
+
+
+def test_a_text_sim_answers_each_line_it_is_sent() -> None:
+    clock = _Clock()
+    sim = _transport(_text_stream(), clock)
+    sim.set_text(True)
+    sim.write(b"PID 0 0.25\r")
+    sim.write(b"\nSTATUS\n\n")
+    assert sim.read(0.05) == b"ok: PID 0 0.25\r\nok: STATUS\r\n"
+    assert sim.read(0.05).startswith(b"# sim tick")  # then the lines again

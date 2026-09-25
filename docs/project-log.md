@@ -6,6 +6,31 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — R8.5 Text commands: the terminal
+
+- A text profile's Controls dock is a **Terminal** (`ui/panels/terminal.py`, ADR-0011
+  accepted): Enter sends the line with the profile's ending (LF / CR LF / CR / none, in
+  `UiState`), numbered and marked on the plot; Up/Down history; ASCII only.
+- Replies: `TextLineDecoder.replies` (a ring of 200 unmatched lines, now on the
+  `LinkDecoder` protocol) and `LinkReport.replies` / `replies_dropped` (≤ 100 per ~1 Hz
+  report): no per-line signal. VIRTUAL answers `ok: <line>`.
+- A text profile's `commands`/`panels` are ignored with a warning. Fixed on the way: the
+  Controls dock's first title ignored the shown controls (now `show_controls()`).
+- Tests: 429 (+10). Phase 8 (R8.1–R8.5) is complete.
+
+---
+
+## 2026-09-25 — R8.5 spec drafted (for review): a terminal
+
+- First draft (command templates in config) replaced on the owner's call: a text profile
+  sends from a **terminal** in the Controls dock (Enter sends, Up/Down history, line
+  ending per profile), and shows the board's replies (lines no pattern matches, at most
+  100 per ~1 Hz report). No config keys; text profiles' `commands`/`panels` are ignored.
+- `docs/specs/r8.5-text-commands.md`, ADR-0011 (proposed); canvas board
+  `Dashboard: terminal on a text device`.
+
+---
+
 ## 2026-09-25 — R8.4 (part 2): From console output… and Copy as printf
 
 - `core/config/infer_lines.py`: splits lines into numbers and fixed text, groups by

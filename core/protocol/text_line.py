@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -40,6 +41,8 @@ from core.types import StreamConfig
 
 LINE_FIELD = "_line"
 """The per-stream matched-line counter every text record carries."""
+REPLIES_KEPT = 200
+"""The newest unmatched lines kept for the terminal (R8.5): the board's replies."""
 MAX_LINE_BYTES = 1024
 """Longer lines are dropped (and counted) so a board that never sends `\\n` can't grow the
 buffer without bound."""
@@ -256,6 +259,9 @@ class TextLineDecoder:
 
     def __init__(self) -> None:
         self.stats = LinkStats()
+        self.replies: deque[str] = deque(maxlen=REPLIES_KEPT)
+        """The newest unmatched lines, oldest first; the n-th is unmatched line number
+        `stats.lines_unmatched - len(replies) + n`."""
         self._streams: list[_TextStream] = []
         self._buf = bytearray()
         self._discarding = False  # inside an overlong line: dropping bytes until its `\n`
@@ -301,6 +307,7 @@ class TextLineDecoder:
 
     def reset(self) -> None:
         self.stats = LinkStats()
+        self.replies.clear()
         self._buf = bytearray()
         self._discarding = False
         for stream in self._streams:
@@ -361,6 +368,7 @@ class TextLineDecoder:
             return
         stats.lines_unmatched += 1
         stats.last_unmatched = line
+        self.replies.append(line)
 
     def _track_counter(self, stream: _TextStream, value: int) -> None:
         """Gaps and resets of an integer time slot, like the binary router's `loop_cntr`."""
