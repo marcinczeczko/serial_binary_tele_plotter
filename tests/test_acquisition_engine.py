@@ -396,3 +396,24 @@ def test_switching_to_a_text_profile_tolerates_the_old_binary_streams(pyqt_stub)
     assert engine.link.feed(b"x\n") == {}
     engine.configure_profile("robot", "binary")
     assert type(engine.link).__name__ == "BinaryFrameDecoder"
+
+
+def test_listening_hands_over_the_whole_lines_heard_once(pyqt_stub):
+    transport = FakeTransport()
+    engine = _engine(transport)
+    engine.configure_profile("sensor", "text")
+    engine.configure_streams({})
+    heard = []
+    engine.lines_heard.connect(heard.append)
+    engine.listen_lines(5.0)  # not connected: nothing to hear
+    assert heard == [[]]
+    engine.configure_streams(STREAMS)
+    engine.start_working("COM7", 115200)
+    try:
+        engine.listen_lines(5.0)
+        transport.push(b"MU,1\r\nIMU,2\r\n\r\nENV t=3\r\nIM")
+        assert wait_for(lambda: engine.link.stats.bytes_rx == 26)
+        engine.stop_listening()
+    finally:
+        engine.stop_working()
+    assert heard == [[], ["IMU,2", "ENV t=3"]]

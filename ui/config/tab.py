@@ -1,7 +1,8 @@
 """
 The configuration editor window's content (R7.1): streams.json, laid out like the scope.
 
-- A toolbar: New stream, From C struct…, Copy as C struct, Delete, and Revert and Save
+- A toolbar: New stream, From C struct… and Copy as C struct (binary profiles), or From
+  console output… and Copy as printf (text profiles, R8.4), Delete, and Revert and Save
   (orange while there are unsaved changes, Ctrl+S).
 - The profile row (R8.4): the profile's name, its format (read-only: chosen at New
   profile) and baud, edited into the document's `profile` block.
@@ -28,6 +29,8 @@ from core.config.cstruct import to_c_struct
 from core.config.draft import StreamDraft, unique_name
 from core.config.profile import FORMAT_LABELS, profile_of
 from core.protocol.constants import LOOP_CNTR_NAME
+from core.protocol.text_line import PatternError, parse_pattern, printf_line
+from ui.config.console_dialog import ConsoleOutputDialog
 from ui.config.paste_dialog import PasteStructDialog
 from ui.config.stream_editor import StreamEditor
 from ui.panels.connection import BAUD_RATES
@@ -46,6 +49,8 @@ NO_BAUD = "—"  # the profile names no baud rate
 
 class ConfiguratorTab(QtWidgets.QWidget):
     config_saved = QtCore.pyqtSignal()
+    listen_requested = QtCore.pyqtSignal(float)  # "Listen on the port" (the engine's)
+    stop_listening_requested = QtCore.pyqtSignal()
 
     def __init__(
         self, stream_loader: StreamConfigLoader, parent: QtWidgets.QWidget | None = None
@@ -57,6 +62,9 @@ class ConfiguratorTab(QtWidgets.QWidget):
         self._profile: dict[str, Any] | None = None  # the `profile` block, as edited
         self._last_lines: dict[str, str] = {}  # the newest line per stream (link report)
         self._last_unmatched = ""
+        self._pasted: dict[str, str] = {}  # a line each stream made from console output matches
+        self._connected = False
+        self._console: ConsoleOutputDialog | None = None
         self._saved: str = ""  # the document as loaded or saved, to tell unsaved changes
         self._build()
         self._take_document()
@@ -74,13 +82,23 @@ class ConfiguratorTab(QtWidgets.QWidget):
         self.new_btn = QtWidgets.QPushButton("New stream")
         self.paste_btn = QtWidgets.QPushButton("From C struct…")
         self.copy_btn = QtWidgets.QPushButton("Copy as C struct")
+        self.console_btn = QtWidgets.QPushButton("From console output…")
+        self.printf_btn = QtWidgets.QPushButton("Copy as printf")
+        self.printf_btn.setToolTip("The C line that prints this stream's pattern")
         self.delete_btn = QtWidgets.QPushButton("Delete stream")
         self.dirty_lbl = QtWidgets.QLabel("")
         self.dirty_lbl.setStyleSheet("color: #f0a030; font-weight: bold;")
         self.revert_btn = QtWidgets.QPushButton("Revert")
         self.save_btn = QtWidgets.QPushButton("Save")
         self.save_btn.setToolTip("Save streams.json (Ctrl+S)")
-        for w in (self.new_btn, self.paste_btn, self.copy_btn, self.delete_btn):
+        for w in (
+            self.new_btn,
+            self.paste_btn,
+            self.copy_btn,
+            self.console_btn,
+            self.printf_btn,
+            self.delete_btn,
+        ):
             bar.addWidget(w)
         bar.addStretch()
         bar.addWidget(self.dirty_lbl)
@@ -146,6 +164,8 @@ class ConfiguratorTab(QtWidgets.QWidget):
         self.new_btn.clicked.connect(self.create_stream)
         self.paste_btn.clicked.connect(self.paste_struct)
         self.copy_btn.clicked.connect(self.copy_struct)
+        self.console_btn.clicked.connect(self.from_console_output)
+        self.printf_btn.clicked.connect(self.copy_printf)
         self.delete_btn.clicked.connect(self.delete_stream)
         self.revert_btn.clicked.connect(self.revert)
         self.save_btn.clicked.connect(self.save_to_file)
@@ -173,6 +193,7 @@ class ConfiguratorTab(QtWidgets.QWidget):
         """Edits the file the loader has now (a profile switch, R8.2), as loaded."""
         self.filepath = str(self.loader.path)
         self._last_lines, self._last_unmatched = {}, ""  # another device's lines
+        self._pasted = {}
         self._take_document()
 
     @property
@@ -188,6 +209,8 @@ class ConfiguratorTab(QtWidgets.QWidget):
         self.editor.set_format(self.loader.profile.format)
         for w in (self.paste_btn, self.copy_btn):  # C structs are for binary frames
             w.setVisible(not self.is_text)
+        for w in (self.console_btn, self.printf_btn):
+            w.setVisible(self.is_text)
         streams = self.loader.data.get("streams", {})
         self.drafts = {str(k): StreamDraft(v) for k, v in streams.items()}
         panels = self.loader.data.get("panels")
@@ -255,9 +278,68 @@ class ConfiguratorTab(QtWidgets.QWidget):
         self._show_last_line()
 
     def _show_last_line(self) -> None:
+        key = self.current_key() or ""
+        line = self._last_lines.get(key) or self._pasted.get(key) or self._last_unmatched
+        self.editor.set_last_line(line or None)
+
+    # --- console output and printf (R8.4) ---
+
+    def set_connected(self, connected: bool) -> None:
+        """Whether the dashboard is connected: listening needs a live port."""
+        self._connected = connected
+        if self._console is not None:
+            self._console.set_connected(connected)
+
+    def on_lines_heard(self, lines: list[str]) -> None:
+        if self._console is not None:
+            self._console.on_lines_heard(lines)
+
+    def console_dialog(self) -> ConsoleOutputDialog:
+        dialog = ConsoleOutputDialog(self._edited_profile().name, self._connected, self)
+        dialog.listen_requested.connect(self.listen_requested)
+        dialog.stop_requested.connect(self.stop_listening_requested)
+        return dialog
+
+    def from_console_output(self) -> None:
+        self.editor.flush()
+        dialog = self.console_dialog()
+        self._console = dialog
+        try:
+            if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+                self.apply_console(dialog)
+        finally:
+            self._console = None
+
+    def apply_console(self, dialog: ConsoleOutputDialog) -> None:
+        """Adds the ticked patterns as new streams (keys made from their names)."""
+        created: list[str] = []
+        for name, stream, line in dialog.results():
+            key = unique_name(name.lower(), self.drafts, fallback="stream")
+            self.drafts[key] = StreamDraft(stream)
+            self._pasted[key] = line
+            created.append(key)
+        if not created:
+            return
+        self._rebuild_tabs(created[0])
+        self._on_changed()
+        self.status_lbl.setText(f"Created {', '.join(created)} from console output")
+
+    def copy_printf(self) -> None:
         key = self.current_key()
-        line = self._last_lines.get(key or "") or self._last_unmatched or None
-        self.editor.set_last_line(line)
+        if key is None:
+            return
+        self.editor.flush()
+        draft = self.drafts[key]
+        try:
+            pattern = parse_pattern(draft.pattern or "")
+        except PatternError as e:
+            self._show_problem(f"Pattern: {e}")
+            return
+        types = {f.name: f.type for f in draft.layout()}
+        clipboard = QtWidgets.QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(printf_line(pattern, types))
+        self.status_lbl.setText(f"Copied {key} as printf")
 
     def _fingerprint(self) -> str:
         return json.dumps(self.document())
@@ -320,7 +402,7 @@ class ConfiguratorTab(QtWidgets.QWidget):
         self.save_btn.setStyleSheet(SAVE_DIRTY if dirty else "")
         self.revert_btn.setEnabled(dirty)
         has_stream = key is not None
-        for w in (self.copy_btn, self.delete_btn):
+        for w in (self.copy_btn, self.printf_btn, self.delete_btn):
             w.setEnabled(has_stream)
         self._update_status()
 

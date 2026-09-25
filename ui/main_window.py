@@ -198,6 +198,10 @@ class MainWindow(QtWidgets.QMainWindow):
         # --- Configuration editor: its own window (File > Edit profile) ---
         self.configurator = ConfiguratorTab(self.stream_loader)
         self.configurator.config_saved.connect(self._reload_configuration)
+        self.configurator.listen_requested.connect(
+            lambda seconds: self._invoke("listen_lines", QtCore.Q_ARG(float, seconds))
+        )
+        self.configurator.stop_listening_requested.connect(lambda: self._invoke("stop_listening"))
         self.config_window = QtWidgets.QDialog(self)
         self.config_window.setWindowTitle(f"Configuration: {self.stream_loader.path.name}")
         self.config_window.resize(1300, 860)
@@ -269,6 +273,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.engine.state_changed.connect(self._on_engine_state_changed)
         self.engine.streams_configured.connect(self._bind_live_feed)
         self.engine.link_stats.connect(self._on_link_stats)
+        self.engine.lines_heard.connect(self.configurator.on_lines_heard)
         self.engine.session_ended.connect(self._on_session_ended)
         self.engine.recording_changed.connect(self._on_recording_changed)
 
@@ -586,6 +591,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_engine_state_changed(self, state: EngineState) -> None:
         self.engine_state = state
         running = state == EngineState.RUNNING
+        self.configurator.set_connected(running)
         # The Connect button mirrors the engine, however the session started (menu replay).
         self.panel.conn_panel.set_connected(running)
         self._update_menus()

@@ -45,8 +45,9 @@ class LineView(QtWidgets.QWidget):
     field_clicked = QtCore.pyqtSignal(int)  # value index
     menu_requested = QtCore.pyqtSignal(int, QtCore.QPoint)  # value index, global position
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(self, parent: QtWidgets.QWidget | None = None, show_line: bool = True) -> None:
         super().__init__(parent)
+        self._show_line = show_line  # the "last line" row (not in "From console output…")
         self._pattern: Pattern | None = None
         self._colors: dict[str, str] = {}
         self._selected: int | None = None
@@ -55,7 +56,8 @@ class LineView(QtWidgets.QWidget):
         self.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed
         )
-        self.setFixedHeight(PAD + ROW_HEIGHT + ROW_GAP + LINE_ROW + PAD + 1)
+        line_row = ROW_GAP + LINE_ROW if show_line else 0
+        self.setFixedHeight(PAD + ROW_HEIGHT + line_row + PAD + 1)
 
     # --- content ---
 
@@ -151,6 +153,9 @@ class LineView(QtWidgets.QWidget):
                 selected = piece.index == self._selected
                 draw_block(painter, piece.rect, piece.text, color, selected, metrics, mono)
         painter.setOpacity(1.0)
+        if not self._show_line:
+            painter.end()
+            return
 
         y = PAD + ROW_HEIGHT + ROW_GAP
         x = float(PAD)

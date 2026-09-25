@@ -1,7 +1,6 @@
 # Spec: text-line streams (R8.3, R8.4)
 
-- Status: R8.3 is built; R8.4 is next. R8.1 (decoder slot) and R8.2 (device profiles)
-  are done.
+- Status: built (R8.1–R8.4). R8.5, text commands, is not specified yet.
 - Decision record: [ADR-0010](../adr/0010-device-profiles-and-text-line-streams.md).
   This spec is the working detail below that decision. Change it freely while building,
   and say why in the project log.
@@ -279,11 +278,12 @@ The editor still edits a `StreamDraft` only.
   - the selected slot inverted (white outline, filled color).
 - A second row shows `last line`, then the line, then `✓ matches` in green or
   `✗ no match` in grey. No source or age is shown. The line is:
-  - while connected, the newest line this stream matched, else the newest unmatched
-    line (most likely the one being fixed). The engine's ~1 Hz `LinkReport` carries
-    them (`last_lines: {key: line}` and `last_unmatched`); no per-line signal;
-  - otherwise the last line pasted or heard in "From console output…" for this layout;
-  - otherwise `none yet: connect, or paste console output`, in grey.
+  - the newest line this stream matched while connected. The engine's ~1 Hz
+    `LinkReport` carries them (`last_lines: {key: line}` and `last_unmatched`); no
+    per-line signal;
+  - else, for a stream made from console output, a line it was made from;
+  - else the newest unmatched line (most likely the one being fixed);
+  - else `none yet: connect, or paste console output`, in grey.
 - Clicking a block selects its field in the form. The form on the right is titled
   **Value** and holds:
   - Name;
