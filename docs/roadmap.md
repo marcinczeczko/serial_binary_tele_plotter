@@ -362,12 +362,13 @@ matching, inference, editor screens, acceptance tests) in
   *Done, in two PRs: the profile row, Pattern, X axis, Line view and value form; then
   "From console output…" (paste or listen, `core/config/infer_lines.py`) and "Copy as
   printf".*
-- [ ] **R8.5 Text commands**: a terminal for text profiles: type a line, Enter sends it
+- [x] **R8.5 Text commands**: a terminal for text profiles: type a line, Enter sends it
   with the profile's line ending; the board's replies (lines no pattern matches) are
   shown. (Replaces the earlier idea of command templates in config.)
   *Done when:* a text profile sends a typed line from VIRTUAL, the send is numbered and
   marked on the plot, and the reply is shown. Spec:
-  [`docs/specs/r8.5-text-commands.md`](specs/r8.5-text-commands.md), ADR-0011 (proposed).
+  [`docs/specs/r8.5-text-commands.md`](specs/r8.5-text-commands.md), ADR-0011.
+  *Done.*
 
 ---
 

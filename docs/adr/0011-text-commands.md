@@ -1,6 +1,6 @@
 # ADR-0011: Text commands are a terminal
 
-- Status: proposed (2026-09-25)
+- Status: accepted (2026-09-25)
 - Supersedes: nothing; extends ADR-0010 (device profiles and text-line streams), whose
   point 5 left text commands for R8.5.
 

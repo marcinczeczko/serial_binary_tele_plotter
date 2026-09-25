@@ -11,7 +11,8 @@ layouts from `streams.json` (R5.2), given by `set_commands`. PID gains change th
 motors (see `core.simulation.pid_motor`).
 
 For a text profile (`set_text(True)`, R8.3) it prints the stream's pattern lines instead,
-and ignores what it's sent: text commands are R8.5.
+and answers each line it's sent with `ok: <line>` (R8.5), as a board's reply the
+terminal can show.
 """
 
 from __future__ import annotations
@@ -65,6 +66,8 @@ class SimTransport:
         self._k0 = 0
         self._last_read = 0.0
         self._text = False
+        self._typed = bytearray()  # text mode: what was written, until its line ends
+        self._answers = bytearray()  # text mode: replies not yet read
 
     @property
     def name(self) -> str:
@@ -111,6 +114,9 @@ class SimTransport:
                 # (+1e-9: a frame due exactly now must not be lost to float rounding)
                 due = self._k0 + int((now - self._t0) / period + 1e-9) + 1 - self._k
                 ready_at = max(self._last_read + MIN_READ_INTERVAL_S, now if due > 0 else 0.0)
+                if self._answers:
+                    answers, self._answers = bytes(self._answers), bytearray()
+                    return answers
                 if due > 0 and now >= ready_at:
                     if due > MAX_FRAMES_PER_READ:
                         self._k += due - MAX_FRAMES_PER_READ
@@ -131,6 +137,12 @@ class SimTransport:
             if not self._open:
                 raise TransportError("simulator closed")
             if self._text:
-                return  # text commands arrive with R8.5
+                self._typed += data
+                while (end := self._typed.find(b"\n")) >= 0:
+                    line = bytes(self._typed[:end]).strip()
+                    del self._typed[: end + 1]
+                    if line:
+                        self._answers += b"ok: " + line + b"\r\n"
+                return
             for packet_id, payload in self._commands.feed(data):
                 self._synth.apply_command(packet_id, payload, self._command_defs)

@@ -291,9 +291,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # 7. Phase 6 layout: trigger on the plot, controls dock, log (R6.3, R6.5)
         self.plot.trigger_level_changed.connect(trigger_panel.set_level)
         trigger_panel.changed.connect(self._update_trigger_ui)
-        self.panel.controls_changed.connect(
-            lambda title: self.controls_dock.setWindowTitle(title or "Controls")
-        )
+        self.panel.controls_changed.connect(self._on_controls_changed)
+        self.panel.terminal.line_entered.connect(self._send_line)
         self.command_log.resend_requested.connect(self._resend)
 
         self._build_menus()
@@ -306,10 +305,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_profiles()
         self._update_title()
         self._update_trigger_ui()
-        self.controls_dock.setWindowTitle(
-            (panel.panel.title if (panel := self.panel.current_control_panel()) else "")
-            or "Controls"
-        )
+        self.panel.show_controls()  # the dock's title, now that it's wired
         geometry, state = self.ui_state.window_state()
         if geometry is not None:
             self.restoreGeometry(geometry)
@@ -592,6 +588,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.engine_state = state
         running = state == EngineState.RUNNING
         self.configurator.set_connected(running)
+        self.panel.terminal.set_connected(running)
         # The Connect button mirrors the engine, however the session started (menu replay).
         self.panel.conn_panel.set_connected(running)
         self._update_menus()
@@ -631,6 +628,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_link.setStyleSheet("color: #FFB74D;" if has_problems else "")
         if report["format"] == "text":  # the editor's Line view shows the newest lines
             self.configurator.set_last_lines(report["last_lines"], report["last_unmatched"])
+            if report["replies"] or report["replies_dropped"]:  # the terminal's (R8.5)
+                self.panel.terminal.add_replies(
+                    time.strftime("%H:%M:%S"), report["replies"], report["replies_dropped"]
+                )
         self._update_activity()
 
     def _update_activity(self, clock: Callable[[], float] = time.monotonic) -> None:
@@ -720,6 +721,29 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         )
         self._command_status(f"Sent '{entry.label}' again ({len(entry.packet)} B)")
+
+    def _on_controls_changed(self, title: str) -> None:
+        self.controls_dock.setWindowTitle(title or "Controls")
+        self.command_log.setVisible(not self.panel.is_text)  # the terminal has its own
+
+    def _send_line(self, line: str) -> None:
+        """A text profile's terminal line (R8.5): ASCII plus the chosen ending, numbered."""
+        terminal = self.panel.terminal
+        when = time.strftime("%H:%M:%S")
+        if self.engine_state != EngineState.RUNNING:
+            terminal.add_refused(when, line, "not connected")
+            self._command_status("Not connected: line not sent", error=True)
+            return
+        try:
+            data = line.encode("ascii") + terminal.ending
+        except UnicodeEncodeError:
+            terminal.add_refused(when, line, "only ASCII can be sent")
+            self._command_status("Not sent: only ASCII can be sent", error=True)
+            return
+        self.send_packet.emit(data)
+        number = self._mark_send(line)
+        terminal.add_sent(number, when, line)
+        self._command_status(f"Sent ▲ {number}: {line}")
 
     def _log_refused(self, label: str, reason: str) -> None:
         self.command_log.add(LogEntry(None, time.strftime("%H:%M:%S"), label, reason))

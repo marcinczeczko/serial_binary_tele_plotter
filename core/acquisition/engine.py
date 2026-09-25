@@ -369,6 +369,7 @@ class TelemetryEngine(QtCore.QObject):
         now = time.monotonic()
         with self._data_lock:
             cur = self.link.stats.snapshot()
+            replies = list(self.link.replies)
         samples = self.stores.total_stored
         report = make_link_report(
             self._stats_prev,
@@ -376,6 +377,7 @@ class TelemetryEngine(QtCore.QObject):
             samples - self._stats_prev_samples,
             now - self._stats_prev_ts,
             self._link_format,
+            replies,
         )
         self._stats_prev, self._stats_prev_samples, self._stats_prev_ts = cur, samples, now
         self.link_stats.emit(report)

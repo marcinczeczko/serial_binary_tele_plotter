@@ -181,6 +181,14 @@ class UiState:
         if current.pop(name, None) is not None:
             self._set_json(f"{self._scope}/presets/{_key(panel)}", current)
 
+    def line_ending(self) -> str:
+        """The terminal's line ending for this profile (R8.5): an `ENDINGS` key."""
+        value = self._get_json(f"{self._scope}/terminal/ending", "LF")
+        return value if isinstance(value, str) else "LF"
+
+    def set_line_ending(self, name: str) -> None:
+        self._set_json(f"{self._scope}/terminal/ending", name)
+
     def panel_live(self, panel: str) -> bool:
         return self._get_json(f"{self._scope}/live/{_key(panel)}", False) is True
 
