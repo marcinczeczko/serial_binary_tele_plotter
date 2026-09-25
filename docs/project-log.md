@@ -6,6 +6,18 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — Numbers in B612, not B612 Mono
+
+- B612 Mono's decimal point takes a full cell, so every number read `0. 25`, `10. 0 s`. The
+  owner compared B612, Share Tech Mono and Barlow Semi Condensed rendered with the app's
+  strings and chose B612. `styles.NUMBER_FAMILY` / `number_font` / `NUMBER_CSS` (B612) now
+  draw the top bar, the Signals readout, the Tune inputs, the send log and the Step table.
+- B612 Mono (`mono_font`, `MONO_CSS`) stays for text aligned by column: the terminal, the C
+  struct box, the frame and line views, hex colours, file paths. No new file bundled.
+- The spec's visual language notes the change. 478 tests pass; plot untouched.
+
+---
+
 ## 2026-09-25 — R9.5 Tune and Step panes restyled and slimmed
 
 - Tune: Manual | Live segment (Live amber) and `Presets ▾` (load, Save as…, Delete ▸; shows

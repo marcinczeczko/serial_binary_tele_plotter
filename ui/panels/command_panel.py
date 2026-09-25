@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.config.controls import ButtonDef, PanelDef, ParamDef
-from styles import AMBER, TEXT_DIM, mono_font
+from styles import AMBER, TEXT_DIM, number_font
 from ui.common.numbers import ScopeDoubleSpinBox
 
 ParamWidget = QtWidgets.QDoubleSpinBox | QtWidgets.QSpinBox | QtWidgets.QCheckBox
@@ -298,7 +298,7 @@ class CommandPanel(QtWidgets.QWidget):
             widget.setValue(param.default)
         widget.setKeyboardTracking(False)
         widget.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
-        widget.setFont(mono_font())
+        widget.setFont(number_font())
         widget.setAccessibleName(f"{param.label} {col}".strip())
         widget.valueChanged.connect(lambda _=0, c=col, p=param.key: self._on_edit(c, p))
         return widget

@@ -19,8 +19,8 @@ from styles import (
     BAR,
     BORDER,
     GREEN,
-    MONO_CSS,
-    MONO_FAMILY,
+    NUMBER_CSS,
+    NUMBER_FAMILY,
     RED,
     RED_FILL,
     TEXT,
@@ -93,7 +93,7 @@ class Square:
 class Text:
     text: str
     color: str = TEXT
-    mono: bool = True
+    number: bool = True  # the number face (B612), else the UI face
     bold: bool = False
     px: float = 13
 
@@ -136,7 +136,7 @@ class PartsButton(QtWidgets.QToolButton):
             font.setPixelSize(11)
             font.setBold(True)
             return font
-        font = QtGui.QFont(MONO_FAMILY if part.mono else UI_FAMILY)
+        font = QtGui.QFont(NUMBER_FAMILY if part.number else UI_FAMILY)
         font.setPixelSize(round(part.px))
         font.setBold(part.bold)
         return font
@@ -198,15 +198,15 @@ class RunBox(QtWidgets.QPushButton):
 
     RUN = (
         f"QPushButton {{ background: transparent; color: {GREEN}; border: 1px solid {GREEN};"
-        f" {MONO_CSS} font-weight: bold; }}"
+        f" {NUMBER_CSS} font-weight: bold; }}"
     )
     STOP = (
         f"QPushButton {{ background: {RED_FILL}; color: #fff; border: 1px solid {RED_FILL};"
-        f" {MONO_CSS} font-weight: bold; }}"
+        f" {NUMBER_CSS} font-weight: bold; }}"
     )
     IDLE = (
         f"QPushButton {{ background: transparent; color: {TEXT_MUTED};"
-        f" border: 1px solid {BORDER}; {MONO_CSS} }}"
+        f" border: 1px solid {BORDER}; {NUMBER_CSS} }}"
     )
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
@@ -280,7 +280,7 @@ class RatePoints(QtWidgets.QLabel):
         super().__init__(parent)
         self.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
         self.setContentsMargins(12, 0, 12, 0)
-        self.setStyleSheet(f"color: {TEXT_DIM}; {MONO_CSS} font-size: 10.5px;")
+        self.setStyleSheet(f"color: {TEXT_DIM}; {NUMBER_CSS} font-size: 10.5px;")
         self._rate: float | None = None
         self._points = 0
         self._show()
@@ -314,11 +314,13 @@ class LinkHealth(QtWidgets.QLabel):
         self.setToolTip(f"{rate}\n{tooltip}".strip())
         if problems:
             self.setStyleSheet(
-                f"background: {AMBER}; color: #000; {MONO_CSS} font-size: 12px;"
+                f"background: {AMBER}; color: #000; {NUMBER_CSS} font-size: 12px;"
                 " font-weight: bold; padding: 0 12px;"
             )
         else:
-            self.setStyleSheet(f"color: {TEXT_MUTED}; {MONO_CSS} font-size: 12px; padding: 0 12px;")
+            self.setStyleSheet(
+                f"color: {TEXT_MUTED}; {NUMBER_CSS} font-size: 12px; padding: 0 12px;"
+            )
 
 
 class TopBar(QtWidgets.QFrame):

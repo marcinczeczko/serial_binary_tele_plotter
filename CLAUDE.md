@@ -63,7 +63,8 @@ fix one, remove its xfail.
 ```
 main.py                 QApplication bootstrap, SIGINT handling
 styles.py               the scope look (ADR-0012): square flat QSS, colour tokens, bundled B612 / B612 Mono
-                        loaded at start-up (`load_fonts`, `mono_font`)
+                        loaded at start-up; `number_font` / NUMBER_* (B612) for numbers, `mono_font` /
+                        MONO_* (B612 Mono) only for text aligned by column (code, hex, terminal)
 assets/fonts/           B612 and B612 Mono TTFs with OFL.txt (SIL OFL 1.1)
 streams.json            schema 3: the bundled `diffbot` device profile: profile, streams, commands, panels
                         (single source of truth; ADR-0007, ADR-0010)

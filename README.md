@@ -28,7 +28,8 @@ Primary use cases:
 - **Text lines**: a text profile plots boards that print lines (`IMU,120,0.51,-0.02`,
   `ENV t=24.5C h=41%`, any layout) instead of binary frames. Each stream is a line pattern.
 - A bench-scope look: square flat controls, a pure black plot, scope colours on black and
-  the bundled B612 / B612 Mono cockpit-display fonts (no install needed). Numbers use a dot
+  the bundled B612 cockpit-display font for text and numbers, and B612 Mono for code and
+  the terminal (no install needed). Numbers use a dot
   and only the digits that matter (`0.12`, not `0,1200`) whatever the system locale.
 - Serial connection management with port scanning and baud rate selection.
 - Analysis mode: pause the plot, scrub with the cursor, click to set an anchor for delta (Δ)
