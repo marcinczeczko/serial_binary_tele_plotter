@@ -6,7 +6,8 @@ color, a check box for visibility, and its value at the cursor (with Δ to the a
 paused). A lane's check box shows or hides all of its signals, and its header counts
 how many are shown. The filter box narrows a long list (a PID frame has 34 signals).
 
-Right-click a signal to move it to another lane or a new one. Moves and visibility last
+Drag a signal onto another lane (or below the list, for a new lane), or right-click it to
+move it. Moves and visibility last
 across runs as view overrides (R5.3); the Configuration tab's Visible and Lane columns
 change streams.json itself.
 """
@@ -49,6 +50,60 @@ def format_value(value: float, delta: float | None = None) -> str:
     return text
 
 
+class SignalTree(QtWidgets.QTreeWidget):
+    """
+    The tree, with drag and drop between lanes. A drop only reports where a signal should
+    go (`dropped`); the panel moves it and rebuilds, so Qt never rearranges items itself.
+    """
+
+    dropped = QtCore.pyqtSignal(str, str)  # signal id, lane key (NEW_LANE: empty space)
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QtWidgets.QAbstractItemView.DragDropMode.InternalMove)
+        self.setDefaultDropAction(QtCore.Qt.DropAction.MoveAction)
+        # A drop is applied after the drag has finished: the move rebuilds the tree, which
+        # mustn't happen while Qt's drag loop still holds its items.
+        self._pending_drop: tuple[str, str] | None = None
+        self._drop_timer = QtCore.QTimer(self)
+        self._drop_timer.setSingleShot(True)
+        self._drop_timer.setInterval(0)
+        self._drop_timer.timeout.connect(self._apply_drop)
+
+    def drop_target(self, pos: QtCore.QPoint) -> str | None:
+        """The lane a drop at `pos` means: a lane row, a signal's lane, or a new lane."""
+        item = self.itemAt(pos)
+        if item is None:
+            return NEW_LANE
+        lane = item.data(0, ROLE_LANE)
+        if isinstance(lane, str):
+            return lane
+        parent = item.parent()
+        lane = parent.data(0, ROLE_LANE) if parent is not None else None
+        return lane if isinstance(lane, str) else None
+
+    def dropEvent(self, event: QtGui.QDropEvent | None) -> None:  # noqa: N802
+        if event is None:
+            return
+        item = self.currentItem()
+        sid = item.data(0, ROLE_SIGNAL) if item is not None else None
+        target = self.drop_target(event.position().toPoint())
+        event.setDropAction(QtCore.Qt.DropAction.IgnoreAction)
+        event.accept()
+        if isinstance(sid, str) and target is not None:
+            self._pending_drop = (sid, target)
+            self._drop_timer.start()
+
+    def _apply_drop(self) -> None:
+        if self._pending_drop is not None:
+            sid, target = self._pending_drop
+            self._pending_drop = None
+            self.dropped.emit(sid, target)
+
+
 class SignalListPanel(QtWidgets.QWidget):
     """
     Signals grouped by lane. The owner applies what it emits (plot, persistence) and
@@ -80,7 +135,8 @@ class SignalListPanel(QtWidgets.QWidget):
         self.filter_edit.textChanged.connect(self._apply_filter)
         layout.addWidget(self.filter_edit)
 
-        self.tree = QtWidgets.QTreeWidget()
+        self.tree = SignalTree()
+        self.tree.dropped.connect(self.move_to_lane)
         self.tree.setColumnCount(2)
         self.tree.setHeaderHidden(True)
         self.tree.setRootIsDecorated(True)
@@ -132,6 +188,7 @@ class SignalListPanel(QtWidgets.QWidget):
                 QtCore.Qt.ItemFlag.ItemIsEnabled
                 | QtCore.Qt.ItemFlag.ItemIsUserCheckable
                 | QtCore.Qt.ItemFlag.ItemIsAutoTristate
+                | QtCore.Qt.ItemFlag.ItemIsDropEnabled
             )
             font = lane_item.font(0)
             font.setBold(True)
@@ -144,11 +201,16 @@ class SignalListPanel(QtWidgets.QWidget):
                 item = QtWidgets.QTreeWidgetItem([sig.get("label", sid), ""])
                 item.setData(0, ROLE_SIGNAL, sid)
                 item.setIcon(0, _swatch(sig.get("color", "#FFFFFF")))
-                item.setToolTip(0, f"{sig.get('label', sid)} ({sig.get('field', sid)})")
+                item.setToolTip(
+                    0,
+                    f"{sig.get('label', sid)} ({sig.get('field', sid)}): drag to another lane",
+                )
                 item.setFlags(
                     QtCore.Qt.ItemFlag.ItemIsEnabled
                     | QtCore.Qt.ItemFlag.ItemIsUserCheckable
                     | QtCore.Qt.ItemFlag.ItemIsSelectable
+                    | QtCore.Qt.ItemFlag.ItemIsDragEnabled
+                    | QtCore.Qt.ItemFlag.ItemIsDropEnabled  # a drop on a signal: its lane
                 )
                 item.setCheckState(
                     0,

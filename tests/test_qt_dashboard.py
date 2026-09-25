@@ -167,3 +167,112 @@ def test_configuration_opens_in_its_own_window(qtbot: Any, tmp_path: Path) -> No
     assert win.config_window.isVisible()
     assert win.configurator.parent() is win.config_window
     win.config_window.close()
+
+
+def _mouse(widget: Any, kind: Any, x: float, modifiers: Any = None) -> None:
+    from PyQt6 import QtGui, QtWidgets
+
+    left = QtCore.Qt.MouseButton.LeftButton
+    event = QtGui.QMouseEvent(
+        kind,
+        QtCore.QPointF(x, 5),
+        QtCore.QPointF(widget.mapToGlobal(QtCore.QPoint(int(x), 5))),
+        left,
+        left if kind != QtCore.QEvent.Type.MouseButtonRelease else QtCore.Qt.MouseButton.NoButton,
+        modifiers or QtCore.Qt.KeyboardModifier.NoModifier,
+    )
+    QtWidgets.QApplication.sendEvent(widget, event)
+
+
+def test_dragging_a_parameter_label_scrubs_its_row(qtbot: Any) -> None:
+    from ui.panels.command_panel import SCRUB_PX_PER_STEP, ScrubLabel
+
+    panel = _pid_panel(qtbot)
+    move = QtCore.QEvent.Type.MouseMove
+    label = panel.labels["kp"]
+    assert isinstance(label, ScrubLabel) and not isinstance(panel.labels["use_pi"], ScrubLabel)
+    panel.mark_sent({"Left": {"kp": 0.1}, "Right": {"kp": 0.1}})
+
+    _mouse(label, QtCore.QEvent.Type.MouseButtonPress, 5)
+    _mouse(label, move, 5 + 10 * SCRUB_PX_PER_STEP)  # 10 steps of 0.01, linked: both
+    assert panel.inputs["Left"]["kp"].value() == pytest.approx(0.2)
+    assert panel.inputs["Right"]["kp"].value() == pytest.approx(0.2)
+    assert panel.edited() == [("Left", "kp"), ("Right", "kp")]
+    _mouse(label, move, 5 + 10 * SCRUB_PX_PER_STEP, QtCore.Qt.KeyboardModifier.ShiftModifier)
+    assert panel.inputs["Left"]["kp"].value() == pytest.approx(1.1)  # ×10
+    _mouse(label, move, 5)  # back to where the drag started: exactly the start value
+    assert panel.inputs["Left"]["kp"].value() == pytest.approx(0.1)
+    _mouse(label, QtCore.QEvent.Type.MouseButtonRelease, 5)
+    assert panel.edited() == []
+
+    panel.links["kp"].setChecked(False)
+    panel.inputs["Right"]["kp"].setValue(0.5)
+    _mouse(label, QtCore.QEvent.Type.MouseButtonPress, 50)
+    _mouse(label, move, 50 - 2 * SCRUB_PX_PER_STEP)  # unlinked: each column moves
+    assert panel.inputs["Left"]["kp"].value() == pytest.approx(0.08)
+    assert panel.inputs["Right"]["kp"].value() == pytest.approx(0.48)
+    _mouse(label, move, 50 + 10 * SCRUB_PX_PER_STEP, QtCore.Qt.KeyboardModifier.AltModifier)
+    assert panel.inputs["Left"]["kp"].value() == pytest.approx(0.11)  # ×0.1: one step
+    _mouse(label, QtCore.QEvent.Type.MouseButtonRelease, 50)
+
+
+def test_escape_reverts_the_values_edited_since_the_last_send(qtbot: Any) -> None:
+    panel = _pid_panel(qtbot)
+    panel.show()
+    qtbot.waitExposed(panel)
+    panel.activateWindow()
+    panel.mark_sent({"Left": {"kp": 0.1, "rps": 0.3}, "Right": {"kp": 0.1, "rps": 0.3}})
+    field = panel.inputs["Left"]["kp"]
+    field.setValue(0.4)
+    panel.inputs["Right"]["rps"].setValue(2.0)
+    assert len(panel.edited()) == 4  # linked rows: both columns
+    field.setFocus()
+    qtbot.waitUntil(field.hasFocus, timeout=2000)
+    qtbot.keyClick(field, QtCore.Qt.Key.Key_Escape)
+    assert panel.edited() == []
+    assert field.value() == pytest.approx(0.1)
+    assert panel.inputs["Right"]["rps"].value() == pytest.approx(0.3)
+
+
+def test_dropping_a_signal_on_another_lane_moves_it(qtbot: Any) -> None:
+    from PyQt6 import QtGui
+
+    from ui.panels.signals import SignalListPanel
+
+    panel = SignalListPanel()
+    qtbot.addWidget(panel)
+    panel.resize(320, 900)
+    panel.rebuild_list(StreamConfigLoader(DEFAULT_CONFIG_PATH).get_stream("pid"))
+    panel.show()
+    qtbot.waitExposed(panel)
+    tree = panel.tree
+    moves: list[tuple[str, str, str]] = []
+    panel.signal_lane_changed.connect(lambda *a: moves.append(a))
+    (speed, speed_label), (error, _), *_ = panel.lanes()
+
+    def drop(sid: str, pos: QtCore.QPoint) -> None:
+        tree.setCurrentItem(panel._items[sid])
+        event = QtGui.QDropEvent(
+            QtCore.QPointF(pos),
+            QtCore.Qt.DropAction.MoveAction,
+            QtCore.QMimeData(),
+            QtCore.Qt.MouseButton.LeftButton,
+            QtCore.Qt.KeyboardModifier.NoModifier,
+        )
+        tree.dropEvent(event)
+
+    drop("left_error", tree.visualItemRect(panel._lane_items[speed]).center())
+    qtbot.waitUntil(lambda: panel.lane_of("left_error") == speed, timeout=2000)
+    assert moves[-1] == ("left_error", speed, speed_label)
+
+    # Onto a signal row: that signal's lane.
+    drop("left_error", tree.visualItemRect(panel._items["right_error"]).center())
+    qtbot.waitUntil(lambda: panel.lane_of("left_error") == error, timeout=2000)
+
+    # Below the list: a new lane (lanes collapsed, so there's empty space whatever the font).
+    tree.collapseAll()
+    viewport = tree.viewport()
+    assert viewport is not None
+    drop("left_error", QtCore.QPoint(20, viewport.height() - 5))
+    qtbot.waitUntil(lambda: (panel.lane_of("left_error") or "").startswith("Lane "), timeout=2000)
+    assert moves[-1][1] == moves[-1][2] == panel.lane_of("left_error")

@@ -271,7 +271,8 @@ device had last received.
 - [x] **R6.2 Signals dock**: signals grouped by lane, with a filter, lane check boxes and
   counts. It is also the legend and the cursor readout (value, Δ). The readout text on the
   plot is removed.
-  *Done: lane moves are in a signal's context menu (no drag and drop yet).*
+  *Done: lane moves by drag and drop (onto a lane, onto a signal of it, or below the list
+  for a new lane) or the context menu.*
 - [x] **R6.3 Controls dock**: the stream's panel with edited vs last sent (highlight,
   count, Revert) and rows linked across columns. A numbered send log with "what changed"
   and "Send again", and a dashed marker on the plot per send.
@@ -280,7 +281,8 @@ device had last received.
   debounce, at most every 100 ms). Named presets per panel. Ctrl+Enter presses the main
   button.
   *Done. Scope: A/B is two presets plus the trigger's overlay, not a separate toggle.
-  Dragging a label to change its value is not done.*
+  Dragging a number parameter's label changes it (Shift ×10, Alt ×0.1); Esc reverts
+  unsent values (2026-09-25 follow-up).*
 - [x] **R6.5 Trigger on the plot**: the Trigger toolbar button shows its state and opens the
   setup. While armed, the level is a draggable dashed line. A capture shades the time
   before the trigger, and the Step response dock compares metrics with the previous

@@ -145,7 +145,8 @@ on the right. Docks can be closed (View menu), moved, or floated; the layout is 
    - Hovering the plot shows each signal's value at the cursor next to its name, and the
      time at the top. Next to a gap (lost frames), a value reads `n/a` rather than being
      interpolated across the gap.
-   - Right-click a signal → **Move to lane** (or **New lane**).
+   - Drag a signal onto another lane (or into the empty space below the list, for a new
+     lane), or right-click it → **Move to lane** / **New lane**.
    - Visibility and lane moves are remembered per stream (and per config file) between
      runs, on top of `streams.json`. **View → Reset view to streams.json** forgets them for
      the shown stream. To change the file itself, use the Visible and Lane columns of the
@@ -165,8 +166,11 @@ on the right. Docks can be closed (View menu), moved, or floated; the layout is 
    streams), generated from `streams.json` `panels`. Its buttons send commands while
    connected; the status bar says what was sent, or why not.
    - After a send, a value that differs from what was last sent is highlighted and counted
-     (`2 unsent`); **Revert** puts them back. (Before the first send, what the device holds
-     is unknown, so nothing is marked.)
+     (`2 unsent`); **Revert** (or Esc) puts them back. (Before the first send, what the
+     device holds is unknown, so nothing is marked.)
+   - Drag a number parameter's label left or right to change it, like a knob: one step per
+     4 px, ×10 with Shift, ×0.1 with Alt. A linked row stays equal; an unlinked row moves
+     every column by the same amount.
    - With two or more columns, a row's **⇄** keeps its columns equal (e.g. the same Kp for
      both motors); rows whose values start equal start linked. **Link columns** does all.
    - **Live** sends a column 150 ms after its values stop changing (at most every 100 ms):
