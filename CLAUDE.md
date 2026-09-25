@@ -18,7 +18,7 @@ so you can work without hardware.
    (`C*` correctness, `P*` performance, `A*` architecture, `T*` tooling).
 4. `docs/adr/`: design decisions. ADR-0002 is the target pipeline.
 5. `docs/specs/`: working specs for the next roadmap items. **Phase 9 is in progress (R9.1–R9.6):
-   the scope view, `docs/specs/phase9-scope-view.md` (ADR-0012, proposed). R9.1 done; next R9.3.**
+   the scope view, `docs/specs/phase9-scope-view.md` (ADR-0012, proposed). R9.1 and R9.3 done; next R9.2.**
 
 Before starting non-trivial work, check whether a roadmap item or finding already covers
 it, and reference its ID in commits and PRs.
@@ -85,11 +85,13 @@ core/simulation/        synth (frames from a stream's `sim` config), pid_motor (
 core/acquisition/       engine (QThread controller), storage (SampleStore, StreamStores), timebase (per-stream time:
                         wrap/reset/gap -> monotonic ticks; seconds applied at snapshot), lod (min/max level of
                         detail for live frames, summarised lazily on read)
-ui/main_window.py       composition (session toolbar, stream tabs over the plot, Signals / Controls / Step
-                        response docks, editor window), thread setup, signal wiring, menus (ADR-0008)
+ui/main_window.py       composition (session toolbar, stream tabs over the plot, a splitter of Signals pane |
+                        plot | right pane (Tune or Step) with edge tabs and `[` `]` `\` (R9.3), editor window),
+                        thread setup, signal wiring, menus (ADR-0008, ADR-0012)
+ui/panes.py             PaneState (open panes, right view, widths; kept per profile) and EdgeTab (R9.3)
 ui/app_settings.py      QSettings keys (config path, recording options, profiles folder, recent profiles)
 ui/ui_state.py          remembered port and baud, stream, view overrides, panel values, presets, Live mode
-                        (per config file, i.e. per device profile) and the window/dock layout
+                        (per config file, i.e. per device profile), the panes (per profile) and the window geometry
 ui/charts/              TelemetryPlot (lanes = signals[*].group, per-lane Y modes, cursor/Δ), LiveFeed (pulls the
                         store's overview), lanes.py + series.py (Qt-free layout, range, decimation, readout),
                         trigger_controller (arms on the shown store, emits captures)
@@ -147,7 +149,7 @@ hold these bytes verbatim (ADR-0006), so a wire change also affects replaying ol
 - **Render budget.** Keep one paint per live frame. pyqtgraph items that change their
   transform or geometry inside `paint()` (a visible `TextItem`, a deferred view matrix)
   schedule a second paint. So nothing is drawn as text on the plot: the readout is shown in
-  the Signals dock (`readout_changed`), and overlays are lines and regions only (markers,
+  the Signals pane (`readout_changed`), and overlays are lines and regions only (markers,
   trigger level, capture shading). Check changes to the plot with `tools/bench_render.py`
   and record the numbers.
 - **The protocol and decoding layers (`core/protocol`) must not import Qt.** Keep them

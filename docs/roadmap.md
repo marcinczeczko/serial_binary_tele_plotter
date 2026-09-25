@@ -393,7 +393,7 @@ in each item's PR.
   link health (errors only when non-zero).
   *Done when:* every piece of state the three rows showed is in the bar or its tooltips, and
   the window has no `QToolBar` or `QStatusBar`.
-- [ ] **R9.3 Panes and edge tabs**: a splitter with the Signals pane, the plot and the right
+- [x] **R9.3 Panes and edge tabs**: a splitter with the Signals pane, the plot and the right
   pane (Tune / Step, or the terminal); always-visible edge tabs `SIGNALS`, `TUNE`, `STEP`;
   keys `[`, `]`, `\`; open state, view and widths kept per profile.
   *Done when:* each pane opens and closes from its tab and its key, `\` gives a plot-only

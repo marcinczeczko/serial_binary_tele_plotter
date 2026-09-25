@@ -58,7 +58,7 @@ def test_generated_pid_panel_sends_config_defined_commands(qtbot: Any, tmp_path:
     _show(win, "pid")
     panel = win.panel.control_panels["diffbot_pid"]
     assert win.panel.controls_stack.currentWidget() is panel
-    assert win.controls_dock.windowTitle() == "PID Tuning"
+    assert win.controls_title == "PID Tuning" and win.tune_tab.text() == "TUNE"
     assert list(panel.inputs) == ["Left", "Right"]
     assert list(panel.inputs["Left"]) == [
         *("kp", "ki", "k1", "k2", "k3", "k_aw", "alpha", "rps", "use_ramp", "use_pi")
@@ -111,7 +111,7 @@ def test_generated_pid_panel_sends_config_defined_commands(qtbot: Any, tmp_path:
     )
     _show(win, "imu_6axis")  # the IMU stream names no panel
     assert win.panel.controls_stack.currentWidget() is win.panel.empty_controls
-    assert win.controls_dock.windowTitle() == "Controls"
+    assert win.controls_title == "Controls"
     _disconnect(qtbot, win)
 
 
@@ -165,7 +165,7 @@ def test_ui_state_is_remembered_between_runs(qtbot: Any, tmp_path: Path) -> None
     pid_panel.inputs["Left"]["use_ramp"].setChecked(True)  # linked: both
     pid_panel.save_preset("reverse")
     pid_panel.set_live(True)
-    win.signals_dock.close()
+    win.toggle_signals_pane()
     win.close()
     win.settings.sync()
 
@@ -185,7 +185,7 @@ def test_ui_state_is_remembered_between_runs(qtbot: Any, tmp_path: Path) -> None
     assert pid.inputs["Left"]["rps"].value() == 0.3  # untouched values keep their default
     assert not pid.links["rps"].isChecked() and pid.links["kp"].isChecked()  # equal: linked
     assert pid.preset_names() == ["reverse"] and pid.live
-    assert again.signals_dock.isHidden()  # the window layout is restored too
+    assert again.panel.sig_panel.isHidden() and not again.signals_tab.lit  # panes too
     pid.inputs["Right"]["rps"].setValue(2.0)
     pid.apply_preset("reverse")
     assert pid.inputs["Right"]["rps"].value() == -1.25

@@ -18,8 +18,9 @@ Primary use cases:
   each with its own Y axis. Each lane's Y range can be auto, auto-grow or manual. 34
   signals × 100k samples stay at 30 FPS.
 - One window: a toolbar for the session, streams as tabs above the plot (with each
-  stream's live rate), a Signals dock (legend, visibility, lanes and the cursor readout in
-  one list) and Controls / Step response docks. The layout is remembered.
+  stream's live rate), a Signals pane (legend, visibility, lanes and the cursor readout in
+  one list) and a Controls / Step response pane, each opened and closed from a tab on the
+  window's edge. Which panes are open and their widths are remembered per profile.
 - **Device profiles**: one file per device (`robot-1`, `esc-2`, …) with its wire format,
   baud rate and streams, picked first in the toolbar. Port and baud are remembered per
   profile. The bundled `streams.json` is the `diffbot` profile.
@@ -138,8 +139,12 @@ CI (`.github/workflows/ci.yml`) runs lint, format check, mypy and the tests on e
 ## Usage
 
 The window has a toolbar (connection, pause, record, trigger), the streams as tabs above
-the plot, the **Signals** dock on the left and the **Controls** / **Step response** docks
-on the right. Docks can be closed (View menu), moved, or floated; the layout is remembered.
+the plot, the **Signals** pane on the left and the **Tune** / **Step response** pane on the
+right. The tabs on the window's edges (`SIGNALS`; `TUNE` and `STEP`, or `TERMINAL` for a
+text profile) are always there: a lit tab closes its pane, an unlit one opens it. Keys: `[`
+toggles Signals, `]` the right pane, `\` both (plot only); a text field you're typing in
+keeps those keys. Open panes, the right pane's view and the pane widths are remembered per
+profile; drag the edge between a pane and the plot to resize it.
 
 1. Launch the app with `uv run python main.py`.
 2. The toolbar starts with the **device profile** (`diffbot · binary ▾`): what the device
@@ -155,7 +160,7 @@ on the right. Docks can be closed (View menu), moved, or floated; the layout is 
 4. Pick a **stream tab** above the plot. Every stream is decoded all the time, so a tab is
    only a view. Each tab shows its stream's rate while connected (`200 Hz`), or `no data`
    when none of its frames arrive (check its `stream_id` and layout).
-5. **Signals** dock: the shown stream's signals, grouped by lane.
+5. **Signals** pane: the shown stream's signals, grouped by lane.
    - A check box shows or hides a signal; a lane's check box does it for the whole lane,
      and the lane shows how many are shown (`3/4`). The filter box narrows the list.
    - Hovering the plot shows each signal's value at the cursor next to its name, and the
@@ -171,14 +176,14 @@ on the right. Docks can be closed (View menu), moved, or floated; the layout is 
      then holds its range. Right-click a lane → **Lane Y range** to choose Auto (fit the
      data in view), Auto-grow (only widens) or Manual, and whether zero is always included.
 6. `Pause` (or Space) enters analysis mode: zoom and pan freely (Auto lanes fit what's in
-   view). A click drops a Δ anchor (drag it to move it), and the Signals dock shows Δt and
+   view). A click drops a Δ anchor (drag it to move it), and the Signals pane shows Δt and
    each signal's Δ. `Resume` returns to the live view; it works even after a session ended.
 7. The **time window** button next to the tabs (`5.000 ms · 2,000 samples`) opens the
    **Period** of the shown stream (the time between two frames, from its `time` block) and
    the **Samples** of history every stream keeps. Changing the period re-times that
    stream's whole history for this session; the button turns orange while it differs from
    the file. Set it in the stream editor (X axis × time per tick) to keep it.
-8. **Controls** dock: the shown stream's control panel (e.g. PID Tuning for the `pid`
+8. **Tune** pane (Controls): the shown stream's control panel (e.g. PID Tuning for the `pid`
    streams), generated from `streams.json` `panels`. Its buttons send commands while
    connected; the status bar says what was sent, or why not.
    - After a send, a value that differs from what was last sent is highlighted and counted
@@ -207,7 +212,7 @@ on the right. Docks can be closed (View menu), moved, or floated; the layout is 
    - **Frame**: the payload as the device sends it, 32 bytes per row, each field in its
      signal's color (grey: not plotted). Click a field to select it; right-click to plot
      it, add a field after it, move it or remove it.
-   - Below, the signals by lane, as in the Signals dock, and **Not plotted** for the fields
+   - Below, the signals by lane, as in the Signals pane, and **Not plotted** for the fields
      without a signal. Drag a field onto a lane to plot it there, a signal onto another lane
      to move it, or onto Not plotted to remove it. The check box is "shown when the stream
      opens". Right-click a lane to rename it.
@@ -273,7 +278,7 @@ on the right. Docks can be closed (View menu), moved, or floated; the layout is 
       trigger time, and the time before it is shaded. Single shot: arm again for the next
       capture. If the buffer holds less than **Before**, the status bar says how much there
       was: raise **Samples** to keep more.
-    - The **Step response** dock (it comes forward on a capture): choose the **Setpoint**
+    - The **Step response** pane (it comes forward on a capture): choose the **Setpoint**
       and **Measurement** signals. The table shows rise time (10–90 %), overshoot, settling
       time (±2 %) and steady-state error for this capture and the previous one, with the
       change (green when smaller). With **Overlay the previous capture** on, the previous
@@ -358,7 +363,7 @@ Each stream entry:
 | Key | Description |
 |-----|-------------|
 | `name` | Display name, on the stream's tab |
-| `controls` | Optional: the key of a panel in `panels` to show in the Controls dock for this stream |
+| `controls` | Optional: the key of a panel in `panels` to show in the Tune pane for this stream |
 | `frame.stream_id` | Packet type byte — must match the `TYPE` field sent by the MCU |
 | `frame.endianness` | `"little"` or `"big"` — must match the MCU's byte order |
 | `frame.fields` | Ordered list of `{name, type}` matching the C struct field order |
@@ -472,7 +477,7 @@ is ignored, with a warning.
 `# sim tick` line once a second that no pattern matches, and answers each line it's sent
 with `ok: <line>`. Recordings of a text profile replay as text.
 
-**Terminal.** A text profile sends from the **Terminal** in the Controls dock, as in a
+**Terminal.** A text profile sends from the **Terminal** in the right pane, as in a
 serial monitor: type a line and press Enter. It's sent with the line ending chosen next
 to the input (`LF`, `CR LF`, `CR` or `none`, remembered per profile), numbered (`▲ 3`)
 and marked on the plot like a panel send. Up/Down recall the lines sent this session,
@@ -643,7 +648,7 @@ serial_binary_tele_plotter/
 │       ├── lod.py             # Incremental min/max level of detail for live drawing
 │       └── timebase.py        # Per-stream time: unwrap, resets, gap markers
 ├── ui/
-│   ├── main_window.py         # Composition (toolbar, docks), engine thread, wiring, menus
+│   ├── main_window.py         # Composition (toolbar, panes), engine thread, wiring, menus
 │   ├── app_settings.py        # QSettings keys (config path, recording options)
 │   ├── ui_state.py            # Remembered port, stream, view overrides, panel values,
 │   │                          #   presets, Live mode, window layout

@@ -6,6 +6,25 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — R9.3 Panes and edge tabs replace the docks
+
+- The window is a splitter: Signals pane | plot | right pane (Tune or Step; the terminal for
+  a text profile). No `QDockWidget` left. Always-visible 22 px edge tabs (`ui/panes.py`
+  `EdgeTab`): `SIGNALS` left, `TUNE` / `STEP` right (`TERMINAL`, no `STEP`, for a text
+  profile); lit = grey fill and a 2 px white edge on the pane side. A lit tab closes its
+  pane; an unlit right tab opens the pane on its view. A trigger capture opens Step.
+- Keys `[`, `]`, `\` (View menu actions); a focused text field keeps them (tested).
+- `PaneState` (open panes, view, widths) is kept per profile in `UiState` (`panes`), and
+  follows `switch_profile`. The ADR-0008 dock layout (`window/state`) is dropped on the first
+  close; only the window geometry stays global.
+- Open question 3 decided: the right tab reads `TUNE` for any command panel (its title in
+  the tooltip), `TERMINAL` for a text profile. No config key.
+- `tests/test_qt_panes.py` (6 tests); dock tests moved to panes. `bench_render.py` drives
+  `TelemetryPlot` alone, so it can't see this change and wasn't run; the plot code is
+  unchanged.
+
+---
+
 ## 2026-09-25 — R9.1 Look: square, flat, B612, scope palette, dot decimals
 
 - `styles.py` is the scope look (ADR-0012 decision 3): colour tokens, a flat grey palette and
