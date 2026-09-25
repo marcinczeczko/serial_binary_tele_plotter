@@ -17,12 +17,13 @@ Primary use cases:
 - Live multi-signal plotting via pyqtgraph, in **lanes**: stacked plots on one time axis,
   each with its own Y axis. Each lane's Y range can be auto, auto-grow or manual. 34
   signals × 100k samples stay at 30 FPS.
-- One window: a toolbar for the session, streams as tabs above the plot (with each
-  stream's live rate), a Signals pane (legend, visibility, lanes and the cursor readout in
+- One window, laid out like a bench scope: one top bar (profile, port, RUN/STOP, the streams
+  as tabs with a data indicator, messages, history, rate, trigger, REC, link health), a
+  Signals pane (legend, visibility, lanes and the cursor readout in
   one list) and a Controls / Step response pane, each opened and closed from a tab on the
   window's edge. Which panes are open and their widths are remembered per profile.
 - **Device profiles**: one file per device (`robot-1`, `esc-2`, …) with its wire format,
-  baud rate and streams, picked first in the toolbar. Port and baud are remembered per
+  baud rate and streams, picked first in the top bar. Port and baud are remembered per
   profile. The bundled `streams.json` is the `diffbot` profile.
 - **Text lines**: a text profile plots boards that print lines (`IMU,120,0.51,-0.02`,
   `ENV t=24.5C h=41%`, any layout) instead of binary frames. Each stream is a line pattern.
@@ -56,8 +57,10 @@ Primary use cases:
   Lost frames are drawn as gaps, never bridged by a line.
 - Adjustable ring-buffer window size, and a per-stream **Period** that can be overridden for
   the session.
-- Link statistics in the toolbar: throughput, samples/s, CRC errors, lost frames
-  (`loop_cntr` gaps) and bytes dropped while re-syncing. Hover for the full breakdown.
+- Link health at the right end of the top bar: the throughput, and in amber only when
+  something was dropped (`CRC 3  LOST 12`: CRC errors, size mismatches, bytes dropped while
+  re-syncing, lost frames from `loop_cntr` gaps, counter resets). Hover for the full
+  breakdown and samples/s.
 - **Recording and replay.** A session's raw bytes are saved to an `.sbtp` file, on demand or
   automatically on connect. A replay goes through the same decoding as a live session,
   errors included, at 1×–10× or maximum speed, and can be paused or stepped.
@@ -138,8 +141,9 @@ CI (`.github/workflows/ci.yml`) runs lint, format check, mypy and the tests on e
 
 ## Usage
 
-The window has a toolbar (connection, pause, record, trigger), the streams as tabs above
-the plot, the **Signals** pane on the left and the **Tune** / **Step response** pane on the
+The window has one **top bar**, left to right: the profile, the port and `Connect`, the
+`RUN`/`STOP` box, the stream tabs, a short message, `H` (the history shown), the rate and
+points, `T` (the trigger), `REC` and the link health. Below it, the **Signals** pane on the left and the **Tune** / **Step response** pane on the
 right. The tabs on the window's edges (`SIGNALS`; `TUNE` and `STEP`, or `TERMINAL` for a
 text profile) are always there: a lit tab closes its pane, an unlit one opens it. Keys: `[`
 toggles Signals, `]` the right pane, `\` both (plot only); a text field you're typing in
@@ -147,19 +151,22 @@ keeps those keys. Open panes, the right pane's view and the pane widths are reme
 profile; drag the edge between a pane and the plot to resize it.
 
 1. Launch the app with `uv run python main.py`.
-2. The toolbar starts with the **device profile** (`diffbot · binary ▾`): what the device
-   sends and which streams to show. Its menu lists the profiles in the profiles folder
+2. The top bar starts with the **device profile** (`diffbot ▾`): what the device sends and
+   which streams to show (the format is in its tooltip and menu). Its menu lists the profiles in the profiles folder
    (default `~/telemetry-profiles`), the bundled `streams.json` and files opened from
    elsewhere, plus **New profile…** (name, format, baud; empty or a copy of the current
    profile), **Open profile file…** and **Edit profile…**. Profiles switch only while
    disconnected. Each profile keeps its own shown stream, view, panel values, port and
    baud; a profile's `baud` is used until you pick another one for it.
-3. Pick a **serial port** and **baud rate**, then click `Connect`. Use `VIRTUAL` for the
-   built-in simulator. Both are remembered for the next run (a port that's gone isn't
-   selected). The toolbar's right end shows the link statistics.
-4. Pick a **stream tab** above the plot. Every stream is decoded all the time, so a tab is
-   only a view. Each tab shows its stream's rate while connected (`200 Hz`), or `no data`
-   when none of its frames arrive (check its `stream_id` and layout).
+3. Pick a **serial port** (the list is re-read each time it opens) and, for a real port, the
+   **baud rate**, then click `Connect`. Use `VIRTUAL` for the built-in simulator (it has no
+   baud). Both are remembered for the next run (a port that's gone isn't selected). The bar's
+   right end shows the link health. Messages (what was sent, a file saved) fade after a few
+   seconds; warnings and errors stay until the next message.
+4. Pick a **stream tab** in the top bar. Every stream is decoded all the time, so a tab is
+   only a view. The square before each name is green while its frames arrive and hollow when
+   none do (check its `stream_id` and layout); the rate is in the tab's tooltip. The shown
+   stream's rate is also next to `H` (`200 Hz` over `2.00k pts`).
 5. **Signals** pane: the shown stream's signals, grouped by lane.
    - A check box shows or hides a signal; a lane's check box does it for the whole lane,
      and the lane shows how many are shown (`3/4`). The filter box narrows the list.
@@ -175,17 +182,18 @@ profile; drag the edge between a pane and the plot to resize it.
    - Live, time follows the newest data and the mouse zooms or pans a lane's Y. That lane
      then holds its range. Right-click a lane → **Lane Y range** to choose Auto (fit the
      data in view), Auto-grow (only widens) or Manual, and whether zero is always included.
-6. `Pause` (or Space) enters analysis mode: zoom and pan freely (Auto lanes fit what's in
+6. The `RUN` box (or Space) turns to `STOP` and enters analysis mode: zoom and pan freely (Auto lanes fit what's in
    view). A click drops a Δ anchor (drag it to move it), and the Signals pane shows Δt and
-   each signal's Δ. `Resume` returns to the live view; it works even after a session ended.
-7. The **time window** button next to the tabs (`5.000 ms · 2,000 samples`) opens the
+   each signal's Δ. `STOP` again (or Space) returns to the live view; it works even after a session ended
+   (disconnected, the box shows `—`).
+7. The **`H`** item (`H 10.0 s`, the history shown: period × samples) opens the
    **Period** of the shown stream (the time between two frames, from its `time` block) and
    the **Samples** of history every stream keeps. Changing the period re-times that
-   stream's whole history for this session; the button turns orange while it differs from
+   stream's whole history for this session; the value turns amber while it differs from
    the file. Set it in the stream editor (X axis × time per tick) to keep it.
 8. **Tune** pane (Controls): the shown stream's control panel (e.g. PID Tuning for the `pid`
    streams), generated from `streams.json` `panels`. Its buttons send commands while
-   connected; the status bar says what was sent, or why not.
+   connected; the top bar's message says what was sent, or why not.
    - After a send, a value that differs from what was last sent is highlighted and counted
      (`2 unsent`); **Revert** (or Esc) puts them back. (Before the first send, what the
      device holds is unknown, so nothing is marked.)
@@ -252,14 +260,14 @@ profile; drag the edge between a pane and the plot to resize it.
      stream's size and its first problem as you edit. Saving updates `streams.json` (the
      previous file is kept as `streams.json.bak`); a file with errors isn't saved.
      Commands and panels are edited in the file itself.
-10. **Recording** menu (and the toolbar's `● Record`, which shows the elapsed time):
+10. **Recording** menu (and the top bar's `REC`, which turns red with the elapsed time):
    - **Record** (Ctrl+R) saves everything the port delivers, until you stop it or
      disconnect. The file goes to the recordings folder (default `~/telemetry-recordings`),
-     named after the shown stream and the time, e.g. `pid_20260924-201530.sbtp`. `● REC` in
-     the status bar shows the file.
+     named after the shown stream and the time, e.g. `pid_20260924-201530.sbtp`. `REC`'s
+     tooltip shows the file.
    - **Record automatically on connect** records every session (not replays).
    - **Replay a recording…** plays a file through the normal pipeline: every stream is
-     decoded with the current `streams.json`, and the status bar warns if the recording was
+     decoded with the current `streams.json`, and the top bar warns if the recording was
      made with different frame layouts. Choose the **Replay speed**, **Pause replay** or
      **Step replay** (one recorded read at a time) from the same menu. When the file ends,
      the session stops with "Replay finished".
@@ -269,14 +277,15 @@ profile; drag the edge between a pane and the plot to resize it.
     streams without data are skipped. The time column (`time_s`) comes first. A value
     missing from a frame is an empty CSV field (a Parquet null), and gap markers are left
     out.
-12. **Trigger** (toolbar):
+12. **Trigger** (`T` in the top bar):
     - Pick the trigger **Signal**, **Edge**, **Level**, and how much to keep **Before** and
-      **After** the crossing, then click **Arm** (while connected). While armed, the button
-      says what it waits for (`↘ L: Target Setpoint < 0.15 · ARMED`) and the level is a
+      **After** the crossing, then click **Arm** (while connected). While armed, `T` turns
+      orange and shows the source's colour, the edge and the level (`╲ 0.15 ARMED`; the
+      tooltip says `↘ L: Target Setpoint < 0.15`), and the level is a
       dashed line on the plot: drag it to change the level.
     - At the crossing, the capture is frozen in analysis mode with the Δ anchor at the
       trigger time, and the time before it is shaded. Single shot: arm again for the next
-      capture. If the buffer holds less than **Before**, the status bar says how much there
+      capture. If the buffer holds less than **Before**, the top bar says how much there
       was: raise **Samples** to keep more.
     - The **Step response** pane (it comes forward on a capture): choose the **Setpoint**
       and **Measurement** signals. The table shows rise time (10–90 %), overshoot, settling
@@ -353,7 +362,7 @@ commands and panels. Edit it directly or use the in-app stream editor. The bundl
 A file without `schema_version` is version 1 (before panels were configurable). It's read
 as the current version: a stream's `panel_type: "pid"` becomes `controls: "diffbot_pid"`,
 with the PID commands and panel added, and `"imu"` (which sent nothing) is dropped. A
-version 2 file is read unchanged as a binary profile named after the file. The status bar
+version 2 file is read unchanged as a binary profile named after the file. The top bar
 says so, and the file changes only when you save it from the stream editor. A file with a
 newer version than the app knows is refused. Recordings keep the profile's name and format,
 so a replay decodes with the format it was recorded with.
@@ -383,11 +392,11 @@ frames, and by default it's also the X axis. It should be a `u32` and the first 
 - An integer time field that wraps (for example a `u32` µs timestamp, every 71 minutes) is
   unwrapped.
 - If the field jumps backwards (the MCU restarted), a new segment starts right after the
-  old one, and the status bar says so.
+  old one, and the top bar says so.
 - A jump of more than 1.5 × `step` is drawn as a gap: frames were lost.
 
 **Validation.** `streams.json` is checked when it's loaded and before the editor saves it:
-- Errors leave a stream out of the stream list, and the status bar reports them (hover for
+- Errors leave a stream out of the stream list, and the top bar reports them (hover for
   details). Errors are:
   - an unknown field type or a duplicate field name
   - no `loop_cntr` field
@@ -459,7 +468,7 @@ For this profile the firmware prints, for example,
 and blank lines are skipped. Each line is tried against the streams in file order, and
 the first full match wins. A line that matches no pattern (a boot banner, a debug print)
 is counted as *unmatched*. A line longer than 1024 bytes is dropped and counted. The
-status bar shows these counts for a text profile (hover for all of them).
+link health's tooltip shows these counts for a text profile.
 
 **X axis.** `time.field` works as for binary streams. Without one, it's `loop_cntr` if the
 pattern has that slot, otherwise the stream's **line number** (`_line`): each matched
@@ -648,14 +657,15 @@ serial_binary_tele_plotter/
 │       ├── lod.py             # Incremental min/max level of detail for live drawing
 │       └── timebase.py        # Per-stream time: unwrap, resets, gap markers
 ├── ui/
-│   ├── main_window.py         # Composition (toolbar, panes), engine thread, wiring, menus
+│   ├── main_window.py         # Composition (top bar, panes), engine thread, wiring, menus
 │   ├── app_settings.py        # QSettings keys (config path, recording options)
 │   ├── ui_state.py            # Remembered port, stream, view overrides, panel values,
 │   │                          #   presets, Live mode, window layout
 │   ├── charts/                # TelemetryPlot (lanes, markers, trigger line), LiveFeed (pulls
 │   │                          #   the store's overview), TriggerController, lanes/series
-│   ├── panels/                # Toolbar connection, stream tabs, Signals (legend + readout),
-│   │                          #   control panels + send log, time window, trigger
+│   ├── panels/                # Top bar (connection, RUN/STOP, stream tabs, H/T/REC), Signals
+│   │                          #   (legend + readout), control panels + send log, time window,
+│   │                          #   trigger
 │   └── config/                # Stream editor (File → Edit profile): frame view,
 │                              #   lanes, field form, From C struct… dialog
 ├── tests/                     # pytest; `qt`-marked tests use real Qt
@@ -688,9 +698,9 @@ serial_binary_tele_plotter/
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | No serial ports appear | OS permission denied | Add user to `dialout` group (Linux) or grant Terminal serial access (macOS) |
-| Plot is flat / no data | `stream_id` or frame layout mismatch | Check the status-bar tooltip: "Frames with unconfigured stream IDs" means no stream in `streams.json` uses the ID the MCU sends; "Size mismatches" means the field list doesn't match the firmware struct |
-| Data looks corrupted | Baud rate mismatch | CRC errors and dropped bytes climb in the status bar; make firmware and UI baud rates identical |
-| Gaps in traces | Frames lost | The status bar shows "lost N" (`loop_cntr` gaps); each loss is drawn as a gap in the trace |
+| Plot is flat / no data | `stream_id` or frame layout mismatch | Check the link health's tooltip (top bar, right): "Frames with unconfigured stream IDs" means no stream in `streams.json` uses the ID the MCU sends; "Size mismatches" means the field list doesn't match the firmware struct |
+| Data looks corrupted | Baud rate mismatch | The link health turns amber with `CRC` and `SYNC` counts; make firmware and UI baud rates identical |
+| Gaps in traces | Frames lost | The link health shows `LOST N` (`loop_cntr` gaps); each loss is drawn as a gap in the trace |
 | Time axis runs too fast or slow | `time.scale_s` doesn't match the MCU loop period | Correct the **Period** (time window button) to check, then set it in the stream editor → Time Base |
 | "Time counter went backwards" | The MCU restarted (or the time field reset) | Expected after a reset; the new data continues on a new segment after a gap |
 | "recorded with different frame layouts" | `streams.json` changed since the recording | The replay decodes with the current config; restore the old layout (the recording's header has it) to decode it as recorded |

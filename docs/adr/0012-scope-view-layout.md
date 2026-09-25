@@ -1,8 +1,8 @@
 # ADR-0012: The scope view: one top bar, edge-tab panes, a bundled instrument font
 
-- Status: Proposed (2026-09-25, Phase 9)
+- Status: Accepted (2026-09-25; decisions 1–5 built in R9.1–R9.3)
 - Date: 2026-09-25
-- Supersedes, once accepted: ADR-0008 decisions 1–3 (the session toolbar, the stream-tabs row and
+- Supersedes: ADR-0008 decisions 1–3 (the session toolbar, the stream-tabs row and
   the docks). ADR-0008's other decisions (no text on the plot, edited vs sent, Live mode, numbered
   sends) stay.
 - Spec: [`docs/specs/phase9-scope-view.md`](../specs/phase9-scope-view.md). Design canvas:

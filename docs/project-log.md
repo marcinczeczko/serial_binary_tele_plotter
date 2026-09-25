@@ -6,6 +6,26 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — R9.2 Top bar replaces the toolbar, the tabs row and the status bar
+
+- One 36 px bar (`ui/panels/top_bar.py`): profile `diffbot ▾` (format in tooltip and menu) |
+  port, baud (serial ports only), Connect | RUN/STOP box (today's Pause; `—` disconnected)
+  | stream tabs with a green/hollow data square (rate in the tooltip) | transient message
+  (info fades after 5 s, warnings/errors stay; `MainWindow._say`) | `H 10.0 s` | `200 Hz` /
+  `2.00k pts` | `T` (orange when armed: source colour, edge, level, ARMED) | `REC` (red with
+  the elapsed time) | link health. No `QToolBar`, `QStatusBar` or `QDockWidget` (tested).
+- Link health (`format_link_report` now returns rate, problems, tooltip): `29 kB/s` dim;
+  anything dropped shows as `CRC 3  LOST 12` (CRC, SIZE, SYNC, LOST, RESET; text: LONG,
+  BAD, LOST, RESET) in black on amber. Every counter stays in the tooltip (C13).
+- No ⟳: the port list is re-read when it opens; the port box sizes to the chosen port.
+- The status bar's cursor text is gone: the Signals pane header already shows the cursor
+  time and Δt (R9.4 restyles it). The recording's file name moved to `REC`'s tooltip.
+- ADR-0012 accepted (decisions 1–5 built); ADR-0008 decisions 1–3 superseded.
+- `tests/test_qt_top_bar.py` (14 tests); stats, dashboard, phase-4 and profile tests follow
+  the new texts. `bench_render.py` doesn't build the window, so it wasn't run.
+
+---
+
 ## 2026-09-25 — R9.3 Panes and edge tabs replace the docks
 
 - The window is a splitter: Signals pane | plot | right pane (Tune or Step; the terminal for

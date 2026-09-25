@@ -1,6 +1,6 @@
 # ADR-0008: Dashboard layout: a toolbar, stream tabs and docks
 
-- Status: Accepted (2026-09-25, R6.1–R6.5)
+- Status: Accepted (2026-09-25, R6.1–R6.5); decisions 1–3 superseded by ADR-0012 (R9.2, R9.3)
 - Date: 2026-09-25
 - Design spike: concept A of the UX canvas (layouts A, B and C compared with a screenshot
   of the previous UI).

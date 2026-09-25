@@ -80,12 +80,12 @@ def test_record_on_connect_then_replay_from_the_menu(qtbot: Any, tmp_path: Path)
     win = _window(qtbot, tmp_path, record_on_connect=True)
     assert win.act_record_on_connect.isChecked()
     _connect_virtual(qtbot, win)
-    qtbot.waitUntil(lambda: win.lbl_rec.text().startswith("● REC"), timeout=5000)
+    qtbot.waitUntil(lambda: win.record_btn.text().startswith("REC 0"), timeout=5000)
     assert win.act_record.isChecked()
     pid = win.stores.get("pid")
     qtbot.waitUntil(lambda: pid is not None and pid.total_stored >= 100, timeout=5000)
     _disconnect(qtbot, win)
-    qtbot.waitUntil(lambda: win.lbl_rec.text() == "", timeout=5000)
+    qtbot.waitUntil(lambda: win.record_btn.text() == "REC", timeout=5000)
 
     (path,) = (tmp_path / "recordings").glob("*.sbtp")
     reader = RecordingReader(path)
@@ -101,7 +101,7 @@ def test_record_on_connect_then_replay_from_the_menu(qtbot: Any, tmp_path: Path)
     assert replayed is not None and len(replayed) == recorded // frame_len
     assert win.engine_state == EngineState.CONFIGURED
     assert not win.panel.conn_panel.connect_btn.isChecked()
-    assert win.lbl_rec.text() == ""  # a replay isn't recorded automatically
+    assert win.record_btn.text() == "REC"  # a replay isn't recorded automatically
     assert len(list((tmp_path / "recordings").glob("*.sbtp"))) == 1
 
 
@@ -143,8 +143,9 @@ def test_trigger_capture_pauses_with_metrics(qtbot: Any, tmp_path: Path) -> None
     panel.post_sb.setValue(0.4)
     panel.arm_btn.click()
     assert panel.state_lbl.text() == "Armed: waiting…"
-    # On the plot and in the toolbar while armed (R6.5).
-    assert win.trigger_btn.text() == "↘ L: Target Setpoint < 0.15 · ARMED"
+    # On the plot and in the top bar while armed (R6.5, R9.2).
+    assert win.trigger_btn.text() == "T ╲ 0.15 ARMED"
+    assert win.trigger_btn.toolTip() == "↘ L: Target Setpoint < 0.15 · ARMED"
     line = win.plot.trigger_line()
     assert line is not None and line.value() == pytest.approx(0.15)
     line.setValue(0.1)  # dragging the line sets the level
@@ -163,7 +164,7 @@ def test_trigger_capture_pauses_with_metrics(qtbot: Any, tmp_path: Path) -> None
     assert "step +0.3 → +0" in panel.metrics_lbl.text()
     assert panel.metric_text(1, 0).endswith(" %") and panel.metric_text(1, 1) == ""
     assert panel.state_lbl.text() == "Idle" and not panel.arm_btn.isChecked()
-    assert win.trigger_btn.text() == "Trigger" and win.plot.trigger_line() is None
+    assert win.trigger_btn.text() == "T —" and win.plot.trigger_line() is None
     assert win.plot.capture_window() == pytest.approx((t_trig - 0.5, t_trig))  # before T
     assert win.panes.view == "step" and win.step_tab.lit  # the Step pane came forward
     assert win.lbl_status.text().startswith(f"Triggered at {t_trig:.3f} s")
