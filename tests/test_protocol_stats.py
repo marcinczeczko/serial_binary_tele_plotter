@@ -17,17 +17,15 @@ def test_report_rates_and_totals() -> None:
 
 
 def test_format_flags_problems_but_not_other_stream_ids() -> None:
-    clean = make_link_report(LinkStats(), LinkStats(unknown_id_frames=5), 0, 1.0)
-    text, tooltip, problems = format_link_report(clean)
-    assert not problems
-    assert "CRC err 0" in text
-    assert "unconfigured stream IDs: 5" in tooltip
+    clean = make_link_report(LinkStats(bytes_rx=29_300), LinkStats(unknown_id_frames=5), 0, 1.0)
+    rate, problems, tooltip = format_link_report(clean)
+    assert problems == ""  # a clean link shows only its rate (R9.2)
+    assert "unconfigured stream IDs: 5" in tooltip and "Header CRC errors: 0" in tooltip
 
-    bad = make_link_report(LinkStats(), LinkStats(header_crc_errors=1, discarded_bytes=7), 0, 1.0)
-    text, _, problems = format_link_report(bad)
-    assert problems
-    assert "CRC err 1" in text
-    assert "dropped 7 B" in text
+    cur = LinkStats(bytes_rx=29_300, header_crc_errors=1, payload_crc_errors=2, discarded_bytes=7)
+    rate, problems, _ = format_link_report(make_link_report(LinkStats(), cur, 0, 1.0))
+    assert rate == "29 kB/s"
+    assert problems == "CRC 3  SYNC 7"  # only what went wrong
 
 
 def test_snapshot_is_independent() -> None:
@@ -40,15 +38,16 @@ def test_snapshot_is_independent() -> None:
 
 
 def test_a_text_report_shows_the_line_counters() -> None:
-    cur = LinkStats(lines_rx=12, frames_decoded=9, lines_unmatched=3)
-    text, tooltip, problems = format_link_report(make_link_report(LinkStats(), cur, 9, 1.0, "text"))
-    assert not problems  # boards print banners: unmatched lines aren't a problem
-    assert "unmatched 3" in text and "CRC" not in text
-    assert "Lines received: 12" in tooltip and "Lines decoded: 9" in tooltip
+    cur = LinkStats(bytes_rx=1_500, lines_rx=12, frames_decoded=9, lines_unmatched=3)
+    rate, problems, tooltip = format_link_report(make_link_report(LinkStats(), cur, 9, 1.0, "text"))
+    assert rate == "1.5 kB/s"
+    assert problems == ""  # boards print banners: unmatched lines aren't a problem
+    assert "Lines received: 12" in tooltip and "Lines matching no pattern: 3" in tooltip
+    assert "CRC" not in tooltip
 
     bad = LinkStats(lines_overlong=1)
-    _, _, problems = format_link_report(make_link_report(LinkStats(), bad, 0, 1.0, "text"))
-    assert problems
+    _, problems, _ = format_link_report(make_link_report(LinkStats(), bad, 0, 1.0, "text"))
+    assert problems == "LONG 1"
 
 
 def test_a_report_carries_the_replies_since_the_previous_one() -> None:

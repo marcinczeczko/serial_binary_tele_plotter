@@ -134,26 +134,38 @@ def make_link_report(
     }
 
 
-def format_link_report(report: LinkReport) -> tuple[str, str, bool]:
-    """Returns (status-bar text, tooltip, has_problems) for a report."""
+def _rate(report: LinkReport) -> str:
+    kb = report["bytes_per_s"] / 1000
+    return f"{kb:.0f} kB/s" if kb >= 10 else f"{kb:.1f} kB/s"
+
+
+def _problems(counts: list[tuple[str, int]]) -> str:
+    """Only what went wrong: `CRC 3  LOST 12` (empty when nothing did)."""
+    return "  ".join(f"{label} {n}" for label, n in counts if n)
+
+
+def format_link_report(report: LinkReport) -> tuple[str, str, str]:
+    """
+    (rate, problems, tooltip) for the top bar's link-health item (R9.2): the byte rate,
+    the non-zero drop counters in short form ("" when the link is clean), and the full
+    breakdown. Nothing dropped is hidden: every counter is in the tooltip (C13).
+    """
     if report["format"] == "text":
         return _format_text_report(report)
     crc = report["header_crc_errors"] + report["payload_crc_errors"]
     # Unconfigured stream IDs aren't flagged: the MCU may send streams nobody plots.
-    problems = (
-        crc
-        + report["size_mismatches"]
-        + report["discarded_bytes"]
-        + report["counter_missing"]
-        + report["counter_resets"]
-    )
-    text = (
-        f"{report['bytes_per_s'] / 1000:.1f} kB/s · {report['samples_per_s']:.0f} samples/s"
-        f" · CRC err {crc} · lost {report['counter_missing']}"
-        f" · dropped {report['discarded_bytes']} B"
+    problems = _problems(
+        [
+            ("CRC", crc),
+            ("SIZE", report["size_mismatches"]),
+            ("SYNC", report["discarded_bytes"]),
+            ("LOST", report["counter_missing"]),
+            ("RESET", report["counter_resets"]),
+        ]
     )
     tooltip = "\n".join(
         [
+            f"{report['samples_per_s']:.0f} samples/s",
             f"Bytes received: {report['bytes_rx']}",
             f"Frames decoded: {report['frames_decoded']}",
             f"Header CRC errors: {report['header_crc_errors']}",
@@ -165,24 +177,22 @@ def format_link_report(report: LinkReport) -> tuple[str, str, bool]:
             f"loop_cntr resets/wraps: {report['counter_resets']}",
         ]
     )
-    return text, tooltip, problems > 0
+    return _rate(report), problems, tooltip
 
 
-def _format_text_report(report: LinkReport) -> tuple[str, str, bool]:
+def _format_text_report(report: LinkReport) -> tuple[str, str, str]:
     # Unmatched lines aren't flagged: boards print banners and debug lines nobody plots.
-    problems = (
-        report["lines_overlong"]
-        + report["value_errors"]
-        + report["counter_missing"]
-        + report["counter_resets"]
-    )
-    text = (
-        f"{report['bytes_per_s'] / 1000:.1f} kB/s · {report['samples_per_s']:.0f} samples/s"
-        f" · unmatched {report['lines_unmatched']} · bad {report['value_errors']}"
-        f" · lost {report['counter_missing']}"
+    problems = _problems(
+        [
+            ("LONG", report["lines_overlong"]),
+            ("BAD", report["value_errors"]),
+            ("LOST", report["counter_missing"]),
+            ("RESET", report["counter_resets"]),
+        ]
     )
     tooltip = "\n".join(
         [
+            f"{report['samples_per_s']:.0f} samples/s",
             f"Bytes received: {report['bytes_rx']}",
             f"Lines received: {report['lines_rx']}",
             f"Lines decoded: {report['frames_decoded']}",
@@ -193,4 +203,4 @@ def _format_text_report(report: LinkReport) -> tuple[str, str, bool]:
             f"Counter resets/wraps: {report['counter_resets']}",
         ]
     )
-    return text, tooltip, problems > 0
+    return _rate(report), problems, tooltip

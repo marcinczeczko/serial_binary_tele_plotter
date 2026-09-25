@@ -387,7 +387,7 @@ in each item's PR.
   `streams.json`, numbers with a dot separator and significant digits whatever the locale.
   *Done when:* no widget has rounded corners, every number shows `0.12` not `0,1200`, and the
   app starts with B612 on a machine without it installed.
-- [ ] **R9.2 Top bar**: one 36 px bar replaces the toolbar, the stream-tabs row and the status
+- [x] **R9.2 Top bar**: one 36 px bar replaces the toolbar, the stream-tabs row and the status
   bar: profile, port + Connect/Disconnect (baud only for serial, no ⟳), RUN/STOP box, stream
   tabs with a data square, transient message, `H` window, rate/points, `T` trigger label, REC,
   link health (errors only when non-zero).

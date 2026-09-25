@@ -18,7 +18,7 @@ so you can work without hardware.
    (`C*` correctness, `P*` performance, `A*` architecture, `T*` tooling).
 4. `docs/adr/`: design decisions. ADR-0002 is the target pipeline.
 5. `docs/specs/`: working specs for the next roadmap items. **Phase 9 is in progress (R9.1–R9.6):
-   the scope view, `docs/specs/phase9-scope-view.md` (ADR-0012, proposed). R9.1 and R9.3 done; next R9.2.**
+   the scope view, `docs/specs/phase9-scope-view.md` (ADR-0012, proposed). R9.1–R9.3 done; next R9.4.**
 
 Before starting non-trivial work, check whether a roadmap item or finding already covers
 it, and reference its ID in commits and PRs.
@@ -85,9 +85,9 @@ core/simulation/        synth (frames from a stream's `sim` config), pid_motor (
 core/acquisition/       engine (QThread controller), storage (SampleStore, StreamStores), timebase (per-stream time:
                         wrap/reset/gap -> monotonic ticks; seconds applied at snapshot), lod (min/max level of
                         detail for live frames, summarised lazily on read)
-ui/main_window.py       composition (session toolbar, stream tabs over the plot, a splitter of Signals pane |
-                        plot | right pane (Tune or Step) with edge tabs and `[` `]` `\` (R9.3), editor window),
-                        thread setup, signal wiring, menus (ADR-0008, ADR-0012)
+ui/main_window.py       composition (the top bar (R9.2), a splitter of Signals pane | plot | right pane (Tune or
+                        Step) with edge tabs and `[` `]` `\` (R9.3), editor window), thread setup, signal
+                        wiring, menus; `_say` puts a message in the bar (ADR-0012)
 ui/panes.py             PaneState (open panes, right view, widths; kept per profile) and EdgeTab (R9.3)
 ui/app_settings.py      QSettings keys (config path, recording options, profiles folder, recent profiles)
 ui/ui_state.py          remembered port and baud, stream, view overrides, panel values, presets, Live mode
@@ -95,8 +95,9 @@ ui/ui_state.py          remembered port and baud, stream, view overrides, panel 
 ui/charts/              TelemetryPlot (lanes = signals[*].group, per-lane Y modes, cursor/Δ), LiveFeed (pulls the
                         store's overview), lanes.py + series.py (Qt-free layout, range, decimation, readout),
                         trigger_controller (arms on the shown store, emits captures)
-ui/panels/              container (owns the controls; MainWindow places them), connection (toolbar row,
-                        starting with the profile menu), profile_dialog (New profile),
+ui/panels/              container (owns the controls; MainWindow places them), top_bar (the 36 px row: PartsButton
+                        with boxed letters, RunBox, MessageLabel, RatePoints, LinkHealth), connection (profile
+                        menu, port (refreshes on open), baud (serial only), Connect, RUN/STOP), profile_dialog (New profile),
                         stream_tabs, signals (lane-grouped list = legend + cursor readout, drag between
                         lanes), command_panel (generated from `panels`: edited vs sent, linked rows, Live,
                         presets, label scrubbing, Esc revert), command_log, terminal (a text profile's

@@ -31,6 +31,7 @@ from core.protocol.stats import LinkReport, format_link_report
 from core.recording.sbtp import SUFFIX as RECORDING_SUFFIX
 from core.recording.sbtp import recording_name
 from core.types import EngineState, PlotMode, PlotPacketWithBounds, StreamConfig
+from styles import AMBER, ORANGE, RED, TEXT, TEXT_MUTED
 from ui.app_settings import (
     DEFAULT_RECORDINGS_DIR,
     KEY_CONFIG_PATH,
@@ -50,11 +51,23 @@ from ui.panels.command_log import CommandLog, LogEntry
 from ui.panels.command_panel import CommandPanel, SendRequest
 from ui.panels.container import MainControlPanel
 from ui.panels.profile_dialog import ProfileDialog
+from ui.panels.top_bar import (
+    Badge,
+    LinkHealth,
+    MessageLabel,
+    PartsButton,
+    RatePoints,
+    Square,
+    Text,
+    TopBar,
+    format_duration,
+)
 from ui.panes import EdgeTab, PaneState, RightView, edge_strip
 from ui.ui_state import UiState
 
 logger = logging.getLogger(__name__)
 
+EDGE_GLYPHS = {"rising": "╱", "falling": "╲", "either": "╳"}  # the bar's trigger edge
 MAX_MARKERS = 200  # per stream; older ones have long left the buffer
 
 
@@ -75,12 +88,10 @@ def _action(
     return act
 
 
-def _popup_button(text: str, content: QtWidgets.QWidget) -> QtWidgets.QToolButton:
-    """A toolbar-style button that opens `content` in a popup below it."""
-    button = QtWidgets.QToolButton()
-    button.setText(text)
+def _popup_button(content: QtWidgets.QWidget) -> PartsButton:
+    """A top-bar item that opens `content` in a popup below it."""
+    button = PartsButton()
     button.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
-    button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
     menu = QtWidgets.QMenu(button)
     action = QtWidgets.QWidgetAction(menu)
     action.setDefaultWidget(content)
@@ -146,19 +157,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self._select_connection()
         self.plot = TelemetryPlot()
 
-        # --- Centre: stream tabs (+ time window) over the plot ---
-        central = QtWidgets.QWidget()
-        central_layout = QtWidgets.QVBoxLayout(central)
-        central_layout.setContentsMargins(0, 0, 0, 0)
-        central_layout.setSpacing(0)
-        tabs_row = QtWidgets.QHBoxLayout()
-        tabs_row.setContentsMargins(6, 2, 6, 2)
-        tabs_row.addWidget(self.panel.stream_tabs, 1)
-        self.time_btn = _popup_button("Time window", self.panel.time_panel)
-        self.time_btn.setToolTip("Period of the shown stream, and how much history is kept")
-        tabs_row.addWidget(self.time_btn)
-        central_layout.addLayout(tabs_row)
-        central_layout.addWidget(self.plot, 1)
+        # --- Top bar pieces (R9.2); placed in `_build_top_bar` once the menus exist ---
+        self.top_bar = TopBar()
+        self.lbl_status = MessageLabel()
+        self.time_btn = _popup_button(self.panel.time_panel)
+        self.rate_points = RatePoints()
+        self.trigger_btn = _popup_button(self.panel.trigger_panel.setup)
+        self.record_btn = PartsButton()
+        self.lbl_link = LinkHealth()
 
         # --- Panes (R9.3, ADR-0012): Signals | plot | Tune or Step, opened from edge tabs ---
         self.command_log = CommandLog()
@@ -171,7 +177,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.right_stack.addWidget(self.controls_view)
         self.right_stack.addWidget(self.panel.trigger_panel.results)
         self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
-        for pane in (self.panel.sig_panel, central, self.right_stack):
+        for pane in (self.panel.sig_panel, self.plot, self.right_stack):
             self.splitter.addWidget(pane)
         self.splitter.setChildrenCollapsible(False)
         self.splitter.setStretchFactor(0, 0)
@@ -187,12 +193,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tune_tab.clicked.connect(lambda: self._set_panes(self.panes.click_right("tune")))
         self.step_tab.clicked.connect(lambda: self._set_panes(self.panes.click_right("step")))
         root = QtWidgets.QWidget()
-        root_layout = QtWidgets.QHBoxLayout(root)
+        root_layout = QtWidgets.QVBoxLayout(root)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
-        root_layout.addWidget(edge_strip([self.signals_tab], "left"))
-        root_layout.addWidget(self.splitter, 1)
-        root_layout.addWidget(edge_strip([self.tune_tab, self.step_tab], "right"))
+        root_layout.addWidget(self.top_bar)
+        body = QtWidgets.QHBoxLayout()
+        body.setSpacing(0)
+        body.addWidget(edge_strip([self.signals_tab], "left"))
+        body.addWidget(self.splitter, 1)
+        body.addWidget(edge_strip([self.tune_tab, self.step_tab], "right"))
+        root_layout.addLayout(body, 1)
         self.setCentralWidget(root)
         self.controls_title = ""
         self.panes = self.ui_state.panes()
@@ -210,20 +220,6 @@ class MainWindow(QtWidgets.QMainWindow):
         config_layout = QtWidgets.QVBoxLayout(self.config_window)
         config_layout.setContentsMargins(0, 0, 0, 0)
         config_layout.addWidget(self.configurator)
-
-        # --- Status Bar Initialization ---
-        self.status_bar = QtWidgets.QStatusBar()
-        self.setStatusBar(self.status_bar)
-
-        self.lbl_status = QtWidgets.QLabel("Ready")
-        self.lbl_cursor = QtWidgets.QLabel("")
-        self.lbl_link = QtWidgets.QLabel("")  # in the toolbar
-        self.lbl_rec = QtWidgets.QLabel("")
-        self.lbl_rec.setStyleSheet("color: #FF4040; font-weight: bold;")
-
-        self.status_bar.addWidget(self.lbl_status)
-        self.status_bar.addPermanentWidget(self.lbl_rec)
-        self.status_bar.addPermanentWidget(self.lbl_cursor)
 
         # Command markers (R6.3): per stream, (time on that stream's time base, label).
         self._markers: dict[str, list[tuple[float, str]]] = {}
@@ -270,7 +266,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.panel.signal_lane_changed.connect(self.plot.move_signal)
 
         # 4. Engine -> UI (small signals only; plot data is pulled by LiveFeed)
-        self.engine.status_msg.connect(self.lbl_status.setText)
+        self.engine.status_msg.connect(lambda text: self._say(text))
         self.engine.connection_failed.connect(self._handle_connection_failed)
         self.engine.state_changed.connect(self._on_engine_state_changed)
         self.engine.streams_configured.connect(self._bind_live_feed)
@@ -287,7 +283,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.trigger.captured.connect(self._on_trigger_captured)
 
         # 6. Interactivity: Plot -> UI
-        self.plot.cursor_moved.connect(self.lbl_cursor.setText)
         self.plot.readout_changed.connect(self.panel.sig_panel.show_readout)
 
         # 7. Phase 6 layout: trigger on the plot, controls dock, log (R6.3, R6.5)
@@ -298,7 +293,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.command_log.resend_requested.connect(self._resend)
 
         self._build_menus()
-        self._build_toolbar()
+        self._build_top_bar()
         conn = self.panel.conn_panel
         conn.profile_chosen.connect(lambda path: self.switch_profile(Path(path)))
         conn.new_profile_requested.connect(self.new_profile)
@@ -324,16 +319,13 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             self.panel.reload_streams()
         except ValueError as e:
-            self.lbl_status.setText(f"Could not reload streams.json: {e}")
-            self.lbl_status.setStyleSheet("color: #FF4040; font-weight: bold;")
+            self._say(f"Could not reload streams.json: {e}", "error")
             return
         self._apply_profile()
         self._configure_engine_streams()
         self._refresh_profiles()
         self._update_title()
-        self.lbl_status.setText("Configuration reloaded from disk.")
-        self.lbl_status.setToolTip("")
-        self.lbl_status.setStyleSheet("")
+        self._say("Configuration reloaded from disk.")
         self._report_config_problems()
 
     def _report_config_problems(self) -> None:
@@ -364,9 +356,8 @@ class MainWindow(QtWidgets.QMainWindow):
             details += loader.migration_notes
         if not parts:
             return
-        self.lbl_status.setText("streams.json: " + "; ".join(parts) + " (hover for details)")
-        self.lbl_status.setToolTip("\n".join(details))
-        self.lbl_status.setStyleSheet("color: #FFB000; font-weight: bold;")
+        text = "streams.json: " + "; ".join(parts) + " (hover for details)"
+        self._say(text, "warn", "\n".join(details))
 
     # --- device profiles (R8.2) ------------------------------------------------------------
 
@@ -415,7 +406,7 @@ class MainWindow(QtWidgets.QMainWindow):
         and the decoder for its format. Only while disconnected (the device changes).
         """
         if self.engine_state == EngineState.RUNNING:
-            self.lbl_status.setText("Disconnect before switching profiles")
+            self._say("Disconnect before switching profiles", "warn")
             return False
         if path.expanduser().resolve() == self.stream_loader.path.expanduser().resolve():
             self._refresh_profiles()
@@ -441,9 +432,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_profiles()
         self._update_title()
         profile = self.stream_loader.profile
-        self.lbl_status.setText(f"Profile {profile.name} ({profile.format})")
-        self.lbl_status.setToolTip(str(self.stream_loader.path))
-        self.lbl_status.setStyleSheet("")
+        self._say(
+            f"Profile {profile.name} ({profile.format})", tooltip=str(self.stream_loader.path)
+        )
         self._report_config_problems()
         return True
 
@@ -539,9 +530,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_time_button()
 
     def _update_time_button(self) -> None:
+        """`H 10.0 s`: the history shown (period × samples), amber while the period is
+        overridden; the rate/points item beside it, for the shown stream."""
         tp = self.panel.time_panel
-        self.time_btn.setText(f"{format_number(tp.get_period())} ms · {tp.get_samples()} samples")
-        self.time_btn.setStyleSheet("color: #FFB000;" if tp.is_overridden() else "")
+        period_ms, samples = tp.get_period(), tp.get_samples()
+        color = AMBER if tp.is_overridden() else TEXT
+        self.time_btn.set_parts(
+            [Badge("H"), Text(format_duration(period_ms * samples / 1000), color)]
+        )
+        self.time_btn.setToolTip(
+            f"History: period {format_number(period_ms)} ms × {samples} samples"
+            + (" (period overridden for this session)" if tp.is_overridden() else "")
+        )
+        self.rate_points.set_points(samples)
+        self.rate_points.set_rate(
+            self.panel.stream_tabs.rate(self.panel.current_stream_key() or "")
+        )
 
     def _on_period_changed(self, period_ms: float) -> None:
         """The user overrode the shown stream's period: re-time that stream (all history)."""
@@ -576,15 +580,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtCore.Q_ARG(int, baud),
             )
             # "Connected" is shown only once the engine reports RUNNING (C12).
-            self.lbl_status.setText(f"Connecting to {port}...")
-            self.lbl_status.setStyleSheet("")
+            self._say(f"Connecting to {port}...")
         else:
             QtCore.QMetaObject.invokeMethod(
                 self.engine, "stop_working", QtCore.Qt.ConnectionType.QueuedConnection
             )
             self._set_pause_state(False, update_status=False)
-            self.lbl_status.setText("Disconnected")
-            self.lbl_status.setStyleSheet("color: #FF4040; font-weight: bold;")
+            self._say("Disconnected")
 
     def _on_engine_state_changed(self, state: EngineState) -> None:
         self.engine_state = state
@@ -595,7 +597,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.panel.conn_panel.set_connected(running)
         self._update_menus()
         if running:
-            self.lbl_status.setStyleSheet("color: #3DFF6E; font-weight: bold;")
             # A new session starts new stream time: markers of the last one no longer apply.
             self._markers.clear()
             self.plot.set_markers([])
@@ -607,12 +608,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self._activity = None
             for key in self.stores.keys():
                 self.panel.stream_tabs.set_activity(key, None)
+            self.rate_points.set_rate(None)
             self._update_menus()
 
     def _on_session_ended(self, message: str) -> None:
         """A replay reached its end: the data stays for analysis."""
-        self.lbl_status.setText(message)
-        self.lbl_status.setStyleSheet("")
+        self._say(message)
 
     def _handle_connection_failed(self, message: str) -> None:
         """
@@ -620,14 +621,10 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         self.panel.conn_panel.set_connected(False)
         self._set_pause_state(False, update_status=False)
-        self.lbl_status.setText(message)
-        self.lbl_status.setStyleSheet("color: #FF4040; font-weight: bold;")
+        self._say(message, "error")
 
     def _on_link_stats(self, report: LinkReport) -> None:
-        text, tooltip, has_problems = format_link_report(report)
-        self.lbl_link.setText(text)
-        self.lbl_link.setToolTip(tooltip)
-        self.lbl_link.setStyleSheet("color: #FFB000;" if has_problems else "")
+        self.lbl_link.show_report(*format_link_report(report))
         if report["format"] == "text":  # the editor's Line view shows the newest lines
             self.configurator.set_last_lines(report["last_lines"], report["last_unmatched"])
             if report["replies"] or report["replies_dropped"]:  # the terminal's (R8.5)
@@ -651,6 +648,9 @@ class MainWindow(QtWidgets.QMainWindow):
         for key, total in totals.items():
             rate = (total - previous[1].get(key, total)) / dt
             self.panel.stream_tabs.set_activity(key, rate)
+        self.rate_points.set_rate(
+            self.panel.stream_tabs.rate(self.panel.current_stream_key() or "")
+        )
         self._update_record_button()
 
     def _handle_pause(self, paused: bool) -> None:
@@ -665,8 +665,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.plot.set_paused(paused, self.live_feed.freeze() if paused else None)
         if not paused:
             self.live_feed.invalidate()
-        if update_status:
-            self.lbl_status.setText("PAUSED" if paused else "Connected")
+        if update_status:  # the RUN/STOP box shows it; the message says what it means
+            self._say("Stopped: measuring the frozen view" if paused else "Running")
 
     # --- commands (R5.2) -----------------------------------------------------------------
 
@@ -828,9 +828,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.plot.set_markers(self._markers.get(self.panel.current_stream_key() or "", []))
         return number
 
+    def _say(self, text: str, level: str = "info", tooltip: str = "") -> None:
+        """The top bar's message (R9.2): info fades; warnings and errors stay."""
+        self.lbl_status.say(text, level, tooltip)
+
     def _command_status(self, text: str, error: bool = False) -> None:
-        self.lbl_status.setText(text)
-        self.lbl_status.setStyleSheet("color: #FF4040; font-weight: bold;" if error else "")
+        self._say(text, "error" if error else "info")
 
     # --- menus: recording, replay, export (R4.1-R4.3) -----------------------------------
 
@@ -892,31 +895,31 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_replay_step = _action(rec_menu, "Step replay (one read)", self._replay_step)
         self._update_menus()
 
-    def _build_toolbar(self) -> None:
-        """Session and acquisition controls in one row (R6.1)."""
-        bar = QtWidgets.QToolBar("Session", self)
-        bar.setObjectName("session_toolbar")
-        bar.setMovable(False)
-        bar.setFloatable(False)
-        self.addToolBar(QtCore.Qt.ToolBarArea.TopToolBarArea, bar)
-        self.toolbar = bar
-        bar.addWidget(self.panel.conn_panel)
-        bar.addSeparator()
-        self.record_btn = QtWidgets.QToolButton()
+    def _build_top_bar(self) -> None:
+        """
+        One row of boxed labels (R9.2, ADR-0012): profile | port, Connect | RUN/STOP |
+        stream tabs | message | H window | rate/points | T trigger | REC | link health.
+        """
+        conn = self.panel.conn_panel
+        bar = self.top_bar
+        bar.add(conn.profile_btn)
+        bar.add(conn.port_combo, conn.baud_combo, conn.connect_btn, spacing=8)
+        bar.add(conn.pause_btn)
+        bar.add(self.panel.stream_tabs)
+        bar.add_stretch(self.lbl_status)
+        bar.add_divider()
+        self.time_btn.setToolTip("History shown (period × samples); click to change")
+        bar.add(self.time_btn)
+        bar.add(self.rate_points)
+        bar.add(self.trigger_btn)
         self.record_btn.setCheckable(True)
-        self.record_btn.setToolTip("Record the session's raw bytes (Ctrl+R)")
         self.record_btn.clicked.connect(lambda _=False: self.act_record.trigger())
-        bar.addWidget(self.record_btn)
-        self.trigger_btn = _popup_button("Trigger", self.panel.trigger_panel.setup)
-        self.trigger_btn.setToolTip("Capture a step: trigger on a signal crossing a level")
-        bar.addWidget(self.trigger_btn)
-        spacer = QtWidgets.QWidget()
-        spacer.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred
-        )
-        bar.addWidget(spacer)
-        bar.addWidget(self.lbl_link)
+        bar.add(self.record_btn)
+        bar.add(self.lbl_link, divider=False)
+        conn.setParent(bar)  # the owner of the moved widgets; never shown itself
+        conn.hide()
         self._update_record_button()
+        self._update_time_button()
         pause = QtGui.QShortcut(QtGui.QKeySequence("Space"), self)
         pause.activated.connect(self.panel.conn_panel.pause_btn.click)
 
@@ -926,33 +929,45 @@ class MainWindow(QtWidgets.QMainWindow):
         self.config_window.activateWindow()
 
     def _update_record_button(self) -> None:
+        """REC: a hollow square; recording: a red one and the time so far."""
         recording = bool(self._recording_path)
         self.record_btn.setChecked(recording)
         self.record_btn.setEnabled(self.act_record.isEnabled())
         if recording and self._rec_started is not None:
             elapsed = int(time.monotonic() - self._rec_started)
-            self.record_btn.setText(f"● REC {elapsed // 60:02d}:{elapsed % 60:02d}")
-            self.record_btn.setStyleSheet("QToolButton { color: #FF4040; font-weight: 600; }")
+            self.record_btn.set_parts(
+                [Square(RED), Text(f"REC {elapsed // 60:02d}:{elapsed % 60:02d}", RED, px=12)]
+            )
+            self.record_btn.setToolTip(f"Recording to {self._recording_path} (Ctrl+R stops)")
         else:
-            self.record_btn.setText("● Record")
-            self.record_btn.setStyleSheet("")
+            self.record_btn.set_parts([Square(TEXT_MUTED, filled=False), Text("REC", px=12)])
+            self.record_btn.setToolTip("Record the session's raw bytes (Ctrl+R)")
 
     def _update_trigger_ui(self) -> None:
-        """The toolbar's Trigger button shows its state; the level line shows while armed."""
+        """
+        The bar's `T`: `—` when idle; armed, an orange T, the source's colour, the edge and
+        level, then ARMED. The level line shows on the plot while armed.
+        """
         panel = self.panel.trigger_panel
         state = panel.state
-        if state == "armed":
-            text, style = f"{panel.summary()} · ARMED", "color: #FF9A1A; font-weight: 600;"
-        elif state == "fired":
-            text, style = f"{panel.summary()} · capturing…", "color: #FF9A1A;"
-        else:
-            text, style = "Trigger", ""
-        self.trigger_btn.setText(text)
-        self.trigger_btn.setStyleSheet(f"QToolButton {{ {style} }}" if style else "")
         spec = panel.spec()
         if state in ("armed", "fired") and spec is not None:
+            cfg = self.panel.get_current_stream_config() or {}
+            sig = (cfg.get("signals") or {}).get(spec.signal) or {}
+            word = "ARMED" if state == "armed" else "CAPTURE"
+            self.trigger_btn.set_parts(
+                [
+                    Badge("T", ORANGE, "#000"),
+                    Square(str(sig.get("color", TEXT)), size=10),
+                    Text(f"{EDGE_GLYPHS.get(spec.edge, '')} {format_number(spec.level)}"),
+                    Text(word, ORANGE, bold=True, px=11),
+                ]
+            )
+            self.trigger_btn.setToolTip(f"{panel.summary()} · {word}")
             self.plot.set_trigger_level(spec.signal, spec.level)
         else:
+            self.trigger_btn.set_parts([Badge("T"), Text("—", TEXT_MUTED)])
+            self.trigger_btn.setToolTip("Trigger: capture a step (a signal crossing a level)")
             self.plot.set_trigger_level(None)
 
     def _update_menus(self) -> None:
@@ -964,8 +979,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_replay_step.setEnabled(running and self._replaying)
         if not (running and self._replaying):
             self.act_replay_pause.setChecked(False)
-        if hasattr(self, "record_btn"):
-            self._update_record_button()
+        self._update_record_button()
 
     def _invoke(self, method: str, *args: QtCore.QGenericArgument) -> None:
         QtCore.QMetaObject.invokeMethod(
@@ -992,8 +1006,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_record.blockSignals(True)
         self.act_record.setChecked(bool(path))
         self.act_record.blockSignals(False)
-        self.lbl_rec.setText(f"● REC {Path(path).name}" if path else "")
-        self.lbl_rec.setToolTip(path)
         self._rec_started = time.monotonic() if path else None
         self._update_menus()
 
@@ -1025,8 +1037,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._replaying = True
         self._invoke("stop_working")
         self._invoke("start_replay", QtCore.Q_ARG(str, path), QtCore.Q_ARG(float, speed))
-        self.lbl_status.setText(f"Replaying {Path(path).name}…")
-        self.lbl_status.setStyleSheet("")
+        self._say(f"Replaying {Path(path).name}…")
 
     def _set_speed(self, speed: float) -> None:
         self._invoke("set_replay_speed", QtCore.Q_ARG(float, speed))
@@ -1110,15 +1121,14 @@ class MainWindow(QtWidgets.QMainWindow):
         return written
 
     def _report_export(self, message: str) -> None:
-        self.lbl_status.setText(message)
-        self.lbl_status.setStyleSheet("")
+        self._say(message, "error" if message.startswith("Export failed") else "info")
 
     # --- trigger capture and step response (R4.4, R4.5) ---------------------------------
 
     def _arm_trigger(self, spec: TriggerSpec) -> None:
         if self.engine_state != EngineState.RUNNING:
             self.panel.trigger_panel.set_armed(False)
-            self.lbl_status.setText("Connect first: the trigger watches live data")
+            self._say("Connect first: the trigger watches live data", "warn")
             return
         if self.plot.mode == PlotMode.ANALYSIS:  # watch live data again
             self._set_pause_state(False, update_status=False)
@@ -1151,8 +1161,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.plot.set_capture_window((t_trig - spec.pre_s, t_trig))
         self.show_right_view("step")
         text = f"Triggered at {t_trig:.3f} s (paused; Resume for live view)"
-        self.lbl_status.setText(text + (f": {note}" if note else ""))
-        self.lbl_status.setStyleSheet("color: #FFB000; font-weight: bold;")
+        self._say(text + (f": {note}" if note else ""), "warn")
 
     def closeEvent(self, event: QtGui.QCloseEvent | None) -> None:
         """

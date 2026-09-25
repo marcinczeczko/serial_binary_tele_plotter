@@ -73,7 +73,8 @@ def test_the_profile_menu_lists_the_bundled_and_folder_profiles(
     win = _window(qtbot, tmp_path, folder)
     conn = win.panel.conn_panel
 
-    assert conn.profile_btn.text() == "diffbot · binary ▾"
+    assert conn.profile_btn.text() == "diffbot ▾"  # the format is in the menu (R9.2)
+    assert "a binary profile" in conn.profile_btn.toolTip()
     assert _menu_names(win) == [
         "diffbot   ·  binary",
         "imu-board   ·  binary",
@@ -103,7 +104,7 @@ def test_switching_profiles_shows_the_other_devices_streams(
         "imu_6axis"
     ]
     assert panel.conn_panel.baud_combo.currentText() == "9600"  # the profile's baud
-    assert panel.conn_panel.profile_btn.text() == "imu-board · binary ▾"
+    assert panel.conn_panel.profile_btn.text() == "imu-board ▾"
     assert win.configurator.filepath == str(imu)
     assert list(win.configurator.drafts) == ["imu_6axis"]
     assert win.windowTitle() == "Serial Binary Plotter - imu-board (imu-board.json)"
@@ -226,7 +227,7 @@ def test_a_text_profile_plots_from_virtual_and_counts_unmatched_lines(
     win = MainWindow(fixture, settings=settings)
     qtbot.addWidget(win)
     conn = win.panel.conn_panel
-    assert conn.profile_btn.text() == "arduino-imu · text ▾"
+    assert conn.profile_btn.text() == "arduino-imu ▾"
     assert conn.baud_combo.currentText() == "115200"
     qtbot.waitUntil(lambda: win.engine._profile == {"name": "arduino-imu", "format": "text"})
 
@@ -242,7 +243,7 @@ def test_a_text_profile_plots_from_virtual_and_counts_unmatched_lines(
 
     # "# sim tick" once a second; the report comes about once a second too.
     def unmatched() -> int:
-        found = re.search(r"unmatched (\d+)", win.lbl_link.text())
+        found = re.search(r"Lines matching no pattern: (\d+)", win.lbl_link.toolTip())
         return int(found.group(1)) if found else 0
 
     qtbot.waitUntil(lambda: unmatched() > 0, timeout=5000)

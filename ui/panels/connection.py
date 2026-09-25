@@ -1,14 +1,14 @@
 """
 Connection Panel Module.
 
-This module provides the `ConnectionPanel` widget, one row in the main toolbar (R6.1),
-responsible for:
+This module provides the `ConnectionPanel`: the top bar's first three items (R9.2) and
+their logic. It owns the widgets; the main window places them in the bar. Responsible for:
 0. Picking the device profile (R8.2): what the device sends, and which streams to show.
    Only while disconnected; the main window lists the profiles and does the switch.
 1. Enumerating available Serial Ports (COM).
 2. Selecting communication speed (Baudrate).
 3. Managing the connection state (Connect/Disconnect).
-4. Controlling the data stream flow (Pause/Resume).
+4. Controlling the data stream flow: the RUN/STOP box (today's Pause/Resume).
 """
 
 from __future__ import annotations
@@ -19,9 +19,38 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from serial.tools import list_ports
 
 from core.config import Profile, ProfileEntry
+from ui.panels.top_bar import RunBox
 
-PAUSED_STYLE = "QPushButton { background: #D32020; color: #fff; border-color: #D32020; }"
+VIRTUAL = "VIRTUAL"
 BAUD_RATES = ("9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600")
+
+
+class PortCombo(QtWidgets.QComboBox):
+    """
+    The port list, re-read from the system each time it opens (no refresh button). As wide
+    as the chosen port, not the longest one the system lists; the list is as wide as it needs.
+    """
+
+    about_to_open = QtCore.pyqtSignal()
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.currentTextChanged.connect(lambda _t: self.updateGeometry())
+
+    def sizeHint(self) -> QtCore.QSize:  # noqa: N802
+        hint = super().sizeHint()
+        text = self.fontMetrics().horizontalAdvance(self.currentText())
+        return QtCore.QSize(max(text + 34, self.minimumWidth()), hint.height())
+
+    def minimumSizeHint(self) -> QtCore.QSize:  # noqa: N802
+        return self.sizeHint()
+
+    def showPopup(self) -> None:  # noqa: N802
+        self.about_to_open.emit()
+        view = self.view()
+        if view is not None:
+            view.setMinimumWidth(view.sizeHintForColumn(0) + 24)
+        super().showPopup()
 
 
 class ConnectionPanel(QtWidgets.QWidget):
@@ -50,51 +79,34 @@ class ConnectionPanel(QtWidgets.QWidget):
         """Initializes the connection controls and styling."""
         super().__init__()
 
-        layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-
         # --- Device profile (R8.2) ---
-        self.profile_btn = QtWidgets.QToolButton()
+        self.profile_btn = QtWidgets.QToolButton(self)
         self.profile_btn.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
         self.profile_btn.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self.profile_btn.setMinimumWidth(150)
+        self.profile_btn.setMinimumWidth(90)
         self.profile_menu = QtWidgets.QMenu(self.profile_btn)
         self.profile_btn.setMenu(self.profile_menu)
         self.profile_actions: dict[str, QtGui.QAction] = {}  # by resolved path
-        layout.addWidget(self.profile_btn)
 
-        # --- Port Selection Controls ---
-        self.port_combo = QtWidgets.QComboBox()
-
-        self.refresh_btn = QtWidgets.QPushButton("⟳")
-        self.refresh_btn.setFixedWidth(30)
-        self.refresh_btn.setToolTip("Refresh Port List")
-        self.refresh_btn.clicked.connect(self.refresh_ports)
-
-        # --- Baud Rate Selection ---
-        self.baud_combo = QtWidgets.QComboBox()
+        # --- Port and baud: the baud only matters for a real serial port ---
+        self.port_combo = PortCombo(self)
+        self.port_combo.setToolTip("Serial port (VIRTUAL: the built-in simulator)")
+        self.port_combo.setMinimumWidth(90)
+        self.port_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.port_combo.about_to_open.connect(self.refresh_ports)
+        self.port_combo.currentTextChanged.connect(lambda _t: self._show_baud())
+        self.baud_combo = QtWidgets.QComboBox(self)
         self.baud_combo.addItems(BAUD_RATES)
         self.baud_combo.setCurrentText("115200")
-
-        # Grid Placement
-        self.port_combo.setToolTip("Serial port (VIRTUAL: the built-in simulator)")
-        self.port_combo.setMinimumWidth(130)
         self.baud_combo.setToolTip("Baud rate")
-        layout.addWidget(self.port_combo)
-        layout.addWidget(self.refresh_btn)
-        layout.addWidget(self.baud_combo)
 
-        # --- Action Buttons Layout ---
-        btn_layout = QtWidgets.QHBoxLayout()
-
-        # 1. Connect Button
         # Scope style (ADR-0012): `Connect` is lit (it's the action you want), `Disconnect` grey.
-        self.connect_btn = QtWidgets.QPushButton("Connect")
+        self.connect_btn = QtWidgets.QPushButton("Connect", self)
         self.connect_btn.setCheckable(True)
+        self.connect_btn.setFixedHeight(24)
         self.connect_btn.setStyleSheet(
             "QPushButton { background: #d6d6d6; color: #000; border: 1px solid #d6d6d6;"
-            " font-weight: bold; }"
+            " font-weight: bold; padding: 0 10px; }"
             " QPushButton:hover { background: #ffffff; border-color: #ffffff; }"
             " QPushButton:checked { background: #222; color: #bdbdbd; border-color: #484848;"
             " font-weight: normal; }"
@@ -102,21 +114,14 @@ class ConnectionPanel(QtWidgets.QWidget):
         )
         self.connect_btn.toggled.connect(self._on_connect_toggled)
 
-        # 2. Pause Button. Always available: pausing freezes whatever is in the buffers, so
-        # a finished replay or a stopped session can still be analysed.
-        self.pause_btn = QtWidgets.QPushButton("Pause")
-        self.pause_btn.setCheckable(True)
+        # RUN/STOP. Always available: stopping freezes whatever is in the buffers, so a
+        # finished replay or a stopped session can still be analysed.
+        self.pause_btn = RunBox(self)
         self.pause_btn.toggled.connect(self._on_pause_toggled)
-
-        btn_layout.addWidget(self.connect_btn)
-        btn_layout.addWidget(self.pause_btn)
-
-        btn_layout.setSpacing(6)
-        self.pause_btn.setToolTip("Freeze the view for analysis; acquisition continues (Space)")
-        layout.addLayout(btn_layout)
 
         # Populate ports immediately on startup
         self.refresh_ports()
+        self._show_baud()
 
     def _set_connected_ui(self, checked: bool) -> None:
         """Updates UI state without emitting connection signals."""
@@ -128,15 +133,25 @@ class ConnectionPanel(QtWidgets.QWidget):
         self.connect_btn.setChecked(connected)
         self._set_connected_ui(connected)
         self.connect_btn.blockSignals(False)
+        self.pause_btn.set_connected(connected)
         # A profile says what the device sends: it can't change under a running session.
         self.profile_btn.setEnabled(not connected)
-        self.profile_btn.setToolTip(
-            "Disconnect to switch profiles" if connected else "Device profile: what it sends"
-        )
+        self._profile_tooltip()
+
+    def _profile_tooltip(self) -> None:
+        profile = getattr(self, "_profile", None)
+        what = f"{profile.name}: a {profile.format} profile" if profile is not None else ""
+        hint = "Disconnect to switch profiles" if self.connect_btn.isChecked() else "Profiles"
+        self.profile_btn.setToolTip(f"{what}\n{hint}".strip())
+
+    def _show_baud(self) -> None:
+        """The baud combo shows only for a real serial port (the simulator has no baud)."""
+        self.baud_combo.setVisible(self.port_combo.currentText() != VIRTUAL)
 
     def set_profiles(self, entries: list[ProfileEntry], current: Path, profile: Profile) -> None:
         """Lists the profiles to switch to; `current` is the file in use."""
-        self.profile_btn.setText(f"{profile.name} · {profile.format} ▾")
+        self.profile_btn.setText(f"{profile.name} ▾")
+        self._profile = profile
         menu = self.profile_menu
         menu.clear()
         self.profile_actions.clear()
@@ -158,13 +173,14 @@ class ConnectionPanel(QtWidgets.QWidget):
             action = menu.addAction(text)
             assert action is not None
             action.triggered.connect(lambda _=False, s=signal: s.emit())
+        self._profile_tooltip()
 
     def set_paused(self, paused: bool) -> None:
         """Shows the paused state (e.g. after a trigger capture) without emitting."""
         self.pause_btn.blockSignals(True)
         self.pause_btn.setChecked(paused)
         self.pause_btn.blockSignals(False)
-        self._style_pause(paused)
+        self.pause_btn.refresh()
 
     def select(self, port: str, baud: int) -> None:
         """
@@ -190,7 +206,7 @@ class ConnectionPanel(QtWidgets.QWidget):
         self.port_combo.clear()
 
         # Add Simulation option
-        self.port_combo.addItem("VIRTUAL", "VIRTUAL")
+        self.port_combo.addItem(VIRTUAL, VIRTUAL)
 
         # Add Physical Ports
         # list_ports.comports() returns ListPortInfo objects
@@ -225,16 +241,5 @@ class ConnectionPanel(QtWidgets.QWidget):
             self.connection_requested.emit("STOP", 0)
 
     def _on_pause_toggled(self, checked: bool) -> None:
-        """
-        Slot handling the Pause/Resume toggle.
-
-        Args:
-            checked (bool): True if paused (Analysis Mode), False if Live.
-        """
-        self._style_pause(checked)
+        """RUN/STOP: True freezes the view (analysis), False follows the data again."""
         self.pause_requested.emit(checked)
-
-    def _style_pause(self, paused: bool) -> None:
-        self.pause_btn.setText("Resume" if paused else "Pause")
-        # Highlight the button while paused, to show the view is not live.
-        self.pause_btn.setStyleSheet(PAUSED_STYLE if paused else "")
