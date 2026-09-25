@@ -1,7 +1,8 @@
 """
 What the dashboard remembers between runs (R5.3), in `QSettings`.
 
-- The port and baud rate, whatever the config file.
+- The port and baud rate, per config file (a device profile, R8.2), falling back to the
+  last ones used with any file.
 - Per config file (stream and panel keys only mean something within one file): the shown
   stream, each stream's signal visibility and lane moves, and each panel's parameter
   values, presets and Live mode (R6.4).
@@ -9,7 +10,7 @@ What the dashboard remembers between runs (R5.3), in `QSettings`.
 
 Visibility and lane moves are kept as overrides of streams.json and applied on top of it
 (`apply_view_overrides`), so the file itself is only changed from the Configuration tab.
-View → "Reset view to streams.json" forgets a stream's overrides.
+View → "Reset view to the profile" forgets a stream's overrides.
 
 Values are stored as JSON strings: QSettings' own typing differs between backends (INI
 files return strings, the macOS plist returns numbers).
@@ -41,6 +42,11 @@ def _key(part: str) -> str:
 class UiState:
     def __init__(self, settings: QtCore.QSettings, config_path: str | Path) -> None:
         self.settings = settings
+        self._scope = ""
+        self.set_config(config_path)
+
+    def set_config(self, config_path: str | Path) -> None:
+        """Remembers things for another config file (a profile switch) from now on."""
         resolved = str(Path(config_path).expanduser().resolve())
         self._scope = "ui/" + hashlib.sha1(resolved.encode("utf-8")).hexdigest()[:12]
         # Which file the scope is for, for someone reading the settings file.
@@ -62,14 +68,22 @@ class UiState:
 
     # --- connection ---
 
-    def connection(self) -> tuple[str, int] | None:
+    def connection(self, fallback: bool = True) -> tuple[str, int] | None:
+        """This file's port and baud; else (with `fallback`) the last ones used anywhere."""
+        port = self.settings.value(f"{self._scope}/{KEY_PORT}", "", type=str)
+        baud = self._get_json(f"{self._scope}/{KEY_BAUD}", 0)
+        if port and isinstance(baud, int):
+            return port, int(baud)
+        if not fallback:
+            return None
         port = self.settings.value(KEY_PORT, "", type=str)
         baud = self._get_json(KEY_BAUD, 0)
         return (port, int(baud)) if port and isinstance(baud, int) else None
 
     def set_connection(self, port: str, baud: int) -> None:
-        self.settings.setValue(KEY_PORT, port)
-        self._set_json(KEY_BAUD, int(baud))
+        for prefix in (f"{self._scope}/", ""):
+            self.settings.setValue(prefix + KEY_PORT, port)
+            self._set_json(prefix + KEY_BAUD, int(baud))
 
     # --- stream shown ---
 

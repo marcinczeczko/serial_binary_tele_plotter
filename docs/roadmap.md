@@ -321,19 +321,26 @@ layout) instead of binary frames. Binary or text is a property of the device, so
 choice lives in a named **device profile** picked before connecting, and each text stream
 is a **line pattern** inferred from pasted console output.
 
+**Next: R8.3, then R8.4.** Both are specified in detail (config shape, pattern grammar,
+matching, inference, editor screens, acceptance tests) in
+[`docs/specs/phase8-text-lines.md`](specs/phase8-text-lines.md).
+
 - [x] **R8.1 Decoder slot**: the receive path's byte-to-records step becomes a
   `LinkDecoder` interface. Today's `FrameParser` + `StreamRouter` sit behind it as
   `BinaryFrameDecoder`; the engine only knows the interface.
   *Done when:* no behaviour change (every test passes unchanged in what it checks), and
   `bench_pipeline` shows no regression against main in interleaved runs.
   *Done.*
-- [ ] **R8.2 Device profiles**: a top-level `profile` block (name, format, default baud)
+- [x] **R8.2 Device profiles**: a top-level `profile` block (name, format, default baud)
   in a schema 3 file, one file per profile in a profiles folder, a profile picker first
   in the dashboard toolbar (switch only while disconnected), New profile (name, format,
   baud, empty or a copy), and baud remembered per profile. A schema 2 file loads as a
   binary profile named after the file.
   *Done when:* two profiles can be switched between, each keeps its own streams, port
   and baud, and a recording replays with its profile's format.
+  *Done. The profiles folder defaults to `~/telemetry-profiles`; the menu also lists the
+  bundled `streams.json` (now the `diffbot` profile) and files opened from elsewhere.
+  A profile's baud beats the last baud used with another profile.*
 - [ ] **R8.3 Text-line decoder**: `TextLineDecoder` splits lines (bounded length) and
   matches each against the streams' patterns (`IMU,{ms},{ax}`: fixed text plus number
   slots; `nan`, `inf` and exponents accepted; an empty slot is a gap). Lines matching no

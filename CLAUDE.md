@@ -17,6 +17,8 @@ so you can work without hardware.
 3. `docs/reviews/2026-09-24-architecture-review.md`: known defects, with stable IDs
    (`C*` correctness, `P*` performance, `A*` architecture, `T*` tooling).
 4. `docs/adr/`: design decisions. ADR-0002 is the target pipeline.
+5. `docs/specs/`: working specs for the next roadmap items. **Next up: R8.3, then R8.4:
+   text-line streams, fully specified in `docs/specs/phase8-text-lines.md`.**
 
 Before starting non-trivial work, check whether a roadmap item or finding already covers
 it, and reference its ID in commits and PRs.
@@ -39,7 +41,10 @@ uv run python tools/bench_render.py   # GUI render budget (R3.4): 34 signals x 1
 CI (`.github/workflows/ci.yml`) runs exactly these on every PR. Keep them green. The two benchmarks
 are informational there (`bench_render` may not reach 30 FPS on a shared runner).
 
-Headless containers (e.g. Claude Code on the web) may lack `libEGL.so.1`. Either install
+On Claude Code on the web, `.claude/hooks/session-start.sh` (a SessionStart hook) installs
+those libraries and runs `uv sync --all-extras`, so the commands above work at once.
+
+Other headless containers may lack `libEGL.so.1`. Either install
 `libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 libglib2.0-0t64` with apt (what CI
 does), or run with `-p no:pytest-qt`. `tests/conftest.py` defaults `QT_QPA_PLATFORM` to
 `offscreen`.
@@ -58,11 +63,13 @@ fix one, remove its xfail.
 ```
 main.py                 QApplication bootstrap, SIGINT handling
 styles.py               global dark theme (QSS)
-streams.json            schema 2: streams, commands, panels (single source of truth; ADR-0007)
+streams.json            schema 3: the bundled `diffbot` device profile: profile, streams, commands, panels
+                        (single source of truth; ADR-0007, ADR-0010)
 core/types.py           TypedDict config shapes, PlotMode, EngineState
 core/config/            document (load -> migrate -> validate -> save, StreamConfigLoader), streams (stream
                         validation), controls (CommandDef/PanelDef parsing), migrate (schema versions),
-                        draft (StreamDraft: the editor's model), cstruct (C struct in and out)
+                        draft (StreamDraft: the editor's model), cstruct (C struct in and out), profile
+                        (the `profile` block: name, format, baud; listing a profiles folder)
 core/protocol/          wire format: link (LinkDecoder: bytes -> records per stream; the engine's only view of the
                         format, ADR-0010), constants, crc (CRC-8), frame_parser (sync/CRC, all IDs), record_decoder
                         (numpy dtype), router (multi-stream dispatch), handler (single-stream API), commands, stats
@@ -76,13 +83,14 @@ core/acquisition/       engine (QThread controller), storage (SampleStore, Strea
                         detail for live frames, summarised lazily on read)
 ui/main_window.py       composition (session toolbar, stream tabs over the plot, Signals / Controls / Step
                         response docks, editor window), thread setup, signal wiring, menus (ADR-0008)
-ui/app_settings.py      QSettings keys (config path, recording options)
-ui/ui_state.py          remembered port, stream, view overrides, panel values, presets, Live mode (per config
-                        file) and the window/dock layout
+ui/app_settings.py      QSettings keys (config path, recording options, profiles folder, recent profiles)
+ui/ui_state.py          remembered port and baud, stream, view overrides, panel values, presets, Live mode
+                        (per config file, i.e. per device profile) and the window/dock layout
 ui/charts/              TelemetryPlot (lanes = signals[*].group, per-lane Y modes, cursor/Δ), LiveFeed (pulls the
                         store's overview), lanes.py + series.py (Qt-free layout, range, decimation, readout),
                         trigger_controller (arms on the shown store, emits captures)
-ui/panels/              container (owns the controls; MainWindow places them), connection (toolbar row),
+ui/panels/              container (owns the controls; MainWindow places them), connection (toolbar row,
+                        starting with the profile menu), profile_dialog (New profile),
                         stream_tabs, signals (lane-grouped list = legend + cursor readout, drag between
                         lanes), command_panel (generated from `panels`: edited vs sent, linked rows, Live,
                         presets, label scrubbing, Esc revert), command_log,
@@ -92,7 +100,8 @@ ui/config/              streams.json editor (ADR-0009): tab (toolbar, stream tab
 tests/                  pytest: pure logic, stubbed-Qt legacy tests, `qt`-marked real-Qt tests
 tools/                  dev scripts (bench_pipeline.py)
 .github/workflows/      CI
-docs/                   records (see "Start here")
+.claude/                settings (read denies for secrets) and the web SessionStart hook
+docs/                   records and specs (see "Start here")
 ```
 
 ## Wire protocol (must stay compatible with firmware)
@@ -138,6 +147,11 @@ hold these bytes verbatim (ADR-0006), so a wire change also affects replaying ol
   operation on the draft that touches only its keys; line edits apply what was typed, on
   leaving or on a save/switch (ADR-0009). Keep new editor features on that path, so an
   untouched stream still saves byte-identically (C4).
+- **A config file is a device profile (ADR-0010).** Its `profile.format` picks the engine's
+  `LinkDecoder` (`configure_profile`), switched only while disconnected; everything keyed
+  by config file (`UiState`, the editor, recordings) follows the profile. The window
+  switches profiles with `switch_profile(path)`, which reloads the loader, panels, editor
+  and engine; don't add another path that changes the loaded file.
 - **Config-driven over hard-coded.** New stream or command shapes belong in
   `streams.json` and the config model, not in Python constants. A command's panel is a
   `panels` entry; the GUI encodes a press and hands the engine a finished packet
@@ -158,6 +172,21 @@ hold these bytes verbatim (ADR-0006), so a wire change also affects replaying ol
   parser/storage bug fix, first add a test that reproduces the bug.
 - Keep `README.md` in sync with behaviour. Supported types, protocol and config keys are
   user-facing.
+
+## How we work
+
+- **One PR per roadmap item** (or a small, related group), on the session's branch, with
+  the item ID in the title. The PR body lists what changed, the numbers and the checks run.
+- **The owner merges by saying "Merge".** Never merge on your own. On "Merge": squash-merge,
+  then restart the branch from the new `main` for the next item.
+- **Spike before building UI.** Design new screens as a canvas first and iterate with the
+  owner. They want the oscilloscope look, little text, and nothing "AI-bloated".
+- **Before pushing:** ruff, format, mypy and the full `uv run pytest` (with real Qt) all
+  clean. For a performance-sensitive change, run the benchmark on `main` and on the
+  branch, **interleaved** (a worktree helps). A single run on a shared container is noisy.
+- **Qt tests:** see "Commands" (`qtbot.addWidget`, parents for every QObject). If a crash
+  happens once, rerun the suite many times before calling it a flake. Record it in the
+  log either way.
 
 ## Keeping the records up to date (required)
 

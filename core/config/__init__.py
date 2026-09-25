@@ -1,7 +1,7 @@
 """
 `streams.json`: the document model (R5.1). See `document` (load, migrate, validate, save),
-`streams` (stream definitions), `controls` (commands and panels) and `migrate`
-(schema versions).
+`streams` (stream definitions), `controls` (commands and panels), `migrate` (schema
+versions) and `profile` (the device profile a file is, ADR-0010).
 """
 
 from core.config.controls import ButtonDef, PanelDef, ParamDef, parse_commands, parse_panels
@@ -14,6 +14,7 @@ from core.config.document import (
     validate_config,
 )
 from core.config.migrate import SCHEMA_VERSION, SchemaError, migrate
+from core.config.profile import Profile, ProfileEntry, list_profiles, profile_of
 from core.config.streams import (
     ENDIANNESS,
     MAX_PAYLOAD_BYTES,
@@ -32,12 +33,16 @@ __all__ = [
     "ConfigProblem",
     "InvalidConfigError",
     "PanelDef",
+    "Profile",
+    "ProfileEntry",
     "ParamDef",
     "SchemaError",
     "StreamConfigLoader",
+    "list_profiles",
     "migrate",
     "parse_commands",
     "parse_panels",
+    "profile_of",
     "resolve_config_path",
     "save_document",
     "validate_config",

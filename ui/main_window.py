@@ -9,6 +9,7 @@ lifecycle, and global events.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -23,7 +24,7 @@ from core.acquisition.timebase import time_base_config
 from core.analysis.export import ExportError, export_table, parquet_available
 from core.analysis.step_response import StepMetrics, step_metrics
 from core.analysis.trigger import TriggerSpec
-from core.config import DEFAULT_CONFIG_PATH, SCHEMA_VERSION, StreamConfigLoader
+from core.config import DEFAULT_CONFIG_PATH, SCHEMA_VERSION, StreamConfigLoader, list_profiles
 from core.protocol.commands import CommandDef, CommandError, encode_command, resolve_values
 from core.protocol.stats import LinkReport, format_link_report
 from core.recording.sbtp import SUFFIX as RECORDING_SUFFIX
@@ -31,9 +32,13 @@ from core.recording.sbtp import recording_name
 from core.types import EngineState, PlotMode, PlotPacketWithBounds, StreamConfig
 from ui.app_settings import (
     DEFAULT_RECORDINGS_DIR,
+    KEY_CONFIG_PATH,
     KEY_RECORD_ON_CONNECT,
     KEY_RECORDINGS_DIR,
+    add_recent_profile,
     app_settings,
+    profiles_dir,
+    recent_profiles,
 )
 from ui.charts.live_feed import LiveFeed
 from ui.charts.telemetry_plot import TelemetryPlot
@@ -42,6 +47,7 @@ from ui.config.tab import ConfiguratorTab
 from ui.panels.command_log import CommandLog, LogEntry
 from ui.panels.command_panel import CommandPanel, SendRequest
 from ui.panels.container import MainControlPanel
+from ui.panels.profile_dialog import ProfileDialog
 from ui.ui_state import UiState
 
 logger = logging.getLogger(__name__)
@@ -153,9 +159,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # The dashboard's controls; their pieces are placed below (R6.1).
         self.panel = MainControlPanel(self.stream_loader, self.ui_state)
         self.panel.setParent(self)
-        remembered = self.ui_state.connection()
-        if remembered is not None:
-            self.panel.conn_panel.select(*remembered)
+        self._select_connection()
         self.plot = TelemetryPlot()
 
         # --- Centre: stream tabs (+ time window) over the plot ---
@@ -191,7 +195,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.resizeDocks([self.signals_dock], [290], QtCore.Qt.Orientation.Horizontal)
         self.resizeDocks([self.controls_dock], [360], QtCore.Qt.Orientation.Horizontal)
 
-        # --- Configuration editor: its own window (File > Edit streams.json) ---
+        # --- Configuration editor: its own window (File > Edit profile) ---
         self.configurator = ConfiguratorTab(self.stream_loader)
         self.configurator.config_saved.connect(self._reload_configuration)
         self.config_window = QtWidgets.QDialog(self)
@@ -289,6 +293,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._build_menus()
         self._build_toolbar()
+        conn = self.panel.conn_panel
+        conn.profile_chosen.connect(lambda path: self.switch_profile(Path(path)))
+        conn.new_profile_requested.connect(self.new_profile)
+        conn.open_profile_requested.connect(self._open_profile_file)
+        conn.edit_profile_requested.connect(self.show_configuration)
+        self._refresh_profiles()
+        self._update_title()
         self._update_trigger_ui()
         self.controls_dock.setWindowTitle(
             (panel.panel.title if (panel := self.panel.current_control_panel()) else "")
@@ -301,6 +312,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.restoreState(state)
 
         # --- Final Setup ---
+        self._apply_profile()
         self._configure_engine_streams()
         self._initial_stream_setup()
         self._report_config_problems()
@@ -313,7 +325,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self.lbl_status.setText(f"Could not reload streams.json: {e}")
             self.lbl_status.setStyleSheet("color: #F44336; font-weight: bold;")
             return
+        self._apply_profile()
         self._configure_engine_streams()
+        self._refresh_profiles()
+        self._update_title()
         self.lbl_status.setText("Configuration reloaded from disk.")
         self.lbl_status.setToolTip("")
         self.lbl_status.setStyleSheet("")
@@ -342,7 +357,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if loader.migrated:
             parts.append(
                 f"schema {loader.source_version} read as {SCHEMA_VERSION}; save it from "
-                "File > Edit streams.json to update the file"
+                "File > Edit profile to update the file"
             )
             details += loader.migration_notes
         if not parts:
@@ -350,6 +365,118 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_status.setText("streams.json: " + "; ".join(parts) + " (hover for details)")
         self.lbl_status.setToolTip("\n".join(details))
         self.lbl_status.setStyleSheet("color: #FFB74D; font-weight: bold;")
+
+    # --- device profiles (R8.2) ------------------------------------------------------------
+
+    def _select_connection(self) -> None:
+        """This profile's port and baud; else the last port, at the profile's baud."""
+        conn = self.panel.conn_panel
+        own = self.ui_state.connection(fallback=False)
+        if own is not None:
+            conn.select(*own)
+            return
+        last = self.ui_state.connection()
+        baud = self.stream_loader.profile.baud or (last[1] if last else 0)
+        conn.select(last[0] if last else "", baud)
+
+    def _apply_profile(self) -> None:
+        """Tells the engine the profile's name and wire format (the decoder to use)."""
+        profile = self.stream_loader.profile
+        self._invoke(
+            "configure_profile", QtCore.Q_ARG(str, profile.name), QtCore.Q_ARG(str, profile.format)
+        )
+
+    def _update_title(self) -> None:
+        profile = self.stream_loader.profile
+        self.setWindowTitle(
+            f"Serial Binary Plotter - {profile.name} ({self.stream_loader.path.name})"
+        )
+        self.config_window.setWindowTitle(
+            f"Profile: {profile.name} ({self.stream_loader.path.name})"
+        )
+
+    def _refresh_profiles(self) -> None:
+        """The profile menu: the profiles folder, the bundled file, recent and current files."""
+        extra: list[str | Path] = [
+            DEFAULT_CONFIG_PATH,
+            *recent_profiles(self.settings),
+            self.stream_loader.path,
+        ]
+        entries = list_profiles(profiles_dir(self.settings), extra)
+        self.panel.conn_panel.set_profiles(
+            entries, self.stream_loader.path, self.stream_loader.profile
+        )
+
+    def switch_profile(self, path: Path) -> bool:
+        """
+        Shows another device profile: its streams, panels, remembered view, port and baud,
+        and the decoder for its format. Only while disconnected (the device changes).
+        """
+        if self.engine_state == EngineState.RUNNING:
+            self.lbl_status.setText("Disconnect before switching profiles")
+            return False
+        if path.expanduser().resolve() == self.stream_loader.path.expanduser().resolve():
+            self._refresh_profiles()
+            return True
+        try:
+            self.stream_loader.open(path)
+        except (OSError, ValueError) as e:
+            QtWidgets.QMessageBox.warning(self, "Cannot open profile", str(e))
+            self._refresh_profiles()
+            return False
+        self.ui_state.set_config(self.stream_loader.path)
+        self.settings.setValue(KEY_CONFIG_PATH, str(self.stream_loader.path))
+        if self.stream_loader.path.parent.resolve() != profiles_dir(self.settings).resolve():
+            add_recent_profile(self.settings, self.stream_loader.path)
+        self._markers.clear()
+        self.plot.set_markers([])
+        self.panel.reload_profile()
+        self._select_connection()
+        self.configurator.reload_document()
+        self._apply_profile()
+        self._configure_engine_streams()
+        self._refresh_profiles()
+        self._update_title()
+        profile = self.stream_loader.profile
+        self.lbl_status.setText(f"Profile {profile.name} ({profile.format})")
+        self.lbl_status.setToolTip(str(self.stream_loader.path))
+        self.lbl_status.setStyleSheet("")
+        self._report_config_problems()
+        return True
+
+    def profile_dialog(self) -> ProfileDialog:
+        return ProfileDialog(
+            profiles_dir(self.settings),
+            self.stream_loader.profile.name,
+            self.stream_loader.data,
+            self,
+        )
+
+    def new_profile(self) -> None:
+        dialog = self.profile_dialog()
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            self.create_profile(dialog.path(), dialog.document())
+
+    def create_profile(self, path: Path, doc: dict[str, Any]) -> bool:
+        """Writes a new profile file (never over an existing one) and switches to it."""
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("x", encoding="utf-8") as f:
+                json.dump(doc, f, indent=4)
+        except OSError as e:
+            QtWidgets.QMessageBox.warning(self, "Cannot create profile", str(e))
+            return False
+        if not self.switch_profile(path):
+            return False
+        self.show_configuration()
+        return True
+
+    def _open_profile_file(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Open a profile", str(profiles_dir(self.settings)), "Profiles (*.json)"
+        )
+        if path:
+            self.switch_profile(Path(path))
 
     def _configure_engine_streams(self) -> None:
         """Tells the engine to decode every valid stream (A1); the GUI picks one to show."""
@@ -619,11 +746,11 @@ class MainWindow(QtWidgets.QMainWindow):
         for dock in (self.signals_dock, self.controls_dock, self.step_dock):
             view_menu.addAction(dock.toggleViewAction())
         view_menu.addSeparator()
-        self.act_reset_view = _action(
-            view_menu, "Reset view to streams.json", self.panel.reset_view
-        )
+        self.act_reset_view = _action(view_menu, "Reset view to the profile", self.panel.reset_view)
 
-        self.act_edit_config = _action(file_menu, "Edit streams.json…", self.show_configuration)
+        self.act_new_profile = _action(file_menu, "New profile…", self.new_profile)
+        self.act_open_profile = _action(file_menu, "Open profile file…", self._open_profile_file)
+        self.act_edit_config = _action(file_menu, "Edit profile…", self.show_configuration)
         self.act_edit_config.setShortcut(QtGui.QKeySequence("Ctrl+,"))
         file_menu.addSeparator()
         self.act_export_shown = _action(file_menu, "Export shown stream…", self._export_shown)
@@ -723,6 +850,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _update_menus(self) -> None:
         running = self.engine_state == EngineState.RUNNING
+        for act in (self.act_new_profile, self.act_open_profile):
+            act.setEnabled(not running)  # a profile switch needs a disconnected device
         self.act_record.setEnabled(running or bool(self._recording_path))
         self.act_replay_pause.setEnabled(running and self._replaying)
         self.act_replay_step.setEnabled(running and self._replaying)

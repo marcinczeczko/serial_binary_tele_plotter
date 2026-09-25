@@ -126,14 +126,17 @@ def test_decode_is_the_inverse_of_encode() -> None:
     assert encode_command(big, {"x": 0x0102})[5:7] == b"\x01\x02"
 
 
-# --- migration (schema 1 -> 2) ---
+# --- migration (schema 1 -> 2 -> 3) ---
 
 
-def test_schema_1_file_migrates_to_the_bundled_schema_2_file() -> None:
+def test_schema_1_file_migrates_to_the_bundled_file() -> None:
     raw = json.loads(V1_FIXTURE.read_text(encoding="utf-8"))
     migrated, notes = migrate(raw)
 
-    assert migrated == json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    bundled = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    del bundled["profile"]  # the bundled file names its profile; a v1 file can't
+    assert migrated == bundled
+    assert notes[-1] == "migrated from schema version 2 to 3 (a binary device profile)"
     assert list(migrated)[:3] == ["schema_version", "commands", "panels"]
     assert list(migrated["streams"]["pid"])[:3] == ["name", "controls", "frame"]  # in place
     assert "panel_type" not in json.dumps(migrated)
@@ -154,7 +157,7 @@ def test_schema_1_migration_keeps_user_commands_and_panels() -> None:
 
 
 @pytest.mark.parametrize(
-    ("version", "match"), [(3, "newer version"), ("2", "positive"), (0, "positive")]
+    ("version", "match"), [(4, "newer version"), ("2", "positive"), (0, "positive")]
 )
 def test_unreadable_schema_versions_are_refused(version: Any, match: str, tmp_path: Path) -> None:
     with pytest.raises(SchemaError, match=match):
@@ -173,7 +176,7 @@ def test_loader_migrates_in_memory_and_leaves_the_file(tmp_path: Path) -> None:
 
     loader = StreamConfigLoader(path)
 
-    assert loader.migrated and loader.source_version == 1 and len(loader.migration_notes) == 4
+    assert loader.migrated and loader.source_version == 1 and len(loader.migration_notes) == 5
     assert [str(p) for p in loader.problems] == []
     assert loader.panel_for("pid") is loader.panels["diffbot_pid"]
     assert loader.panel_for("imu_6axis") is None

@@ -218,6 +218,32 @@ class MainControlPanel(QtWidgets.QWidget):
             self.ui_state.reset_view(sid)
             self._on_stream_selection(self.stream_tabs.currentIndex())
 
+    def reload_profile(self) -> None:
+        """
+        Shows another profile (R8.2; the loader has opened it): its control panels and
+        streams, on the stream this profile showed last. A profile without streams shows
+        an empty plot.
+        """
+        self._build_control_panels()
+        self.stream_tabs.blockSignals(True)
+        self.stream_tabs.clear()
+        for sid, s in self.stream_loader.list_streams().items():
+            self.stream_tabs.addItem(s["name"], sid)
+        remembered = self.ui_state.stream() if self.ui_state is not None else None
+        idx = max(self.stream_tabs.findData(remembered), 0)
+        if self.stream_tabs.count() > 0:
+            self.stream_tabs.setCurrentIndex(idx)
+        self.stream_tabs.blockSignals(False)
+        if self.stream_tabs.count() > 0:
+            self._on_stream_selection(idx)
+            return
+        empty: StreamConfig = {"name": "", "frame": {"fields": []}, "signals": {}}
+        self.controls_stack.setCurrentWidget(self.empty_controls)
+        self.controls_changed.emit("")
+        self.sig_panel.rebuild_list(empty)
+        self.trigger_panel.set_signals(empty)
+        self.stream_changed.emit(empty)
+
     def reload_streams(self) -> None:
         """
         Reloads configuration from disk and refreshes the streams, keeping the current

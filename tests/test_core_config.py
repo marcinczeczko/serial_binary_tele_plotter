@@ -22,7 +22,7 @@ def test_load_valid_schema_1_config(tmp_path):
     streams = loader.list_streams()
     assert "s1" in streams and "controls" not in streams["s1"]
     assert loader.source_version == 1 and loader.migrated  # no schema_version: version 1
-    assert loader.data["schema_version"] == 2 and loader.panel_for("s1") is None
+    assert loader.data["schema_version"] == 3 and loader.panel_for("s1") is None
 
 
 def test_invalid_json_raises(tmp_path):
@@ -155,7 +155,7 @@ def test_resolve_config_path_prefers_cli_then_remembered_then_default(tmp_path):
 
 
 def test_loader_keeps_the_document_as_loaded(tmp_path):
-    doc = {"schema_version": 2, "streams": {"s": _stream()}}
+    doc = {"schema_version": 3, "streams": {"s": _stream()}}
     path = tmp_path / "streams.json"
     path.write_text(json.dumps(doc), encoding="utf-8")
 

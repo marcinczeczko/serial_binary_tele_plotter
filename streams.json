@@ -1,5 +1,10 @@
 {
-    "schema_version": 2,
+    "schema_version": 3,
+    "profile": {
+        "name": "diffbot",
+        "format": "binary",
+        "baud": 115200
+    },
     "commands": {
         "pid_single": {
             "label": "PID gains, one motor",
