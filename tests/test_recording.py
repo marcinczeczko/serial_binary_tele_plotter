@@ -240,3 +240,68 @@ def test_committed_fixture_replays_to_known_statistics(pyqt_stub: Any) -> None:
     assert stats.discarded_bytes == 0
     store = engine.stores.get("pid")
     assert store.total_stored == 299 and store.time_gaps == 1
+
+
+# --- profiles (R8.2) ---
+
+
+def test_old_recordings_are_binary_and_new_ones_name_their_profile(tmp_path: Path) -> None:
+    assert ReplayTransport(FIXTURE).header.profile_format == "binary"  # made before profiles
+    path = tmp_path / "p.sbtp"
+    RecordingWriter(path, STREAM_CFG, "COM7", profile={"name": "esc-2", "format": "x"}).close()
+    header = RecordingReader(path).header
+    assert header.extra["profile"] == {"name": "esc-2", "format": "x"}
+    assert header.profile_format == "x"
+
+
+def test_a_replay_decodes_with_the_recorded_format(
+    pyqt_stub: Any, tmp_path: Path, monkeypatch: Any
+) -> None:
+    from core.protocol import link as link_module
+
+    class OtherFormat(link_module.BinaryFrameDecoder):
+        pass
+
+    monkeypatch.setitem(link_module.LINK_FORMATS, "other", OtherFormat)
+    transport = FakeTransport()
+    live = _engine(transport)
+    live.configure_streams(STREAMS)
+    live.configure_profile("gadget", "other")
+    assert isinstance(live.link, OtherFormat)
+    live.start_working("COM7", 115200)
+    path = tmp_path / "other.sbtp"
+    live.start_recording(str(path))
+    transport.push(_frames(10))
+    try:
+        assert wait_for(lambda: live.link.stats.frames_decoded == 10)
+    finally:
+        live.stop_working()
+    assert RecordingReader(path).header.extra["profile"] == {"name": "gadget", "format": "other"}
+
+    replayed = _engine()  # a binary profile
+    replayed.configure_streams(STREAMS)
+    msgs: list[str] = []
+    replayed.status_msg.connect(msgs.append)
+    replayed.start_replay(str(path), 0.0)
+    assert isinstance(replayed.link, OtherFormat)  # the recording's format, not the profile's
+    assert _wait_idle(replayed)
+    assert replayed.link.stats.frames_decoded == 10
+    assert any("recorded as other, not this profile's binary" in m for m in msgs)
+
+    replayed.transport_factory = lambda _port, _baud: FakeTransport()
+    replayed.start_working("COM7", 115200)  # a live session: the profile's format again
+    try:
+        assert type(replayed.link) is link_module.BinaryFrameDecoder
+    finally:
+        replayed.stop_working()
+
+
+def test_an_unknown_format_refuses_to_connect(pyqt_stub: Any) -> None:
+    engine = _engine()
+    engine.configure_streams(STREAMS)
+    failures: list[str] = []
+    engine.connection_failed.connect(failures.append)
+    engine.configure_profile("broken", "morse")
+    engine.start_working("COM7", 115200)
+    assert failures == ["Cannot decode: unknown link format 'morse' (known: binary)"]
+    assert engine.state.name == "CONFIGURED"

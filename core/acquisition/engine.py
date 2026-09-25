@@ -28,7 +28,7 @@ from PyQt6 import QtCore
 
 from core.acquisition.storage import StreamStores
 from core.protocol.commands import CommandDef
-from core.protocol.link import LinkDecoder, make_link_decoder
+from core.protocol.link import BINARY, LinkDecoder, make_link_decoder
 from core.protocol.stats import LinkStats, make_link_report
 from core.recording.sbtp import RecordingError, RecordingWriter
 from core.transport import (
@@ -74,8 +74,11 @@ class TelemetryEngine(QtCore.QObject):
 
         # Shared with the GUI, which reads snapshots from them directly (thread-safe).
         self.stores: StreamStores = stores if stores is not None else StreamStores(max_samples)
-        # The decoder runs on the reader thread under `_data_lock`.
+        # The decoder runs on the reader thread under `_data_lock`. Its format is the
+        # profile's (R8.2), except during a replay of a recording made with another one.
         self.link: LinkDecoder = make_link_decoder()
+        self._link_format = BINARY
+        self._profile: dict[str, str] = {"name": "", "format": BINARY}
         self._commands: tuple[CommandDef, ...] = ()  # for the simulator (R5.2)
         self._streams: dict[str, StreamConfig] = {}
         self._active_key: str | None = None  # the stream the simulator produces
@@ -110,6 +113,8 @@ class TelemetryEngine(QtCore.QObject):
         """Connects to a serial port, or to the simulator (`VIRTUAL`)."""
         if not self._can_start():
             return
+        if not self._use_format(self._profile["format"]):
+            return
         if port_name == SIM_PORT_NAME:
             if not self._streams:
                 self.status_msg.emit("No valid stream to simulate")
@@ -133,6 +138,9 @@ class TelemetryEngine(QtCore.QObject):
             self.status_msg.emit(msg)
             self.connection_failed.emit(msg)
             return
+        recorded_format = replay.header.profile_format
+        if not self._use_format(recorded_format):
+            return
         # Set before the reader starts: a short replay can end before _start() returns.
         self._replay = replay
         if not self._start(replay, replay.name):
@@ -140,11 +148,48 @@ class TelemetryEngine(QtCore.QObject):
             return
         recorded = {k: v.get("frame") for k, v in replay.header.streams.items()}
         current = {k: v.get("frame") for k, v in self._streams.items()}
-        if recorded != current:
+        if recorded_format != self._profile["format"]:
+            self.status_msg.emit(
+                f"Replaying {replay.path.name}: recorded as {recorded_format}, not this "
+                f"profile's {self._profile['format']}; decoding as {recorded_format}"
+            )
+        elif recorded != current:
             self.status_msg.emit(
                 f"Replaying {replay.path.name}: it was recorded with different frame "
                 "layouts; decoding with the current streams.json"
             )
+
+    @QtCore.pyqtSlot(str, str)
+    def configure_profile(self, name: str, fmt: str) -> None:
+        """
+        The device profile in use (R8.2): its name goes into recordings, its wire format
+        picks the decoder. Takes effect from the next connection; the GUI only switches
+        profiles while disconnected.
+        """
+        self._profile = {"name": name, "format": fmt}
+        if self.state != EngineState.RUNNING:
+            self._use_format(fmt, connecting=False)
+
+    def _use_format(self, fmt: str, connecting: bool = True) -> bool:
+        """
+        Swaps in a decoder for `fmt` (configured for the streams) if it isn't the one.
+        A format no decoder reads is reported; when connecting, the connection fails.
+        """
+        if fmt == self._link_format:
+            return True
+        try:
+            link = make_link_decoder(fmt)
+        except ValueError as e:
+            msg = f"Cannot decode: {e}"
+            self.status_msg.emit(msg)
+            if connecting:
+                self.connection_failed.emit(msg)
+            return False
+        with self._data_lock:
+            link.configure(self._streams)
+            self.link = link
+            self._link_format = fmt
+        return True
 
     def _can_start(self) -> bool:
         if self.state == EngineState.RUNNING:
@@ -342,7 +387,9 @@ class TelemetryEngine(QtCore.QObject):
         self.stop_recording()
         source = self._transport.name if self._transport is not None else ""
         try:
-            recorder = RecordingWriter(path, dict(self._streams), source)
+            recorder = RecordingWriter(
+                path, dict(self._streams), source, profile=dict(self._profile)
+            )
         except OSError as e:
             self.status_msg.emit(f"Cannot record: {e}")
             self.recording_changed.emit("")

@@ -126,6 +126,11 @@ class ConfiguratorTab(QtWidgets.QWidget):
             logger.error("Config load error: %s", e)
         self._take_document()
 
+    def reload_document(self) -> None:
+        """Edits the file the loader has now (a profile switch, R8.2), as loaded."""
+        self.filepath = str(self.loader.path)
+        self._take_document()
+
     def _take_document(self) -> None:
         # Edit a private copy of the raw document, including streams with errors, so they
         # can be fixed here.

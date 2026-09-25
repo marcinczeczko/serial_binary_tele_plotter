@@ -27,7 +27,7 @@ def parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument(
         "--config",
         metavar="PATH",
-        help="streams.json to use (default: the last used file, else the bundled one)",
+        help="profile file to use (default: the last used one, else the bundled streams.json)",
     )
     return parser.parse_known_args(argv)
 
@@ -59,7 +59,6 @@ def main() -> int:
         QtWidgets.QMessageBox.critical(None, "Cannot load configuration", str(e))
         return 2
     settings.setValue(KEY_CONFIG_PATH, str(config_path))
-    win.setWindowTitle(f"Serial Binary Plotter - {config_path.name}")
     win.show()
 
     # Handle Ctrl+C (SIGINT) to gracefully quit the application from the terminal

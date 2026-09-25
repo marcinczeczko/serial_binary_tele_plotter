@@ -205,10 +205,20 @@ def test_a_remembered_port_that_is_gone_is_not_invented(qtbot: Any, tmp_path: Pa
     settings.sync()
     win = _window(qtbot, tmp_path / "s.ini")
     assert win.panel.conn_panel.port_combo.findText("/dev/ttyGONE") < 0
-    assert win.panel.conn_panel.baud_combo.currentText() == "1000000"
+    # The bundled profile says 115200: a profile's baud beats one last used with another
+    # profile (R8.2); a file without one gets the last baud used.
+    assert win.panel.conn_panel.baud_combo.currentText() == "115200"
+    win.close()
+    doc = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    del doc["profile"]
+    bare = tmp_path / "bare.json"
+    bare.write_text(json.dumps(doc), encoding="utf-8")
+    other = _window(qtbot, tmp_path / "s.ini", bare)
+    assert other.panel.conn_panel.baud_combo.currentText() == "1000000"
+    other.close()
 
 
-def test_config_tab_saves_a_schema_1_file_as_schema_2(
+def test_config_tab_saves_a_schema_1_file_as_schema_3(
     qtbot: Any, tmp_path: Path, monkeypatch: Any
 ) -> None:
     for kind in ("information", "warning", "critical"):
@@ -216,7 +226,7 @@ def test_config_tab_saves_a_schema_1_file_as_schema_2(
     config = tmp_path / "streams.json"
     config.write_bytes(V1_FIXTURE.read_bytes())
     win = _window(qtbot, tmp_path / "settings.ini", config)
-    assert "schema 1 read as 2" in win.lbl_status.text()
+    assert "schema 1 read as 3" in win.lbl_status.text()
     assert "panel_type 'pid' -> controls" in win.lbl_status.toolTip()
 
     tab = win.configurator
@@ -231,7 +241,7 @@ def test_config_tab_saves_a_schema_1_file_as_schema_2(
     tab.save_to_file()
 
     saved = json.loads(config.read_text(encoding="utf-8"))
-    assert saved["schema_version"] == 2 and list(saved)[:3] == [
+    assert saved["schema_version"] == 3 and list(saved)[:3] == [
         "schema_version",
         "commands",
         "panels",
@@ -239,7 +249,7 @@ def test_config_tab_saves_a_schema_1_file_as_schema_2(
     assert saved["streams"]["pid"]["controls"] == "diffbot_pid"
     assert "controls" not in saved["streams"]["pid_ff"]
     assert (tmp_path / "streams.json.bak").read_bytes() == V1_FIXTURE.read_bytes()
-    assert win.panel.stream_loader.source_version == 2  # reloaded after saving
+    assert win.panel.stream_loader.source_version == 3  # reloaded after saving
     _show(win, "pid")
     assert win.panel.controls_stack.currentWidget() is win.panel.control_panels["diffbot_pid"]
     _show(win, "pid_ff")

@@ -3,6 +3,8 @@ Connection Panel Module.
 
 This module provides the `ConnectionPanel` widget, one row in the main toolbar (R6.1),
 responsible for:
+0. Picking the device profile (R8.2): what the device sends, and which streams to show.
+   Only while disconnected; the main window lists the profiles and does the switch.
 1. Enumerating available Serial Ports (COM).
 2. Selecting communication speed (Baudrate).
 3. Managing the connection state (Connect/Disconnect).
@@ -11,8 +13,14 @@ responsible for:
 
 from __future__ import annotations
 
-from PyQt6 import QtCore, QtWidgets
+from pathlib import Path
+
+from PyQt6 import QtCore, QtGui, QtWidgets
 from serial.tools import list_ports
+
+from core.config import Profile, ProfileEntry
+
+BAUD_RATES = ("9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600")
 
 
 class ConnectionPanel(QtWidgets.QWidget):
@@ -32,6 +40,10 @@ class ConnectionPanel(QtWidgets.QWidget):
 
     connection_requested = QtCore.pyqtSignal(str, int)
     pause_requested = QtCore.pyqtSignal(bool)
+    profile_chosen = QtCore.pyqtSignal(str)  # a profile file's path
+    new_profile_requested = QtCore.pyqtSignal()
+    open_profile_requested = QtCore.pyqtSignal()
+    edit_profile_requested = QtCore.pyqtSignal()
 
     def __init__(self) -> None:
         """Initializes the connection controls and styling."""
@@ -40,6 +52,16 @@ class ConnectionPanel(QtWidgets.QWidget):
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
+
+        # --- Device profile (R8.2) ---
+        self.profile_btn = QtWidgets.QToolButton()
+        self.profile_btn.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.profile_btn.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.profile_btn.setMinimumWidth(150)
+        self.profile_menu = QtWidgets.QMenu(self.profile_btn)
+        self.profile_btn.setMenu(self.profile_menu)
+        self.profile_actions: dict[str, QtGui.QAction] = {}  # by resolved path
+        layout.addWidget(self.profile_btn)
 
         # --- Port Selection Controls ---
         self.port_combo = QtWidgets.QComboBox()
@@ -51,7 +73,8 @@ class ConnectionPanel(QtWidgets.QWidget):
 
         # --- Baud Rate Selection ---
         self.baud_combo = QtWidgets.QComboBox()
-        self.baud_combo.addItems(["115200", "230400", "460800", "921600"])
+        self.baud_combo.addItems(BAUD_RATES)
+        self.baud_combo.setCurrentText("115200")
 
         # Grid Placement
         self.port_combo.setToolTip("Serial port (VIRTUAL: the built-in simulator)")
@@ -127,6 +150,36 @@ class ConnectionPanel(QtWidgets.QWidget):
         self.connect_btn.setChecked(connected)
         self._set_connected_ui(connected)
         self.connect_btn.blockSignals(False)
+        # A profile says what the device sends: it can't change under a running session.
+        self.profile_btn.setEnabled(not connected)
+        self.profile_btn.setToolTip(
+            "Disconnect to switch profiles" if connected else "Device profile: what it sends"
+        )
+
+    def set_profiles(self, entries: list[ProfileEntry], current: Path, profile: Profile) -> None:
+        """Lists the profiles to switch to; `current` is the file in use."""
+        self.profile_btn.setText(f"{profile.name} · {profile.format} ▾")
+        menu = self.profile_menu
+        menu.clear()
+        self.profile_actions.clear()
+        current_resolved = current.expanduser().resolve()
+        for entry in entries:
+            action = menu.addAction(f"{entry.name}   ·  {entry.format}")
+            assert action is not None
+            action.setCheckable(True)
+            action.setChecked(entry.path == current_resolved)
+            action.setToolTip(str(entry.path))
+            action.triggered.connect(lambda _=False, p=str(entry.path): self.profile_chosen.emit(p))
+            self.profile_actions[str(entry.path)] = action
+        menu.addSeparator()
+        for text, signal in (
+            ("New profile…", self.new_profile_requested),
+            ("Open profile file…", self.open_profile_requested),
+            ("Edit profile…", self.edit_profile_requested),
+        ):
+            action = menu.addAction(text)
+            assert action is not None
+            action.triggered.connect(lambda _=False, s=signal: s.emit())
 
     def set_paused(self, paused: bool) -> None:
         """Shows the paused state (e.g. after a trigger capture) without emitting."""

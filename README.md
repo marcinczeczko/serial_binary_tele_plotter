@@ -20,6 +20,9 @@ Primary use cases:
 - One window: a toolbar for the session, streams as tabs above the plot (with each
   stream's live rate), a Signals dock (legend, visibility, lanes and the cursor readout in
   one list) and Controls / Step response docks. The layout is remembered.
+- **Device profiles**: one file per device (`robot-1`, `esc-2`, …) with its wire format,
+  baud rate and streams, picked first in the toolbar. Port and baud are remembered per
+  profile. The bundled `streams.json` is the `diffbot` profile.
 - Serial connection management with port scanning and baud rate selection.
 - Analysis mode: pause the plot, scrub with the cursor, click to set an anchor for delta (Δ)
   readouts across all signals.
@@ -27,7 +30,7 @@ Primary use cases:
   decoded at the same time**; the selector only chooses which one to show, so switching
   keeps each stream's history and never interrupts acquisition. Streams may share a
   `stream_id`: they're told apart by payload size, and identical layouts are decoded once.
-- Built-in configuration editor (File → Edit streams.json), in the scope's look: the frame
+- Built-in configuration editor (File → Edit profile), in the scope's look: the frame
   drawn byte by byte, its signals by lane, and a form per field. **Paste a C struct** to start
   a stream (or update one) and **copy any stream as a C struct** for the firmware.
 - **Control panels defined in `streams.json`**: parameters (spin boxes, check boxes) and
@@ -88,11 +91,11 @@ Parquet export needs `pyarrow`, an optional extra: `uv sync --extra parquet` (or
 ## Running
 
 ```bash
-uv run python main.py                          # last used config, else the bundled streams.json
-uv run python main.py --config ~/robot.json    # a specific config (remembered for next time)
+uv run python main.py                          # last used profile, else the bundled streams.json
+uv run python main.py --config ~/robot.json    # a specific profile file (remembered for next time)
 ```
 
-The config file is never looked up in the current working directory, so the app can be
+The profile file is never looked up in the current working directory, so the app can be
 started from anywhere.
 
 ## Development Commands
@@ -134,13 +137,20 @@ the plot, the **Signals** dock on the left and the **Controls** / **Step respons
 on the right. Docks can be closed (View menu), moved, or floated; the layout is remembered.
 
 1. Launch the app with `uv run python main.py`.
-2. In the toolbar, pick a **serial port** and **baud rate**, then click `Connect`. Use
-   `VIRTUAL` for the built-in simulator. Both are remembered for the next run (a port
-   that's gone isn't selected). The toolbar's right end shows the link statistics.
-3. Pick a **stream tab** above the plot. Every stream is decoded all the time, so a tab is
+2. The toolbar starts with the **device profile** (`diffbot · binary ▾`): what the device
+   sends and which streams to show. Its menu lists the profiles in the profiles folder
+   (default `~/telemetry-profiles`), the bundled `streams.json` and files opened from
+   elsewhere, plus **New profile…** (name, format, baud; empty or a copy of the current
+   profile), **Open profile file…** and **Edit profile…**. Profiles switch only while
+   disconnected. Each profile keeps its own shown stream, view, panel values, port and
+   baud; a profile's `baud` is used until you pick another one for it.
+3. Pick a **serial port** and **baud rate**, then click `Connect`. Use `VIRTUAL` for the
+   built-in simulator. Both are remembered for the next run (a port that's gone isn't
+   selected). The toolbar's right end shows the link statistics.
+4. Pick a **stream tab** above the plot. Every stream is decoded all the time, so a tab is
    only a view. Each tab shows its stream's rate while connected (`200 Hz`), or `no data`
    when none of its frames arrive (check its `stream_id` and layout).
-4. **Signals** dock: the shown stream's signals, grouped by lane.
+5. **Signals** dock: the shown stream's signals, grouped by lane.
    - A check box shows or hides a signal; a lane's check box does it for the whole lane,
      and the lane shows how many are shown (`3/4`). The filter box narrows the list.
    - Hovering the plot shows each signal's value at the cursor next to its name, and the
@@ -149,21 +159,21 @@ on the right. Docks can be closed (View menu), moved, or floated; the layout is 
    - Drag a signal onto another lane (or into the empty space below the list, for a new
      lane), or right-click it → **Move to lane** / **New lane**.
    - Visibility and lane moves are remembered per stream (and per config file) between
-     runs, on top of `streams.json`. **View → Reset view to streams.json** forgets them for
+     runs, on top of `streams.json`. **View → Reset view to the profile** forgets them for
      the shown stream. To change the file itself, use the stream editor (a signal's check
      box and lane).
    - Live, time follows the newest data and the mouse zooms or pans a lane's Y. That lane
      then holds its range. Right-click a lane → **Lane Y range** to choose Auto (fit the
      data in view), Auto-grow (only widens) or Manual, and whether zero is always included.
-5. `Pause` (or Space) enters analysis mode: zoom and pan freely (Auto lanes fit what's in
+6. `Pause` (or Space) enters analysis mode: zoom and pan freely (Auto lanes fit what's in
    view). A click drops a Δ anchor (drag it to move it), and the Signals dock shows Δt and
    each signal's Δ. `Resume` returns to the live view; it works even after a session ended.
-6. The **time window** button next to the tabs (`5.000 ms · 2,000 samples`) opens the
+7. The **time window** button next to the tabs (`5.000 ms · 2,000 samples`) opens the
    **Period** of the shown stream (the time between two frames, from its `time` block) and
    the **Samples** of history every stream keeps. Changing the period re-times that
    stream's whole history for this session; the button turns orange while it differs from
    the file. Set it in the stream editor (X axis × time per tick) to keep it.
-7. **Controls** dock: the shown stream's control panel (e.g. PID Tuning for the `pid`
+8. **Controls** dock: the shown stream's control panel (e.g. PID Tuning for the `pid`
    streams), generated from `streams.json` `panels`. Its buttons send commands while
    connected; the status bar says what was sent, or why not.
    - After a send, a value that differs from what was last sent is highlighted and counted
@@ -184,7 +194,8 @@ on the right. Docks can be closed (View menu), moved, or floated; the layout is 
      previous one (`kp 0.1 → 0.25`); refused sends are listed in red. The number is also a
      dashed marker on the plot at the stream time it was sent. **Send again** (or a double
      click) re-sends a row's exact packet.
-8. **File → Edit streams.json…** (Ctrl+,) opens the stream editor, laid out like the scope:
+9. **File → Edit profile…** (Ctrl+,) opens the current profile in the stream editor, laid
+   out like the scope:
    - Streams are tabs. One row holds the stream's key, name, ID, byte order, X axis and time
      per tick (`5 ms`, `1 µs`), step and **Controls** panel.
    - **Frame**: the payload as the device sends it, 32 bytes per row, each field in its
@@ -210,7 +221,7 @@ on the right. Docks can be closed (View menu), moved, or floated; the layout is 
      stream's size and its first problem as you edit. Saving updates `streams.json` (the
      previous file is kept as `streams.json.bak`); a file with errors isn't saved.
      Commands and panels are edited in the file itself.
-9. **Recording** menu (and the toolbar's `● Record`, which shows the elapsed time):
+10. **Recording** menu (and the toolbar's `● Record`, which shows the elapsed time):
    - **Record** (Ctrl+R) saves everything the port delivers, until you stop it or
      disconnect. The file goes to the recordings folder (default `~/telemetry-recordings`),
      named after the shown stream and the time, e.g. `pid_20260924-201530.sbtp`. `● REC` in
@@ -221,13 +232,13 @@ on the right. Docks can be closed (View menu), moved, or floated; the layout is 
      made with different frame layouts. Choose the **Replay speed**, **Pause replay** or
      **Step replay** (one recorded read at a time) from the same menu. When the file ends,
      the session stops with "Replay finished".
-10. **File → Export shown stream…** writes every signal of the shown stream, hidden ones
+11. **File → Export shown stream…** writes every signal of the shown stream, hidden ones
     too. While paused, that's the time range in view; otherwise the whole buffer. **Export
     all streams…** writes each stream's buffer to its own file (`<name>_<stream>.csv`);
     streams without data are skipped. The time column (`time_s`) comes first. A value
     missing from a frame is an empty CSV field (a Parquet null), and gap markers are left
     out.
-11. **Trigger** (toolbar):
+12. **Trigger** (toolbar):
     - Pick the trigger **Signal**, **Edge**, **Level**, and how much to keep **Before** and
       **After** the crossing, then click **Arm** (while connected). While armed, the button
       says what it waits for (`↘ L: Target Setpoint < 0.15 · ARMED`) and the level is a
@@ -293,21 +304,25 @@ The bundled PID panel sends `0x10` (`motor_id: u8`, then `kp ki k1 k2 k3 k_aw al
 
 ## Configuration: `streams.json`
 
-`streams.json` is the single source of truth for all stream definitions. Edit it directly or
-use the in-app stream editor. The document has four top-level keys:
+A config file is a **device profile**: the single source of truth for one device's streams,
+commands and panels. Edit it directly or use the in-app stream editor. The bundled
+`streams.json` is one; File → New profile makes more. The document has these top-level keys:
 
 | Key | Description |
 |-----|-------------|
-| `schema_version` | The file format version, currently `2` |
+| `schema_version` | The file format version, currently `3` |
+| `profile` | Optional: `name` (default: the file name), `format` (the wire format: `binary`, the default) and `baud` (the baud rate to connect at, until you pick another for this profile). An unknown format makes the file unusable |
 | `commands` | Optional: command packets the app can send (see [Commands and control panels](#commands-and-control-panels)) |
 | `panels` | Optional: control panels that send those commands |
 | `streams` | The telemetry streams, by key |
 
 A file without `schema_version` is version 1 (before panels were configurable). It's read
-as version 2: a stream's `panel_type: "pid"` becomes `controls: "diffbot_pid"`, with the
-PID commands and panel added, and `"imu"` (which sent nothing) is dropped. The status bar
-says so, and the file changes only when you save it from the stream editor. A file with
-a newer version than the app knows is refused.
+as the current version: a stream's `panel_type: "pid"` becomes `controls: "diffbot_pid"`,
+with the PID commands and panel added, and `"imu"` (which sent nothing) is dropped. A
+version 2 file is read unchanged as a binary profile named after the file. The status bar
+says so, and the file changes only when you save it from the stream editor. A file with a
+newer version than the app knows is refused. Recordings keep the profile's name and format,
+so a replay decodes with the format it was recorded with.
 
 Each stream entry:
 
@@ -505,7 +520,8 @@ serial_binary_tele_plotter/
 │   ├── types.py               # Shared TypedDicts and Enums
 │   ├── config/                # streams.json: document (load, migrate, validate, save),
 │   │                          #   streams, controls (commands, panels), schema migrations,
-│   │                          #   the editor's StreamDraft, C structs in and out
+│   │                          #   the editor's StreamDraft, C structs in and out,
+│   │                          #   device profiles (the `profile` block, listing)
 │   ├── protocol/              # Wire format: link (the LinkDecoder slot), CRC-8, FrameParser,
 │   │                          #   RecordDecoder (numpy), StreamRouter (multi-stream), stats,
 │   │                          #   commands (encoding)
@@ -528,7 +544,7 @@ serial_binary_tele_plotter/
 │   │                          #   the store's overview), TriggerController, lanes/series
 │   ├── panels/                # Toolbar connection, stream tabs, Signals (legend + readout),
 │   │                          #   control panels + send log, time window, trigger
-│   └── config/                # Stream editor (File → Edit streams.json): frame view,
+│   └── config/                # Stream editor (File → Edit profile): frame view,
 │                              #   lanes, field form, From C struct… dialog
 ├── tests/                     # pytest; `qt`-marked tests use real Qt
 ├── tools/                     # bench_pipeline.py (parser/storage), bench_render.py (GUI FPS)

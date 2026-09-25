@@ -6,6 +6,27 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — R8.2 Device profiles
+
+- **Profiles (ADR-0010).** A config file is a device profile: schema 3 adds an optional
+  `profile` block (`name`, `format`, `baud`; `core/config/profile.py`). A schema 2 file
+  migrates by its version only and is a binary profile named after the file. The bundled
+  `streams.json` is now the `diffbot` profile (binary, 115200).
+- **Picker.** The toolbar starts with the profile menu: the profiles folder
+  (`~/telemetry-profiles`), the bundled file and files opened from elsewhere, plus New
+  profile (name, format, baud; empty or a copy), Open profile file and Edit profile.
+  Switching (only while disconnected) reloads the loader, panels, editor and engine
+  (`configure_profile` picks the decoder). Port and baud are remembered per profile; a
+  profile's baud beats the last baud used with another profile (a test pins it).
+- **Recordings** keep the profile's name and format; a replay decodes with the recorded
+  format (old recordings are binary), and the next live session uses the profile's.
+- Tests: 338 with Qt (+18: profile model, engine formats, the dashboard's switching),
+  271 + 67 skipped without;
+  one existing test changed on purpose (the baud order above). Ran the whole suite 10+
+  times after one unexplained crash in a single run; it didn't recur.
+
+---
+
 ## 2026-09-25 — Phase 8 planned (device profiles, text lines); R8.1 decoder slot
 
 - **Plan (ADR-0010, roadmap Phase 8).** From the CSV spike: binary or text is decided by

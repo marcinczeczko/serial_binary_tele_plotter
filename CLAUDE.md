@@ -58,11 +58,13 @@ fix one, remove its xfail.
 ```
 main.py                 QApplication bootstrap, SIGINT handling
 styles.py               global dark theme (QSS)
-streams.json            schema 2: streams, commands, panels (single source of truth; ADR-0007)
+streams.json            schema 3: the bundled `diffbot` device profile: profile, streams, commands, panels
+                        (single source of truth; ADR-0007, ADR-0010)
 core/types.py           TypedDict config shapes, PlotMode, EngineState
 core/config/            document (load -> migrate -> validate -> save, StreamConfigLoader), streams (stream
                         validation), controls (CommandDef/PanelDef parsing), migrate (schema versions),
-                        draft (StreamDraft: the editor's model), cstruct (C struct in and out)
+                        draft (StreamDraft: the editor's model), cstruct (C struct in and out), profile
+                        (the `profile` block: name, format, baud; listing a profiles folder)
 core/protocol/          wire format: link (LinkDecoder: bytes -> records per stream; the engine's only view of the
                         format, ADR-0010), constants, crc (CRC-8), frame_parser (sync/CRC, all IDs), record_decoder
                         (numpy dtype), router (multi-stream dispatch), handler (single-stream API), commands, stats
@@ -76,13 +78,14 @@ core/acquisition/       engine (QThread controller), storage (SampleStore, Strea
                         detail for live frames, summarised lazily on read)
 ui/main_window.py       composition (session toolbar, stream tabs over the plot, Signals / Controls / Step
                         response docks, editor window), thread setup, signal wiring, menus (ADR-0008)
-ui/app_settings.py      QSettings keys (config path, recording options)
-ui/ui_state.py          remembered port, stream, view overrides, panel values, presets, Live mode (per config
-                        file) and the window/dock layout
+ui/app_settings.py      QSettings keys (config path, recording options, profiles folder, recent profiles)
+ui/ui_state.py          remembered port and baud, stream, view overrides, panel values, presets, Live mode
+                        (per config file, i.e. per device profile) and the window/dock layout
 ui/charts/              TelemetryPlot (lanes = signals[*].group, per-lane Y modes, cursor/Δ), LiveFeed (pulls the
                         store's overview), lanes.py + series.py (Qt-free layout, range, decimation, readout),
                         trigger_controller (arms on the shown store, emits captures)
-ui/panels/              container (owns the controls; MainWindow places them), connection (toolbar row),
+ui/panels/              container (owns the controls; MainWindow places them), connection (toolbar row,
+                        starting with the profile menu), profile_dialog (New profile),
                         stream_tabs, signals (lane-grouped list = legend + cursor readout, drag between
                         lanes), command_panel (generated from `panels`: edited vs sent, linked rows, Live,
                         presets, label scrubbing, Esc revert), command_log,
@@ -138,6 +141,11 @@ hold these bytes verbatim (ADR-0006), so a wire change also affects replaying ol
   operation on the draft that touches only its keys; line edits apply what was typed, on
   leaving or on a save/switch (ADR-0009). Keep new editor features on that path, so an
   untouched stream still saves byte-identically (C4).
+- **A config file is a device profile (ADR-0010).** Its `profile.format` picks the engine's
+  `LinkDecoder` (`configure_profile`), switched only while disconnected; everything keyed
+  by config file (`UiState`, the editor, recordings) follows the profile. The window
+  switches profiles with `switch_profile(path)`, which reloads the loader, panels, editor
+  and engine; don't add another path that changes the loaded file.
 - **Config-driven over hard-coded.** New stream or command shapes belong in
   `streams.json` and the config model, not in Python constants. A command's panel is a
   `panels` entry; the GUI encodes a press and hands the engine a finished packet

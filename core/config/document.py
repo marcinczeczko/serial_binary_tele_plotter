@@ -20,6 +20,7 @@ from typing import Any, cast
 
 from core.config.controls import PanelDef, parse_commands, parse_panels
 from core.config.migrate import SCHEMA_VERSION, SchemaError, migrate, schema_version
+from core.config.profile import Profile, profile_of, profile_problems
 from core.config.streams import ConfigProblem, shared_id_problems, validate_stream
 from core.protocol.commands import CommandDef
 from core.types import StreamConfig
@@ -27,7 +28,7 @@ from core.types import StreamConfig
 # The streams.json shipped next to the application code (not the current working directory).
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "streams.json"
 
-TOP_LEVEL_KEYS = ("schema_version", "commands", "panels", "streams")
+TOP_LEVEL_KEYS = ("schema_version", "profile", "commands", "panels", "streams")
 
 
 class InvalidConfigError(ValueError):
@@ -73,6 +74,7 @@ def validate_config(data: Any) -> list[ConfigProblem]:
         problems.append(
             ConfigProblem("warning", None, f"unknown top-level key(s) {', '.join(unknown)}")
         )
+    problems.extend(profile_problems(doc))
     for key, stream in streams.items():
         problems.extend(validate_stream(str(key), stream))
     problems.extend(shared_id_problems(streams))
@@ -139,6 +141,7 @@ class StreamConfigLoader:
         self.panels: dict[str, PanelDef] = {}
         self.source_version = SCHEMA_VERSION
         self.migration_notes: list[str] = []
+        self.profile = Profile(self.path.stem)
 
         if not self.path.exists():
             raise FileNotFoundError(f"Required configuration file not found: {self.path.resolve()}")
@@ -169,6 +172,7 @@ class StreamConfigLoader:
         if fatal:
             raise ValueError(f"Invalid {self.path.name}: {fatal[0].message}")
 
+        self.profile = profile_of(self.data, self.path)
         broken = {p.stream for p in self.problems if p.severity == "error"}
         # Shallow copies: `self.data` stays as loaded, because the config editor round-trips it.
         self._streams = {
@@ -180,6 +184,22 @@ class StreamConfigLoader:
         self.commands, _ = parse_commands(raw_commands)
         declared = set(raw_commands) if isinstance(raw_commands, dict) else set()
         self.panels, _ = parse_panels(self.data.get("panels"), self.commands, declared)
+
+    def open(self, path: str | Path) -> None:
+        """
+        Switches to another profile file. If it can't be loaded, the loader stays on the
+        file it had (and raises the error: FileNotFoundError or ValueError).
+        """
+        previous = self.path
+        self.path = Path(path)
+        try:
+            if not self.path.exists():
+                raise FileNotFoundError(f"Profile file not found: {self.path.resolve()}")
+            self.load()
+        except OSError, ValueError:
+            self.path = previous
+            self.load()
+            raise
 
     def list_streams(self) -> dict[str, StreamConfig]:
         """Returns all valid stream definitions."""

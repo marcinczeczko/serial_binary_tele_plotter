@@ -7,6 +7,9 @@
 - **2**: `schema_version`, `commands` and `panels` at the top level (see
   `core.config.controls`). A stream shows a panel with `controls`. The DiffBot PID panel
   is an ordinary config entry, `DIFFBOT_*` below, byte-for-byte the packets version 1 sent.
+- **3**: the file is a device profile (ADR-0010): an optional top-level `profile` block
+  (name, format, baud; see `core.config.profile`). Without one, the file is a binary
+  profile named after the file, so a version 2 file needs no change beyond its version.
 
 `migrate()` upgrades a parsed document in memory, step by step. Nothing is written: the
 file changes only when the user saves it from the Configuration tab.
@@ -17,7 +20,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _GAINS: list[tuple[str, str, dict[str, Any]]] = [
     ("kp", "Kp", {"default": 0.1}),
@@ -116,7 +119,16 @@ def migrate(doc: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     if version < 2:
         out, step_notes = _v1_to_v2(out)
         notes += step_notes
+    if version < 3:
+        out, step_notes = _v2_to_v3(out)
+        notes += step_notes
     return out, notes
+
+
+def _v2_to_v3(doc: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Only the version changes: no `profile` block means a binary profile (ADR-0010)."""
+    out = {"schema_version": 3, **{k: v for k, v in doc.items() if k != "schema_version"}}
+    return out, ["migrated from schema version 2 to 3 (a binary device profile)"]
 
 
 def _v1_to_v2(doc: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:

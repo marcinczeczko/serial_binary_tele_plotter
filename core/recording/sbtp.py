@@ -7,7 +7,8 @@ Layout (little endian):
     then repeated chunks:  u64 host_ts_ns  u32 length  bytes (length)
 
 - The header records the stream config in use, so a recording can still be decoded after
-  streams.json has changed. It also has the source name and the creation time.
+  streams.json has changed. It also has the source name, the creation time and the device
+  profile (name and wire format, R8.2), so a replay decodes with the right format.
 - A chunk is one read from the transport, before any parsing. So a replay goes through the
   same framing, CRC checks, time base and statistics as the original session, including
   its errors.
@@ -54,6 +55,13 @@ class RecordingHeader:
     streams: dict[str, Any]
     extra: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def profile_format(self) -> str:
+        """The wire format recorded (R8.2); recordings made before profiles are binary."""
+        profile = self.extra.get("profile")
+        fmt = profile.get("format") if isinstance(profile, dict) else None
+        return fmt if isinstance(fmt, str) else "binary"
+
     def to_json(self) -> bytes:
         doc = {
             "created": self.created,
@@ -76,6 +84,7 @@ class RecordingWriter:
         streams: dict[str, Any],
         source: str,
         clock_ns: Callable[[], int] = time.time_ns,
+        profile: dict[str, Any] | None = None,
     ) -> None:
         self.path = Path(path)
         self._clock_ns = clock_ns
@@ -83,7 +92,11 @@ class RecordingWriter:
         self.chunks = 0
         self.bytes = 0
         header = RecordingHeader(
-            VERSION, datetime.now(UTC).isoformat(timespec="seconds"), source, streams
+            VERSION,
+            datetime.now(UTC).isoformat(timespec="seconds"),
+            source,
+            streams,
+            {"profile": profile} if profile is not None else {},
         )
         body = header.to_json()
         self.path.parent.mkdir(parents=True, exist_ok=True)
