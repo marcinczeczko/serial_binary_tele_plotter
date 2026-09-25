@@ -18,7 +18,7 @@ so you can work without hardware.
    (`C*` correctness, `P*` performance, `A*` architecture, `T*` tooling).
 4. `docs/adr/`: design decisions. ADR-0002 is the target pipeline.
 5. `docs/specs/`: working specs for the next roadmap items. **Phase 9 is in progress (R9.1–R9.6):
-   the scope view, `docs/specs/phase9-scope-view.md` (ADR-0012, proposed). R9.1–R9.4 done; next R9.5.**
+   the scope view, `docs/specs/phase9-scope-view.md` (ADR-0012, proposed). R9.1–R9.5 done; next R9.6.**
 
 Before starting non-trivial work, check whether a roadmap item or finding already covers
 it, and reference its ID in commits and PRs.
@@ -99,10 +99,11 @@ ui/panels/              container (owns the controls; MainWindow places them), t
                         with boxed letters, RunBox, MessageLabel, RatePoints, LinkHealth), connection (profile
                         menu, port (refreshes on open), baud (serial only), Connect, RUN/STOP), profile_dialog (New profile),
                         stream_tabs, signals (the Signals pane: one row per L/R pair from signal_rows,
-                        swatch toggles, readout at A in colour, filter on Ctrl+F, drag rows between lanes), command_panel (generated from `panels`: edited vs sent, linked rows, Live,
-                        presets, label scrubbing, Esc revert), command_log, terminal (a text profile's
+                        swatch toggles, readout at A in colour, filter on Ctrl+F, drag rows between lanes), command_panel (generated from `panels`: edited vs sent, Manual|Live, Presets ▾,
+                        L=R box + per-row link on the label's menu, Send per column, Revert N, label
+                        scrubbing, Esc revert), command_log (plain lines, double-click resends), terminal (a text profile's
                         input line and replies, R8.5),
-                        timing, trigger (setup popup + step-response results)
+                        timing, trigger (setup popup + Step view: Now / Prev / Δ)
 ui/config/              streams.json editor (ADR-0009): tab (toolbar, profile row, stream tabs, save),
                         stream_editor (settings row, lanes tree, field form), frame_view (bus-decode drawing),
                         line_view (a text stream's pattern and last line, R8.4), paste_dialog,

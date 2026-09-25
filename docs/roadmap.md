@@ -403,7 +403,7 @@ in each item's PR.
   header.
   *Done when:* the bundled profile's 34 signals show as 17 rows, and a cursor readout shows
   each shown signal's value at A in its colour.
-- [ ] **R9.5 Tune and Step panes**: Manual/Live segmented, `Presets ▼` menu, one `L=R` toggle,
+- [x] **R9.5 Tune and Step panes**: Manual/Live segmented, `Presets ▼` menu, one `L=R` toggle,
   square inputs without spin arrows, `Send` per column, `Revert N` only when edited, the send
   log as plain lines (double-click resends); Step metrics as Now / Prev / change.
   *Done when:* the pane has no always-visible disabled button, and every ADR-0008 behaviour

@@ -6,6 +6,24 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — R9.5 Tune and Step panes restyled and slimmed
+
+- Tune: Manual | Live segment (Live amber) and `Presets ▾` (load, Save as…, Delete ▸; shows
+  the loaded preset) in one row; the `L=R` box in the grid's corner; square inputs without
+  spin arrows, values in B612 Mono; 13 px boolean boxes; `Send` under each column (the
+  config label is the tooltip, spec question 2); `Revert N` in amber only while edited.
+- Per-row linking kept (spec question 4) as a checkable action on the row label's
+  right-click menu; an unlinked row reads `Ki ≠`. The ten ⇄ buttons are gone (finding 11).
+- Send log: plain grey lines under a hairline, `20:41:07  ▲2  label  change`, refused in
+  red, wrapped; double-click resends; bytes (hex) in the tooltip. No header, no Send again.
+- Step: `Now` (measured signal's colour) / `Prev` (dim) / `Δ` (green better, amber worse;
+  overshoot as `▲ +4 pt`), then Setpoint, Measured and `Overlay previous`.
+- Every ADR-0008 behaviour's test still passes (edited vs sent, Live, presets, numbered
+  sends, resend). `tests/test_qt_tune_pane.py` (6), incl. "no always-visible disabled
+  button". Plot untouched: no render benchmark.
+
+---
+
 ## 2026-09-25 — R9.4 Signals pane: pairs, swatch toggles, readout in colour
 
 - One row per left/right pair (`ui/panels/signal_rows.py`, Qt-free): label prefix `L: `/`R: `,
