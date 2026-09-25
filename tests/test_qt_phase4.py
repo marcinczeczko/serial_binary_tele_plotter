@@ -165,7 +165,7 @@ def test_trigger_capture_pauses_with_metrics(qtbot: Any, tmp_path: Path) -> None
     assert panel.state_lbl.text() == "Idle" and not panel.arm_btn.isChecked()
     assert win.trigger_btn.text() == "Trigger" and win.plot.trigger_line() is None
     assert win.plot.capture_window() == pytest.approx((t_trig - 0.5, t_trig))  # before T
-    assert not win.step_dock.isHidden()
+    assert win.panes.view == "step" and win.step_tab.lit  # the Step pane came forward
     assert win.lbl_status.text().startswith(f"Triggered at {t_trig:.3f} s")
     _disconnect(qtbot, win)
 

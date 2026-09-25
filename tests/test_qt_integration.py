@@ -163,12 +163,10 @@ def test_main_window_starts_switches_stream_and_closes(qtbot: Any, monkeypatch: 
 
     panel = win.panel
     assert panel.stream_tabs.count() >= 2
-    toggle = win.controls_dock.toggleViewAction()  # close, then reopen the controls dock
-    assert toggle is not None
-    toggle.trigger()
-    assert win.controls_dock.isHidden()
-    toggle.trigger()
-    assert not win.controls_dock.isHidden()
+    win.tune_tab.click()  # its lit tab closes the right pane, and opens it again
+    assert win.right_stack.isHidden() and not win.tune_tab.lit
+    win.tune_tab.click()
+    assert not win.right_stack.isHidden() and win.tune_tab.lit
     panel.stream_tabs.setCurrentIndex(1)
     qtbot.wait(50)
     current = panel.get_current_stream_config()

@@ -6,7 +6,8 @@ What the dashboard remembers between runs (R5.3), in `QSettings`.
 - Per config file (stream and panel keys only mean something within one file): the shown
   stream, each stream's signal visibility and lane moves, and each panel's parameter
   values, presets and Live mode (R6.4).
-- The window's layout: dock positions and sizes (R6.1), whatever the config file.
+- Per config file, the side panes (R9.3): which are open, the right pane's view and their
+  widths. The window's size and position are kept whatever the config file.
 
 Visibility and lane moves are kept as overrides of streams.json and applied on top of it
 (`apply_view_overrides`), so the file itself is only changed from the Configuration tab.
@@ -27,10 +28,11 @@ from typing import Any, cast
 from PyQt6 import QtCore
 
 from core.types import StreamConfig
+from ui.panes import PaneState
 
 KEY_PORT = "connection/port"
 KEY_BAUD = "connection/baud"
-KEY_WINDOW_STATE = "window/state"
+KEY_WINDOW_STATE = "window/state"  # ADR-0008 dock layout: dropped (R9.3)
 KEY_WINDOW_GEOMETRY = "window/geometry"
 
 
@@ -195,20 +197,21 @@ class UiState:
     def set_panel_live(self, panel: str, live: bool) -> None:
         self._set_json(f"{self._scope}/live/{_key(panel)}", bool(live))
 
-    # --- window layout (R6.1) ---
+    # --- panes (R9.3) and window geometry ---
 
-    def window_state(self) -> tuple[QtCore.QByteArray | None, QtCore.QByteArray | None]:
-        """(geometry, dock state) as saved by `set_window_state`."""
+    def panes(self) -> PaneState:
+        return PaneState.from_json(self._get_json(f"{self._scope}/panes", {}))
+
+    def set_panes(self, state: PaneState) -> None:
+        self._set_json(f"{self._scope}/panes", state.to_json())
+
+    def window_geometry(self) -> QtCore.QByteArray | None:
         geometry = self.settings.value(KEY_WINDOW_GEOMETRY)
-        state = self.settings.value(KEY_WINDOW_STATE)
-        return (
-            geometry if isinstance(geometry, QtCore.QByteArray) else None,
-            state if isinstance(state, QtCore.QByteArray) else None,
-        )
+        return geometry if isinstance(geometry, QtCore.QByteArray) else None
 
-    def set_window_state(self, geometry: QtCore.QByteArray, state: QtCore.QByteArray) -> None:
+    def set_window_geometry(self, geometry: QtCore.QByteArray) -> None:
         self.settings.setValue(KEY_WINDOW_GEOMETRY, geometry)
-        self.settings.setValue(KEY_WINDOW_STATE, state)
+        self.settings.remove(KEY_WINDOW_STATE)  # the docks' layout means nothing now
 
 
 def apply_view_overrides(

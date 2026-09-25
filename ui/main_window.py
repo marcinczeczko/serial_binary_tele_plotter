@@ -13,6 +13,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,7 @@ from ui.panels.command_log import CommandLog, LogEntry
 from ui.panels.command_panel import CommandPanel, SendRequest
 from ui.panels.container import MainControlPanel
 from ui.panels.profile_dialog import ProfileDialog
+from ui.panes import EdgeTab, PaneState, RightView, edge_strip
 from ui.ui_state import UiState
 
 logger = logging.getLogger(__name__)
@@ -85,21 +87,6 @@ def _popup_button(text: str, content: QtWidgets.QWidget) -> QtWidgets.QToolButto
     menu.addAction(action)
     button.setMenu(menu)
     return button
-
-
-def _dock(
-    title: str, name: str, content: QtWidgets.QWidget, parent: QtWidgets.QMainWindow
-) -> QtWidgets.QDockWidget:
-    """A dock the user can move, float or close; `name` keys its place in the saved layout."""
-    dock = QtWidgets.QDockWidget(title, parent)
-    dock.setObjectName(name)
-    dock.setWidget(content)
-    dock.setFeatures(
-        QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable
-        | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable
-        | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable
-    )
-    return dock
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -152,10 +139,6 @@ class MainWindow(QtWidgets.QMainWindow):
         # --- Window Setup ---
         self.setWindowTitle("Serial Binary Plotter")
         self.resize(1440, 900)
-        self.setDockOptions(
-            QtWidgets.QMainWindow.DockOption.AnimatedDocks
-            | QtWidgets.QMainWindow.DockOption.AllowTabbedDocks
-        )
 
         # The dashboard's controls; their pieces are placed below (R6.1).
         self.panel = MainControlPanel(self.stream_loader, self.ui_state)
@@ -176,25 +159,43 @@ class MainWindow(QtWidgets.QMainWindow):
         tabs_row.addWidget(self.time_btn)
         central_layout.addLayout(tabs_row)
         central_layout.addWidget(self.plot, 1)
-        self.setCentralWidget(central)
 
-        # --- Docks: signals left, controls and step response right ---
-        self.signals_dock = _dock("Signals", "signals_dock", self.panel.sig_panel, self)
-        self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, self.signals_dock)
+        # --- Panes (R9.3, ADR-0012): Signals | plot | Tune or Step, opened from edge tabs ---
         self.command_log = CommandLog()
-        controls = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
-        controls.addWidget(self.panel.controls_stack)
-        controls.addWidget(self.command_log)
-        controls.setStretchFactor(0, 3)
-        controls.setStretchFactor(1, 1)
-        self.controls_dock = _dock("Controls", "controls_dock", controls, self)
-        self.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, self.controls_dock)
-        self.step_dock = _dock("Step response", "step_dock", self.panel.trigger_panel.results, self)
-        self.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, self.step_dock)
-        self.tabifyDockWidget(self.controls_dock, self.step_dock)
-        self.controls_dock.raise_()
-        self.resizeDocks([self.signals_dock], [290], QtCore.Qt.Orientation.Horizontal)
-        self.resizeDocks([self.controls_dock], [360], QtCore.Qt.Orientation.Horizontal)
+        self.controls_view = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        self.controls_view.addWidget(self.panel.controls_stack)
+        self.controls_view.addWidget(self.command_log)
+        self.controls_view.setStretchFactor(0, 3)
+        self.controls_view.setStretchFactor(1, 1)
+        self.right_stack = QtWidgets.QStackedWidget()
+        self.right_stack.addWidget(self.controls_view)
+        self.right_stack.addWidget(self.panel.trigger_panel.results)
+        self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        for pane in (self.panel.sig_panel, central, self.right_stack):
+            self.splitter.addWidget(pane)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setStretchFactor(2, 0)
+        self.splitter.splitterMoved.connect(lambda _pos, _i: self._remember_pane_widths())
+        self.signals_tab = EdgeTab("SIGNALS", "left")
+        self.signals_tab.setToolTip("Signals  [")
+        self.tune_tab = EdgeTab("TUNE", "right")
+        self.step_tab = EdgeTab("STEP", "right")
+        self.step_tab.setToolTip("Step response")
+        self.signals_tab.clicked.connect(self.toggle_signals_pane)
+        self.tune_tab.clicked.connect(lambda: self._set_panes(self.panes.click_right("tune")))
+        self.step_tab.clicked.connect(lambda: self._set_panes(self.panes.click_right("step")))
+        root = QtWidgets.QWidget()
+        root_layout = QtWidgets.QHBoxLayout(root)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+        root_layout.addWidget(edge_strip([self.signals_tab], "left"))
+        root_layout.addWidget(self.splitter, 1)
+        root_layout.addWidget(edge_strip([self.tune_tab, self.step_tab], "right"))
+        self.setCentralWidget(root)
+        self.controls_title = ""
+        self.panes = self.ui_state.panes()
 
         # --- Configuration editor: its own window (File > Edit profile) ---
         self.configurator = ConfiguratorTab(self.stream_loader)
@@ -306,12 +307,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_profiles()
         self._update_title()
         self._update_trigger_ui()
-        self.panel.show_controls()  # the dock's title, now that it's wired
-        geometry, state = self.ui_state.window_state()
+        self.panel.show_controls()  # the right tab's label, now that it's wired
+        geometry = self.ui_state.window_geometry()
         if geometry is not None:
             self.restoreGeometry(geometry)
-        if state is not None:
-            self.restoreState(state)
+        self._apply_panes()
 
         # --- Final Setup ---
         self._apply_profile()
@@ -427,6 +427,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._refresh_profiles()
             return False
         self.ui_state.set_config(self.stream_loader.path)
+        self.panes = self.ui_state.panes()
         self.settings.setValue(KEY_CONFIG_PATH, str(self.stream_loader.path))
         if self.stream_loader.path.parent.resolve() != profiles_dir(self.settings).resolve():
             add_recent_profile(self.settings, self.stream_loader.path)
@@ -724,8 +725,72 @@ class MainWindow(QtWidgets.QMainWindow):
         self._command_status(f"Sent '{entry.label}' again ({len(entry.packet)} B)")
 
     def _on_controls_changed(self, title: str) -> None:
-        self.controls_dock.setWindowTitle(title or "Controls")
-        self.command_log.setVisible(not self.panel.is_text)  # the terminal has its own
+        self.controls_title = title or "Controls"
+        is_text = self.panel.is_text
+        self.command_log.setVisible(not is_text)  # the terminal has its own
+        # A text profile's right pane is its terminal (R8.5); it has no step response.
+        self.tune_tab.setText("TERMINAL" if is_text else "TUNE")
+        self.tune_tab.setToolTip(f"{self.controls_title}  ]")
+        self.tune_tab.updateGeometry()
+        self.step_tab.setVisible(not is_text)
+        if is_text and self.panes.view == "step":
+            self._set_panes(replace(self.panes, view="tune"))
+        else:
+            self._apply_panes()
+
+    # --- panes (R9.3) -------------------------------------------------------------------
+
+    def toggle_signals_pane(self) -> None:
+        self._set_panes(self.panes.toggle_left())
+
+    def toggle_right_pane(self) -> None:
+        self._set_panes(self.panes.toggle_right())
+
+    def toggle_both_panes(self) -> None:
+        self._set_panes(self.panes.toggle_both())
+
+    def show_right_view(self, view: RightView) -> None:
+        self._set_panes(replace(self.panes, right_open=True, view=view))
+
+    def _set_panes(self, state: PaneState) -> None:
+        self.panes = state
+        self._apply_panes()
+        self.ui_state.set_panes(self.panes)  # as applied: a text profile has no Step view
+
+    def _apply_panes(self) -> None:
+        """Shows the panes, the right view and the lit tabs as `self.panes` says."""
+        p = self.panes
+        if self.panel.is_text and p.view == "step":
+            p = self.panes = replace(p, view="tune")
+        self.panel.sig_panel.setVisible(p.left_open)
+        self.right_stack.setVisible(p.right_open)
+        self.right_stack.setCurrentWidget(
+            self.controls_view if p.view == "tune" else self.panel.trigger_panel.results
+        )
+        left = p.left_width if p.left_open else 0
+        right = p.right_width if p.right_open else 0
+        self.splitter.setSizes([left, max(self.splitter.width() - left - right, 1), right])
+        self.signals_tab.set_lit(p.left_open)
+        self.tune_tab.set_lit(p.right_open and p.view == "tune")
+        self.step_tab.set_lit(p.right_open and p.view == "step")
+        self.act_signals_pane.setChecked(p.left_open)
+        self.act_right_pane.setChecked(p.right_open)
+
+    def _remember_pane_widths(self) -> None:
+        """A dragged splitter: the open panes' new widths, kept per profile."""
+        left, _plot, right = self.splitter.sizes()
+        p = self.panes
+        self._set_panes(
+            replace(
+                p,
+                left_width=left if p.left_open and left > 0 else p.left_width,
+                right_width=right if p.right_open and right > 0 else p.right_width,
+            )
+        )
+
+    def showEvent(self, event: QtGui.QShowEvent | None) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._apply_panes()  # the splitter has its real width now
 
     def _send_line(self, line: str) -> None:
         """A text profile's terminal line (R8.5): ASCII plus the chosen ending, numbered."""
@@ -776,8 +841,17 @@ class MainWindow(QtWidgets.QMainWindow):
         view_menu = bar.addMenu("&View")
         rec_menu = bar.addMenu("&Recording")
         assert file_menu is not None and view_menu is not None and rec_menu is not None
-        for dock in (self.signals_dock, self.controls_dock, self.step_dock):
-            view_menu.addAction(dock.toggleViewAction())
+        # Single keys, as on a scope's front panel. A focused text field keeps its keys.
+        self.act_signals_pane = _action(
+            view_menu, "Signals pane", self.toggle_signals_pane, checkable=True, on_toggle=False
+        )
+        self.act_signals_pane.setShortcut(QtGui.QKeySequence("["))
+        self.act_right_pane = _action(
+            view_menu, "Right pane", self.toggle_right_pane, checkable=True, on_toggle=False
+        )
+        self.act_right_pane.setShortcut(QtGui.QKeySequence("]"))
+        self.act_plot_only = _action(view_menu, "Plot only (both panes)", self.toggle_both_panes)
+        self.act_plot_only.setShortcut(QtGui.QKeySequence("\\"))
         view_menu.addSeparator()
         self.act_reset_view = _action(view_menu, "Reset view to the profile", self.panel.reset_view)
 
@@ -1075,8 +1149,7 @@ class MainWindow(QtWidgets.QMainWindow):
         spec = panel.spec()
         if spec is not None:  # shade what came before the trigger
             self.plot.set_capture_window((t_trig - spec.pre_s, t_trig))
-        self.step_dock.show()
-        self.step_dock.raise_()
+        self.show_right_view("step")
         text = f"Triggered at {t_trig:.3f} s (paused; Resume for live view)"
         self.lbl_status.setText(text + (f": {note}" if note else ""))
         self.lbl_status.setStyleSheet("color: #FFB000; font-weight: bold;")
@@ -1090,7 +1163,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         if not self._shut_down:
             self._shut_down = True
-            self.ui_state.set_window_state(self.saveGeometry(), self.saveState())
+            self.ui_state.set_window_geometry(self.saveGeometry())
             if self.engine_thread.isRunning():
                 QtCore.QMetaObject.invokeMethod(
                     self.engine,

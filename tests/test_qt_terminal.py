@@ -97,7 +97,8 @@ def test_a_text_profile_sends_from_the_terminal_and_shows_the_reply(
     win = _window(qtbot, tmp_path)
     terminal = win.panel.terminal
     assert win.panel.controls_stack.currentWidget() is terminal
-    assert win.controls_dock.windowTitle() == "Terminal"
+    assert win.controls_title == "Terminal" and win.tune_tab.text() == "TERMINAL"
+    assert win.step_tab.isHidden()
     assert not win.command_log.isVisibleTo(win)
     assert not terminal.input.isEnabled()
 

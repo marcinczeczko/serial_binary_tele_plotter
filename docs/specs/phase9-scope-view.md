@@ -158,6 +158,8 @@ Order: R9.1 first (everything else inherits it), then R9.3 and R9.2 (the frame),
    whether the panel keeps a long label for the tooltip.
 3. **Right tab label.** `TUNE` for the bundled PID panel; for other panels, derive from the panel
    title or add a short title in `panels`?
+   *Decided in R9.3:* `TUNE` for every command panel, with the panel title in the tooltip;
+   `TERMINAL` for a text profile. No config key.
 4. **Per-row linking.** ADR-0008 lets single rows be linked. The design has one `L=R` toggle; keep
    per-row linking (on the row's context menu) or drop it?
 
