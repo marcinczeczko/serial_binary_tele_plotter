@@ -4,14 +4,15 @@ Background engine module for telemetry data processing.
 The engine runs in its own QThread and orchestrates:
 1. Input: a `Transport` drained by a dedicated `ReaderThread` (blocking reads, P5). The
    `VIRTUAL` port is a `SimTransport`: simulated protocol bytes through the same path (R2.7).
-2. Protocol: parsing and decoding. This happens on the reader thread under `_data_lock`.
-   Every configured stream is decoded (`FrameParser` + `StreamRouter`, R2.2/R2.3); which one
-   the GUI shows is a view choice and never restarts acquisition.
+2. Protocol: decoding bytes into records, by a `LinkDecoder` (R8.1; binary frames are
+   `FrameParser` + `StreamRouter`, R2.2/R2.3). This happens on the reader thread under
+   `_data_lock`. Every configured stream is decoded; which one the GUI shows is a view
+   choice and never restarts acquisition.
 3. Storage: one `SampleStore` per stream (`StreamStores`). The GUI pulls from them at its
    own frame rate (ADR-0002, R2.6), so the engine never pushes bulk data through Qt.
 4. GUI output: state, status and link statistics (small signals only).
 
-Threads: the reader thread uses the parser under `_data_lock`, and the engine thread
+Threads: the reader thread uses the decoder under `_data_lock`, and the engine thread
 takes the same lock for stats and reconfiguration. The store has its own lock and is
 safe to call from any thread.
 """
@@ -27,8 +28,7 @@ from PyQt6 import QtCore
 
 from core.acquisition.storage import StreamStores
 from core.protocol.commands import CommandDef
-from core.protocol.frame_parser import FrameParser
-from core.protocol.router import StreamRouter
+from core.protocol.link import LinkDecoder, make_link_decoder
 from core.protocol.stats import LinkStats, make_link_report
 from core.recording.sbtp import RecordingError, RecordingWriter
 from core.transport import (
@@ -74,9 +74,8 @@ class TelemetryEngine(QtCore.QObject):
 
         # Shared with the GUI, which reads snapshots from them directly (thread-safe).
         self.stores: StreamStores = stores if stores is not None else StreamStores(max_samples)
-        # Parser and router run on the reader thread under `_data_lock`.
-        self.parser = FrameParser()
-        self.router = StreamRouter(self.parser.stats)
+        # The decoder runs on the reader thread under `_data_lock`.
+        self.link: LinkDecoder = make_link_decoder()
         self._commands: tuple[CommandDef, ...] = ()  # for the simulator (R5.2)
         self._streams: dict[str, StreamConfig] = {}
         self._active_key: str | None = None  # the stream the simulator produces
@@ -161,10 +160,8 @@ class TelemetryEngine(QtCore.QObject):
         # Clear buffers to prevent "time travel" artifacts
         self.stores.clear()
         with self._data_lock:
-            self.parser.reset()
-            self.router.stats = self.parser.stats
-            self.router.reset_counters()
-            self._stats_prev = self.parser.stats.snapshot()
+            self.link.reset()
+            self._stats_prev = self.link.stats.snapshot()
             self._stats_prev_samples = self.stores.total_stored
         self._stats_prev_ts = time.monotonic()
         self._time_resets_seen = {}
@@ -213,12 +210,12 @@ class TelemetryEngine(QtCore.QObject):
         """
         Sets every stream to decode (normally all valid streams in streams.json).
 
-        This is safe while running: the router and stores are swapped atomically, and
+        This is safe while running: the decoder and stores are swapped atomically, and
         acquisition continues with the new definitions.
         """
         try:
             with self._data_lock:
-                self.router.configure(streams)
+                self.link.configure(streams)
         except (KeyError, ValueError) as e:
             self.status_msg.emit(f"Stream config error: {e}")
             return
@@ -275,7 +272,7 @@ class TelemetryEngine(QtCore.QObject):
                     self._recorder = None
                     self._reader_failed_recording.emit(str(e))
         with self._data_lock:
-            batches = self.router.route(self.parser.feed(data))
+            batches = self.link.feed(data)
         for key, records in batches.items():
             store = self.stores.get(key)
             if store is not None:
@@ -304,7 +301,7 @@ class TelemetryEngine(QtCore.QObject):
         """Periodic task (stats_timer): emits counters and rates since the previous report."""
         now = time.monotonic()
         with self._data_lock:
-            cur = self.parser.stats.snapshot()
+            cur = self.link.stats.snapshot()
         samples = self.stores.total_stored
         report = make_link_report(
             self._stats_prev, cur, samples - self._stats_prev_samples, now - self._stats_prev_ts

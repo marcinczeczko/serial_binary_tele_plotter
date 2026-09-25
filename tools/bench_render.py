@@ -121,7 +121,7 @@ def main() -> int:
 
     view.paintEvent = timed_paint
 
-    stats_before = engine.parser.stats.snapshot()
+    stats_before = engine.link.stats.snapshot()
     started = time.perf_counter()
     QtCore.QTimer.singleShot(int(args.seconds * 1000), app.quit)
     app.exec()
@@ -130,7 +130,7 @@ def main() -> int:
     QtCore.QMetaObject.invokeMethod(engine, "stop_working", blocking)
     thread.quit()
     thread.wait(2000)
-    stats = engine.parser.stats
+    stats = engine.link.stats
     frames_rx = stats.frames_decoded - stats_before.frames_decoded
     lost = stats.errors + stats.discarded_bytes + stats.counter_gaps - stats_before.counter_gaps
     # Steady state: skip the first second (window setup, first layout and paint).

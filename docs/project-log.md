@@ -6,6 +6,25 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-25 — Phase 8 planned (device profiles, text lines); R8.1 decoder slot
+
+- **Plan (ADR-0010, roadmap Phase 8).** From the CSV spike: binary or text is decided by
+  the device's firmware, so it lives in a named **device profile** (one JSON file per
+  profile: format, baud, streams) picked before connecting. A text stream is a **line
+  pattern** (`IMU,{ms},{ax}`, `ENV t={t}C h={h}%`) inferred from pasted console output,
+  with no header or delimiter rules. Text commands are a later phase (R8.5).
+- **R8.1.** The receive path's byte-to-records step is now a `LinkDecoder`
+  (`core/protocol/link.py`); `BinaryFrameDecoder` wraps `FrameParser` + `StreamRouter`
+  unchanged, and the engine only holds `engine.link`. No behaviour change.
+  `bench_pipeline` now measures that path. Interleaved runs, 4 each at 900 B reads:
+  main 124–145k frames/s, R8.1 116–165k (5000 B: 235–251k vs 237–309k): no regression.
+  `bench_render` is the same on both (main 29.8/30.0 FPS, R8.1 29.9/29.7, interleaved);
+  this container runs it just under the 30 FPS target either way.
+- Tests: 320 with Qt (+4: the decoder matches parser + router byte for byte, reset,
+  counting, unknown format); 259 + 61 skipped without.
+
+---
+
 ## 2026-09-25 — Phase 7: configuration editor in the scope's look, C structs (R7.1–R7.3)
 
 - **Editor (R7.1, ADR-0009).** Rebuilt after a design spike; denser drafts (live values,

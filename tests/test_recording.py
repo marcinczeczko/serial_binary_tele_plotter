@@ -175,7 +175,7 @@ def test_record_then_replay_reproduces_the_session(pyqt_stub: Any, tmp_path: Pat
     live.start_recording(str(path))
     transport.push(*parts)
     try:
-        assert wait_for(lambda: live.parser.stats.bytes_rx == sum(map(len, parts)))
+        assert wait_for(lambda: live.link.stats.bytes_rx == sum(map(len, parts)))
     finally:
         live.stop_working()  # also stops the recording
     assert changes == [str(path), ""]
@@ -190,7 +190,7 @@ def test_record_then_replay_reproduces_the_session(pyqt_stub: Any, tmp_path: Pat
 
     assert ended == ["Replay finished: session.sbtp"]
     assert replayed.state.name == "CONFIGURED"
-    live_stats, replay_stats = live.parser.stats, replayed.parser.stats
+    live_stats, replay_stats = live.link.stats, replayed.link.stats
     assert replay_stats == live_stats  # same bytes, same framing, same errors
     for key in ("a", "a_view", "b"):
         assert replayed.stores.get(key).total_stored == live.stores.get(key).total_stored
@@ -233,7 +233,7 @@ def test_committed_fixture_replays_to_known_statistics(pyqt_stub: Any) -> None:
     engine.start_replay(str(FIXTURE), 0.0)
     assert _wait_idle(engine)
 
-    stats = engine.parser.stats
+    stats = engine.link.stats
     assert stats.frames_decoded == 299
     assert stats.payload_crc_errors == 1 and stats.header_crc_errors == 0
     assert stats.counter_gaps == 1 and stats.counter_missing == 1

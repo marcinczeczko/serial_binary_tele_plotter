@@ -454,7 +454,7 @@ def test_engine_thread_reads_transport_and_handles_disconnect(qtbot: Any) -> Non
     assert failures == ["Serial error: device disconnected"]
     assert engine.state == EngineState.CONFIGURED
     assert transport.closed
-    assert engine.parser.stats.frames_decoded == 300
+    assert engine.link.stats.frames_decoded == 300
     a_store = engine.stores.get("a")
     assert a_store is not None and a_store.total_stored == 300
 
