@@ -323,6 +323,18 @@ class SampleStore:
         ticks *= scale_s
         return now, ticks, data
 
+    def latest_time_s(self) -> float | None:
+        """
+        The newest sample's time in seconds (None when empty): where the stream is "now",
+        on its own time base. Command markers and stream activity use it (R6.3).
+        """
+        with self._lock:
+            if not self._count:
+                return None
+            end = self._head + self._capacity
+            tick = float(self._ticks[end - 1])
+            return tick * self._scale_s
+
     def values_at(self, t_s: float, signal_ids: Iterable[str]) -> dict[str, float]:
         """
         Exact values at time `t_s` (linear between the two samples around it; clamped to

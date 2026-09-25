@@ -86,6 +86,20 @@ class Interpolator:
         return v0 + self._frac * (v1 - v0)  # NaN if either neighbour is NaN
 
 
+@dataclass(frozen=True)
+class Readout:
+    """
+    The cursor readout (R3.3): its time, Δt to the anchor (None without one), each signal's
+    value there (NaN: no data) and its Δ to the anchor's value. The plot computes it; the
+    Signals panel shows it next to each signal (R6.2).
+    """
+
+    t: float
+    dt: float | None
+    values: dict[str, float]
+    deltas: dict[str, float]
+
+
 def finite_bounds(
     time: np.ndarray, y: np.ndarray, x_range: tuple[float, float] | None = None
 ) -> tuple[float, float] | None:

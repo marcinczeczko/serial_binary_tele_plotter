@@ -13,6 +13,11 @@ sample (pyqtgraph's own downsampling and clipping handle that).
 Y ranges: X always follows the newest data in live mode. Each lane's Y is set by its mode.
 Dragging or zooming a lane's Y switches that lane to manual, so the next frame doesn't
 undo it. The lane's context menu (right click) switches it back.
+
+The cursor readout is emitted (`readout_changed`) and shown in the Signals panel, not drawn
+on the plot (R6.2): a visible `TextItem` costs a second paint per frame. Overlays are plain
+lines and regions for the same reason: command markers (R6.3), and the trigger's level line
+and capture window (R6.5).
 """
 
 from __future__ import annotations
@@ -34,13 +39,15 @@ from core.types import (
     StreamSignalConfig,
 )
 from ui.charts.lanes import DEFAULT_LANE, Y_MODES, LaneSpec, lane_layout, target_y_range, union
-from ui.charts.series import DrawData, Interpolator, finite_bounds, prepare_draw
+from ui.charts.series import DrawData, Interpolator, Readout, finite_bounds, prepare_draw
 
 DEFAULT_LINE_WIDTH = 1
 AXIS_WIDTH = 64  # px: equal left-axis widths keep the lanes' time axes aligned
 RANGE_UPDATE_INTERVAL_S = 0.2
 MIN_BUCKETS = 300  # before the view has a real width
 CURSOR_RATE_HZ = 60  # mouse-move readout updates per second (P7)
+MARKER_COLOR = "#F2A93B"
+TRIGGER_COLOR = "#F2A93B"
 MODE_LABELS = {"auto": "Auto (fit view)", "auto-grow": "Auto-grow", "manual": "Manual"}
 
 _PEN_STYLES = {
@@ -92,24 +99,18 @@ class Lane:
             self.vb.setYRange(*spec.manual, padding=0)
 
         self.cursor = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen("#888", width=1))
-        self.cursor.setVisible(False)  # until the mouse is over the plot (like the HUD)
+        self.cursor.setVisible(False)  # until the mouse is over the plot
         self.anchor = pg.InfiniteLine(
             angle=90,
             movable=True,
             pen=pg.mkPen("#00E676", style=QtCore.Qt.PenStyle.DashLine, width=2),
         )
         self.anchor.setVisible(False)
-        self.hud = pg.TextItem(anchor=(0, 0), color="#FFF")
-        # Hidden while empty: a visible TextItem re-sets its transform in paint() whenever
-        # the view's scale changes (every live frame), which schedules a second paint.
-        # That doubled the paint cost per frame (R3.4).
-        self.hud.setVisible(False)
-        for item in (self.cursor, self.anchor, self.hud):
+        for item in (self.cursor, self.anchor):
             self.plot.addItem(item, ignoreBounds=True)
 
         self.anchor.sigPositionChanged.connect(lambda line: owner.set_anchor(line.value()))
         self.vb.sigRangeChangedManually.connect(self._on_manual_range)
-        self.vb.sigRangeChanged.connect(lambda *_: self.place_hud())
         self._build_menu()
 
     # --- range mode ---
@@ -180,26 +181,11 @@ class Lane:
         if target is not None:
             self.vb.setYRange(*target, padding=0)
 
-    def set_hud(self, rows: list[str]) -> None:
-        """Shows the readout rows (HTML); hides the HUD when there are none."""
-        if not rows:
-            self.hud.setHtml("")
-            self.hud.setVisible(False)
-            return
-        self.hud.setHtml(
-            '<div style="background-color: rgba(0, 0, 0, 0.7); padding: 4px;'
-            ' font-family: monospace;">' + "<br>".join(rows) + "</div>"
-        )
-        self.hud.setVisible(True)
-        self.place_hud()
-
-    def place_hud(self) -> None:
-        (x0, x1), (y0, y1) = self.vb.viewRange()
-        self.hud.setPos(x0 + 0.01 * (x1 - x0), y1 - 0.02 * (y1 - y0))
-
 
 class TelemetryPlot(QtWidgets.QWidget):
     cursor_moved = QtCore.pyqtSignal(str)
+    readout_changed = QtCore.pyqtSignal(object)  # Readout | None
+    trigger_level_changed = QtCore.pyqtSignal(float)  # the level line was dragged
 
     def __init__(self) -> None:
         super().__init__()
@@ -222,6 +208,14 @@ class TelemetryPlot(QtWidgets.QWidget):
         self._syncing_anchor = False
         # Overlaid traces of a previous capture (R4.5), dimmed and dashed.
         self._reference: list[tuple[Lane, pg.PlotDataItem]] = []
+        self.last_readout: Readout | None = None
+        # Overlays, re-created when the lanes are (R6.3, R6.5).
+        self._markers: list[tuple[float, str]] = []
+        self._marker_items: list[tuple[Lane, pg.InfiniteLine]] = []
+        self._trigger: tuple[str, float] | None = None  # (signal, level)
+        self._trigger_line: tuple[Lane, pg.InfiniteLine] | None = None
+        self._capture_window: tuple[float, float] | None = None
+        self._window_items: list[tuple[Lane, pg.LinearRegionItem]] = []
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -269,6 +263,9 @@ class TelemetryPlot(QtWidgets.QWidget):
             lane.plot.setXLink(None)
         self.graphics.clear()
         self._reference = []
+        self._marker_items = []
+        self._trigger_line = None
+        self._window_items = []
         self._shown = []
         self.lanes.clear()
         self.signal_views.clear()
@@ -310,6 +307,9 @@ class TelemetryPlot(QtWidgets.QWidget):
         self.anchor_time = None
         self.anchor_values = {}
         self._relayout()
+        self._draw_markers()
+        self._draw_trigger_line()
+        self._draw_capture_window()
 
     def _add_lane(self, spec: LaneSpec) -> Lane:
         lane = Lane(spec, self)
@@ -469,8 +469,11 @@ class TelemetryPlot(QtWidgets.QWidget):
             self.anchor_values = {}
             for lane in self.lanes.values():
                 lane.anchor.setVisible(False)
-                lane.set_hud([])
+                lane.cursor.setVisible(False)
             self.clear_reference()
+            self.set_capture_window(None)
+            self.last_readout = None
+            self.readout_changed.emit(None)
         self._apply_mouse_mode()
         self.refresh_ranges()
 
@@ -560,35 +563,124 @@ class TelemetryPlot(QtWidgets.QWidget):
         else:
             interp = Interpolator(ds["time"], x)
             values = {sid: interp.value(y) for sid, y in ds["signals"].items()}
+        dt = x - self.anchor_time if self.anchor_time is not None else None
+        deltas = (
+            {sid: v - self.anchor_values.get(sid, math.nan) for sid, v in values.items()}
+            if self.anchor_time is not None
+            else {}
+        )
         header = f"T = {x:.3f} s"
-        if self.anchor_time is not None:
-            header += f"  (Δt {x - self.anchor_time:+.3f} s)"
+        if dt is not None:
+            header += f"  (Δt {dt:+.3f} s)"
+        self.last_readout = Readout(x, dt, values, deltas)
         self.cursor_moved.emit(header)
-        for i, key in enumerate(self._shown):
-            lane = self.lanes[key]
-            rows: list[str] = []
-            if i == 0:
-                rows.append(f'<b style="color: white;">{header}</b>')
-            for sid, view in self.signal_views.items():
-                if view["lane"] != key or not view["visible"] or sid not in values:
-                    continue
-                cfg = view["config"]
-                color, label = cfg.get("color", "#FFFFFF"), cfg.get("label", sid)
-                v = values[sid]
-                if not math.isfinite(v):
-                    rows.append(f'<span style="color: {color};">{label}: <b>n/a</b></span>')
-                    continue
-                row = f'<span style="color: {color};">{label}: <b>{v:+.3f}</b>'
-                ref = (
-                    self.anchor_values.get(sid, math.nan)
-                    if self.anchor_time is not None
-                    else math.nan
-                )
-                if math.isfinite(ref):
-                    row += f' <span style="color: #aaa;">(Δ {v - ref:+.3f})</span>'
-                rows.append(row + "</span>")
-            lane.set_hud(rows)
+        self.readout_changed.emit(self.last_readout)
 
     def readout_text(self) -> str:
-        """The readout of every shown lane as plain text (top to bottom)."""
-        return "\n".join(self.lanes[key].hud.textItem.toPlainText() for key in self._shown)
+        """The readout of every shown lane as plain text (top to bottom), for tests and logs."""
+        readout = self.last_readout
+        if readout is None:
+            return ""
+        lines = [f"T = {readout.t:.3f} s"]
+        if readout.dt is not None:
+            lines[0] += f"  (Δt {readout.dt:+.3f} s)"
+        for key in self._shown:
+            for sid, view in self.signal_views.items():
+                if view["lane"] != key or not view["visible"] or sid not in readout.values:
+                    continue
+                label = view["config"].get("label", sid)
+                v = readout.values[sid]
+                if not math.isfinite(v):
+                    lines.append(f"{label}: n/a")
+                    continue
+                row = f"{label}: {v:+.3f}"
+                d = readout.deltas.get(sid, math.nan)
+                if math.isfinite(d):
+                    row += f" (Δ {d:+.3f})"
+                lines.append(row)
+        return "\n".join(lines)
+
+    # --- command markers (R6.3) ---
+
+    def set_markers(self, markers: list[tuple[float, str]]) -> None:
+        """Vertical marks at the times commands were sent (stream time, seconds)."""
+        self._markers = list(markers)
+        self._draw_markers()
+
+    def marker_count(self) -> int:
+        return len(self._markers)
+
+    def _draw_markers(self) -> None:
+        for lane, item in self._marker_items:
+            lane.plot.removeItem(item)
+        self._marker_items = []
+        pen = pg.mkPen(MARKER_COLOR, width=1, style=QtCore.Qt.PenStyle.DashLine)
+        for t, label in self._markers:
+            for lane in self.lanes.values():
+                line = pg.InfiniteLine(pos=t, angle=90, movable=False, pen=pen)
+                line.setToolTip(label)
+                lane.plot.addItem(line, ignoreBounds=True)
+                self._marker_items.append((lane, line))
+
+    # --- trigger overlays (R6.5) ---
+
+    def set_trigger_level(self, signal: str | None, level: float = 0.0) -> None:
+        """
+        Shows the trigger level as a draggable horizontal line in the lane of `signal`
+        (None hides it). Dragging it emits `trigger_level_changed`.
+        """
+        self._trigger = (signal, float(level)) if signal is not None else None
+        self._draw_trigger_line()
+
+    def trigger_line(self) -> pg.InfiniteLine | None:
+        return self._trigger_line[1] if self._trigger_line is not None else None
+
+    def _draw_trigger_line(self) -> None:
+        if self._trigger_line is not None:
+            lane, line = self._trigger_line
+            lane.plot.removeItem(line)
+            self._trigger_line = None
+        if self._trigger is None:
+            return
+        signal, level = self._trigger
+        view = self.signal_views.get(signal)
+        if view is None:
+            return
+        lane = self.lanes[view["lane"]]
+        line = pg.InfiniteLine(
+            pos=level,
+            angle=0,
+            movable=True,
+            pen=pg.mkPen(TRIGGER_COLOR, width=1, style=QtCore.Qt.PenStyle.DashLine),
+            hoverPen=pg.mkPen(TRIGGER_COLOR, width=2),
+        )
+        line.setToolTip("Trigger level: drag to change")
+        line.sigPositionChangeFinished.connect(
+            lambda item: self.trigger_level_changed.emit(float(item.value()))
+        )
+        lane.plot.addItem(line, ignoreBounds=True)
+        self._trigger_line = (lane, line)
+
+    def set_capture_window(self, window: tuple[float, float] | None) -> None:
+        """Shades part of a trigger capture, e.g. before the trigger (None clears it)."""
+        self._capture_window = window
+        self._draw_capture_window()
+
+    def capture_window(self) -> tuple[float, float] | None:
+        return self._capture_window
+
+    def _draw_capture_window(self) -> None:
+        for lane, item in self._window_items:
+            lane.plot.removeItem(item)
+        self._window_items = []
+        if self._capture_window is None:
+            return
+        brush = QtGui.QColor(TRIGGER_COLOR)
+        brush.setAlpha(22)
+        for lane in self.lanes.values():
+            region = pg.LinearRegionItem(
+                values=self._capture_window, movable=False, brush=brush, pen=pg.mkPen(None)
+            )
+            region.setZValue(-10)
+            lane.plot.addItem(region, ignoreBounds=True)
+            self._window_items.append((lane, region))

@@ -1,7 +1,8 @@
 """
 Connection Panel Module.
 
-This module provides the `ConnectionPanel` widget responsible for:
+This module provides the `ConnectionPanel` widget, one row in the main toolbar (R6.1),
+responsible for:
 1. Enumerating available Serial Ports (COM).
 2. Selecting communication speed (Baudrate).
 3. Managing the connection state (Connect/Disconnect).
@@ -14,7 +15,7 @@ from PyQt6 import QtCore, QtWidgets
 from serial.tools import list_ports
 
 
-class ConnectionPanel(QtWidgets.QGroupBox):
+class ConnectionPanel(QtWidgets.QWidget):
     """
     A specific control panel for managing Serial Port connections.
 
@@ -34,10 +35,11 @@ class ConnectionPanel(QtWidgets.QGroupBox):
 
     def __init__(self) -> None:
         """Initializes the connection controls and styling."""
-        super().__init__("Serial Connection")
+        super().__init__()
 
-        layout = QtWidgets.QGridLayout(self)
-        layout.setSpacing(8)
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
 
         # --- Port Selection Controls ---
         self.port_combo = QtWidgets.QComboBox()
@@ -52,11 +54,12 @@ class ConnectionPanel(QtWidgets.QGroupBox):
         self.baud_combo.addItems(["115200", "230400", "460800", "921600"])
 
         # Grid Placement
-        layout.addWidget(QtWidgets.QLabel("Port:"), 0, 0)
-        layout.addWidget(self.port_combo, 0, 1)
-        layout.addWidget(self.refresh_btn, 0, 2)
-        layout.addWidget(QtWidgets.QLabel("Baud:"), 1, 0)
-        layout.addWidget(self.baud_combo, 1, 1, 1, 2)
+        self.port_combo.setToolTip("Serial port (VIRTUAL: the built-in simulator)")
+        self.port_combo.setMinimumWidth(130)
+        self.baud_combo.setToolTip("Baud rate")
+        layout.addWidget(self.port_combo)
+        layout.addWidget(self.refresh_btn)
+        layout.addWidget(self.baud_combo)
 
         # --- Action Buttons Layout ---
         btn_layout = QtWidgets.QHBoxLayout()
@@ -107,8 +110,9 @@ class ConnectionPanel(QtWidgets.QGroupBox):
         btn_layout.addWidget(self.connect_btn)
         btn_layout.addWidget(self.pause_btn)
 
-        # Add buttons to the main grid (Row 2, spanning 3 columns)
-        layout.addLayout(btn_layout, 2, 0, 1, 3)
+        btn_layout.setSpacing(6)
+        self.pause_btn.setToolTip("Freeze the view for analysis; acquisition continues (Space)")
+        layout.addLayout(btn_layout)
 
         # Populate ports immediately on startup
         self.refresh_ports()

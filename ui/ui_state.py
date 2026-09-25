@@ -4,7 +4,8 @@ What the dashboard remembers between runs (R5.3), in `QSettings`.
 - The port and baud rate, whatever the config file.
 - Per config file (stream and panel keys only mean something within one file): the shown
   stream, each stream's signal visibility and lane moves, and each panel's parameter
-  values.
+  values, presets and Live mode (R6.4).
+- The window's layout: dock positions and sizes (R6.1), whatever the config file.
 
 Visibility and lane moves are kept as overrides of streams.json and applied on top of it
 (`apply_view_overrides`), so the file itself is only changed from the Configuration tab.
@@ -28,6 +29,8 @@ from core.types import StreamConfig
 
 KEY_PORT = "connection/port"
 KEY_BAUD = "connection/baud"
+KEY_WINDOW_STATE = "window/state"
+KEY_WINDOW_GEOMETRY = "window/geometry"
 
 
 def _key(part: str) -> str:
@@ -132,6 +135,58 @@ class UiState:
 
     def set_panel_values(self, panel: str, values: dict[str, dict[str, float]]) -> None:
         self._set_json(f"{self._scope}/panels/{_key(panel)}", values)
+
+    # --- presets and Live mode (R6.4) ---
+
+    def presets(self, panel: str) -> dict[str, dict[str, dict[str, float]]]:
+        raw = self._get_json(f"{self._scope}/presets/{_key(panel)}", {})
+        if not isinstance(raw, dict):
+            return {}
+        out: dict[str, dict[str, dict[str, float]]] = {}
+        for name, columns in raw.items():
+            if not isinstance(columns, dict):
+                continue
+            out[str(name)] = {
+                str(col): {
+                    str(k): float(v)
+                    for k, v in params.items()
+                    if isinstance(v, int | float) and not isinstance(v, bool)
+                }
+                for col, params in columns.items()
+                if isinstance(params, dict)
+            }
+        return out
+
+    def save_preset(self, panel: str, name: str, values: dict[str, dict[str, float]]) -> None:
+        current = self.presets(panel)
+        current[name] = values
+        self._set_json(f"{self._scope}/presets/{_key(panel)}", current)
+
+    def delete_preset(self, panel: str, name: str) -> None:
+        current = self.presets(panel)
+        if current.pop(name, None) is not None:
+            self._set_json(f"{self._scope}/presets/{_key(panel)}", current)
+
+    def panel_live(self, panel: str) -> bool:
+        return self._get_json(f"{self._scope}/live/{_key(panel)}", False) is True
+
+    def set_panel_live(self, panel: str, live: bool) -> None:
+        self._set_json(f"{self._scope}/live/{_key(panel)}", bool(live))
+
+    # --- window layout (R6.1) ---
+
+    def window_state(self) -> tuple[QtCore.QByteArray | None, QtCore.QByteArray | None]:
+        """(geometry, dock state) as saved by `set_window_state`."""
+        geometry = self.settings.value(KEY_WINDOW_GEOMETRY)
+        state = self.settings.value(KEY_WINDOW_STATE)
+        return (
+            geometry if isinstance(geometry, QtCore.QByteArray) else None,
+            state if isinstance(state, QtCore.QByteArray) else None,
+        )
+
+    def set_window_state(self, geometry: QtCore.QByteArray, state: QtCore.QByteArray) -> None:
+        self.settings.setValue(KEY_WINDOW_GEOMETRY, geometry)
+        self.settings.setValue(KEY_WINDOW_STATE, state)
 
 
 def apply_view_overrides(

@@ -143,6 +143,15 @@ def test_trigger_capture_pauses_with_metrics(qtbot: Any, tmp_path: Path) -> None
     panel.post_sb.setValue(0.4)
     panel.arm_btn.click()
     assert panel.state_lbl.text() == "Armed: waiting…"
+    # On the plot and in the toolbar while armed (R6.5).
+    assert win.trigger_btn.text() == "↘ L: Target Setpoint < 0.15 · ARMED"
+    line = win.plot.trigger_line()
+    assert line is not None and line.value() == pytest.approx(0.15)
+    line.setValue(0.1)  # dragging the line sets the level
+    line.sigPositionChangeFinished.emit(line)
+    assert panel.level_sb.value() == pytest.approx(0.1)
+    line.setValue(0.15)
+    line.sigPositionChangeFinished.emit(line)
     qtbot.waitUntil(lambda: win.plot.analysis_packet is not None, timeout=8000)
 
     assert win.panel.conn_panel.pause_btn.isChecked()
@@ -151,9 +160,12 @@ def test_trigger_capture_pauses_with_metrics(qtbot: Any, tmp_path: Path) -> None
     t_trig = win.plot.anchor_time
     assert t[0] == pytest.approx(t_trig - 0.5, abs=0.006)
     assert t[-1] == pytest.approx(t_trig + 0.4, abs=0.006)
-    assert "This capture:" in panel.metrics_lbl.text()
     assert "step +0.3 → +0" in panel.metrics_lbl.text()
+    assert panel.metric_text(1, 0).endswith(" %") and panel.metric_text(1, 1) == ""
     assert panel.state_lbl.text() == "Idle" and not panel.arm_btn.isChecked()
+    assert win.trigger_btn.text() == "Trigger" and win.plot.trigger_line() is None
+    assert win.plot.capture_window() == pytest.approx((t_trig - 0.5, t_trig))  # before T
+    assert not win.step_dock.isHidden()
     assert win.lbl_status.text().startswith(f"Triggered at {t_trig:.3f} s")
     _disconnect(qtbot, win)
 
@@ -170,12 +182,12 @@ def test_second_capture_overlays_the_first_and_compares_metrics(qtbot: Any, tmp_
 
     win._on_trigger_captured({"time": t, "signals": first, "signal_bounds": {}}, 1.0, "")
     assert win.plot.reference_count() == 0
-    assert "Previous" not in panel.metrics_lbl.text()
+    assert panel.metric_text(0, 1) == ""  # no previous capture yet
     win._on_trigger_captured({"time": t + 5, "signals": second, "signal_bounds": {}}, 6.0, "")
 
     assert win.plot.reference_count() == 2  # both visible signals, shifted onto this one
-    text = panel.metrics_lbl.text()
-    assert "This capture:" in text and "Previous:" in text
-    assert "rise 0.44" in text and "rise 0.22" in text  # 0.2 vs 0.1 s time constants
+    # Rise time: 0.2 vs 0.1 s time constants, so twice as slow (worse).
+    assert (panel.metric_text(0, 0), panel.metric_text(0, 1)) == ("0.440 s", "0.220 s")
+    assert panel.metric_text(0, 2) == "▲ +100 %"
     win.panel.conn_panel.pause_btn.click()  # resume: the overlay goes away
     assert win.plot.reference_count() == 0

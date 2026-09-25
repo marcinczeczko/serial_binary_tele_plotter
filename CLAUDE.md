@@ -72,14 +72,18 @@ core/simulation/        synth (frames from a stream's `sim` config), pid_motor (
 core/acquisition/       engine (QThread controller), storage (SampleStore, StreamStores), timebase (per-stream time:
                         wrap/reset/gap -> monotonic ticks; seconds applied at snapshot), lod (min/max level of
                         detail for live frames, summarised lazily on read)
-ui/main_window.py       composition, thread setup, signal wiring, File/Recording menus
+ui/main_window.py       composition (session toolbar, stream tabs over the plot, Signals / Controls / Step
+                        response docks, editor window), thread setup, signal wiring, menus (ADR-0008)
 ui/app_settings.py      QSettings keys (config path, recording options)
-ui/ui_state.py          remembered port, stream, view overrides and panel values (per config file)
+ui/ui_state.py          remembered port, stream, view overrides, panel values, presets, Live mode (per config
+                        file) and the window/dock layout
 ui/charts/              TelemetryPlot (lanes = signals[*].group, per-lane Y modes, cursor/Δ), LiveFeed (pulls the
                         store's overview), lanes.py + series.py (Qt-free layout, range, decimation, readout),
                         trigger_controller (arms on the shown store, emits captures)
-ui/panels/              connection, stream select, command_panel (generated from `panels`), timing, signal
-                        visibility, trigger/step response
+ui/panels/              container (owns the controls; MainWindow places them), connection (toolbar row),
+                        stream_tabs, signals (lane-grouped list = legend + cursor readout), command_panel
+                        (generated from `panels`: edited vs sent, linked rows, Live, presets), command_log,
+                        timing, trigger (setup popup + step-response results)
 ui/config/              in-app streams.json editor
 tests/                  pytest: pure logic, stubbed-Qt legacy tests, `qt`-marked real-Qt tests
 tools/                  dev scripts (bench_pipeline.py)
@@ -119,8 +123,10 @@ hold these bytes verbatim (ADR-0006), so a wire change also affects replaying ol
   sample arrays.
 - **Render budget.** Keep one paint per live frame. pyqtgraph items that change their
   transform or geometry inside `paint()` (a visible `TextItem`, a deferred view matrix)
-  schedule a second paint. Check changes to the plot with `tools/bench_render.py` and
-  record the numbers.
+  schedule a second paint. So nothing is drawn as text on the plot: the readout is shown in
+  the Signals dock (`readout_changed`), and overlays are lines and regions only (markers,
+  trigger level, capture shading). Check changes to the plot with `tools/bench_render.py`
+  and record the numbers.
 - **The protocol and decoding layers (`core/protocol`) must not import Qt.** Keep them
   pure and unit-testable.
 - **Config-driven over hard-coded.** New stream or command shapes belong in

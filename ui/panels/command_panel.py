@@ -1,24 +1,44 @@
 """
-A control panel generated from a `panels` entry in streams.json (R5.2).
+A control panel generated from a `panels` entry in streams.json (R5.2, R6.3, R6.4).
 
 One row per parameter and one column per `columns` entry: a spin box for `float` and
 `int` parameters, a check box for `bool`. A button placed in a column sits under it and
 sends its command with that column's values; a button without a column spans the panel
 (its command's fields name their columns).
 
+What the panel adds on top of that:
+- **Edited vs sent.** After a send, every value that differs from what was last sent is
+  highlighted, and counted next to Revert. Before the first send, what the board holds is
+  unknown, so nothing is marked.
+- **Linked rows.** With two or more columns, a row's link button (⇄) keeps its columns
+  equal: editing one edits the others. Rows whose values start equal start linked.
+- **Live mode.** Each change sends its column's button after `LIVE_DEBOUNCE_MS` without
+  further changes, and at most every `LIVE_MIN_INTERVAL_S`: tuning by dragging a spin box.
+  It's off by default because it sends to real hardware as you type.
+- **Presets.** Named value sets (kept by the owner, per config file); choosing one loads its
+  values, which then count as edited until sent.
+- **Ctrl+Enter** presses the panel's main button (the first one spanning the panel).
+
 The panel only collects values: the main window resolves and encodes the command
-(`core.protocol.commands`) and hands the packet to the engine.
+(`core.protocol.commands`), hands the packet to the engine and calls `mark_sent`.
 """
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core.config.controls import ButtonDef, PanelDef, ParamDef
 
 ParamWidget = QtWidgets.QDoubleSpinBox | QtWidgets.QSpinBox | QtWidgets.QCheckBox
+
+LIVE_DEBOUNCE_MS = 150
+LIVE_MIN_INTERVAL_S = 0.1
+EDITED_STYLE = "border: 1px solid #B98225; background: #231D12; color: #FFE2AD;"
+PRESET_PLACEHOLDER = "Presets…"
 
 
 @dataclass(frozen=True)
@@ -29,34 +49,84 @@ class SendRequest:
     button: ButtonDef
     column: str | None
     params: dict[str, dict[str, float]]
+    live: bool = False  # sent by Live mode, not a button press
 
 
 class CommandPanel(QtWidgets.QWidget):
     send_requested = QtCore.pyqtSignal(object)  # SendRequest
     values_changed = QtCore.pyqtSignal()
+    preset_saved = QtCore.pyqtSignal(str, object)  # name, {column: {param: value}}
+    preset_deleted = QtCore.pyqtSignal(str)
+    live_changed = QtCore.pyqtSignal(bool)
 
     def __init__(self, panel: PanelDef, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.panel = panel
         self.inputs: dict[str, dict[str, ParamWidget]] = {c: {} for c in panel.column_keys}
         self.buttons: list[QtWidgets.QPushButton] = []
+        self.links: dict[str, QtWidgets.QToolButton] = {}
+        self._sent: dict[str, dict[str, float]] = {}
+        self._syncing = False
+        self._presets: dict[str, dict[str, dict[str, float]]] = {}
+        self._live_timers: dict[str, QtCore.QTimer] = {}
+        self._last_live: dict[str, float] = {}
+        self._button_widgets: dict[int, QtWidgets.QPushButton] = {}
 
-        grid = QtWidgets.QGridLayout(self)
-        grid.setContentsMargins(8, 6, 8, 6)
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(6)
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(8, 6, 8, 6)
+        outer.setSpacing(8)
 
+        # --- mode, link all ---
+        top = QtWidgets.QHBoxLayout()
+        self.manual_btn = QtWidgets.QToolButton()
+        self.manual_btn.setText("Manual")
+        self.live_btn = QtWidgets.QToolButton()
+        self.live_btn.setText("Live")
+        self.live_btn.setToolTip(
+            f"Send a column {LIVE_DEBOUNCE_MS} ms after its values stop changing "
+            f"(at most every {LIVE_MIN_INTERVAL_S * 1000:.0f} ms). Sends to the device as "
+            "you edit."
+        )
+        mode = QtWidgets.QButtonGroup(self)
+        for btn in (self.manual_btn, self.live_btn):
+            btn.setCheckable(True)
+            mode.addButton(btn)
+            top.addWidget(btn)
+        self.manual_btn.setChecked(True)
+        self.live_btn.toggled.connect(self._on_live_toggled)
+        top.addStretch()
+        self.link_all = QtWidgets.QCheckBox("Link columns")
+        self.link_all.setVisible(len(panel.columns) >= 2)
+        self.link_all.toggled.connect(self._on_link_all)
+        top.addWidget(self.link_all)
+        outer.addLayout(top)
+
+        # --- parameter grid ---
+        grid = QtWidgets.QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(5)
+        linkable = len(panel.columns) >= 2
+        first_input = 2 if linkable else 1
         row = 0
         if panel.columns:
             for i, col in enumerate(panel.columns):
-                grid.addWidget(QtWidgets.QLabel(f"<b>{col}</b>"), row, i + 1)
+                grid.addWidget(QtWidgets.QLabel(f"<b>{col}</b>"), row, first_input + i)
             row += 1
         for param in panel.parameters:
-            grid.addWidget(QtWidgets.QLabel(f"{param.label}:"), row, 0)
+            label = QtWidgets.QLabel(f"{param.label}:")
+            grid.addWidget(label, row, 0)
+            if linkable:
+                link = QtWidgets.QToolButton()
+                link.setText("⇄")
+                link.setCheckable(True)
+                link.setToolTip(f"Keep {param.label} equal in every column")
+                link.setAccessibleName(f"Link {param.label}")
+                self.links[param.key] = link
+                grid.addWidget(link, row, 1)
             for i, col in enumerate(panel.column_keys):
-                widget = self._input(param)
+                widget = self._input(param, col)
                 self.inputs[col][param.key] = widget
-                grid.addWidget(widget, row, i + 1)
+                grid.addWidget(widget, row, first_input + i)
             row += 1
 
         # Column buttons under their column, stacked; the others span the panel.
@@ -69,18 +139,63 @@ class CommandPanel(QtWidgets.QWidget):
             i = panel.columns.index(button.column)
             offset = per_column.get(button.column, 0)
             per_column[button.column] = offset + 1
-            grid.addWidget(self._button(button), row + offset, i + 1)
+            grid.addWidget(self._button(button), row + offset, first_input + i)
         row += max(per_column.values(), default=0)
+        span = len(panel.column_keys) + first_input
         for button in spanning:
-            grid.addWidget(self._button(button), row, 0, 1, len(panel.column_keys) + 1)
+            grid.addWidget(self._button(button), row, 0, 1, span)
             row += 1
+        outer.addLayout(grid)
 
-    def _input(self, param: ParamDef) -> ParamWidget:
+        # --- edited vs sent ---
+        status = QtWidgets.QHBoxLayout()
+        self.unsent_lbl = QtWidgets.QLabel("")
+        self.unsent_lbl.setStyleSheet(
+            "background: #F2A93B; color: #1A1408; border-radius: 8px; padding: 1px 7px;"
+            " font-weight: 600;"
+        )
+        self.unsent_lbl.setVisible(False)
+        status.addWidget(self.unsent_lbl)
+        self.revert_btn = QtWidgets.QPushButton("Revert")
+        self.revert_btn.setToolTip("Back to the last sent values")
+        self.revert_btn.setEnabled(False)
+        self.revert_btn.clicked.connect(self.revert)
+        status.addWidget(self.revert_btn)
+        status.addStretch()
+        outer.addLayout(status)
+
+        # --- presets ---
+        presets = QtWidgets.QHBoxLayout()
+        self.preset_combo = QtWidgets.QComboBox()
+        self.preset_combo.setToolTip("Load a saved set of values (then send it)")
+        self.preset_combo.activated.connect(self._on_preset_chosen)
+        presets.addWidget(self.preset_combo, 1)
+        save = QtWidgets.QPushButton("Save as…")
+        save.clicked.connect(self._ask_preset_name)
+        presets.addWidget(save)
+        self.delete_preset_btn = QtWidgets.QPushButton("Delete")
+        self.delete_preset_btn.clicked.connect(self._delete_current_preset)
+        presets.addWidget(self.delete_preset_btn)
+        outer.addLayout(presets)
+        outer.addStretch()
+        self.set_presets({})
+
+        shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Return"), self)
+        shortcut.setContext(QtCore.Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        shortcut.activated.connect(self.press_default)
+
+        self.reset_links()
+        for link in self.links.values():
+            link.toggled.connect(lambda _=False: self._sync_link_all())
+
+    # --- widgets ---
+
+    def _input(self, param: ParamDef, col: str) -> ParamWidget:
         widget: ParamWidget
         if param.kind == "bool":
             widget = QtWidgets.QCheckBox()
             widget.setChecked(bool(param.default))
-            widget.toggled.connect(self.values_changed)
+            widget.toggled.connect(lambda _=False, c=col, p=param.key: self._on_edit(c, p))
             return widget
         if param.kind == "int":
             widget = QtWidgets.QSpinBox()
@@ -94,20 +209,18 @@ class CommandPanel(QtWidgets.QWidget):
             widget.setSingleStep(param.step)
             widget.setValue(param.default)
         widget.setKeyboardTracking(False)
-        widget.valueChanged.connect(self.values_changed)
+        widget.setAccessibleName(f"{param.label} {col}".strip())
+        widget.valueChanged.connect(lambda _=0, c=col, p=param.key: self._on_edit(c, p))
         return widget
 
     def _button(self, button: ButtonDef) -> QtWidgets.QPushButton:
         btn = QtWidgets.QPushButton(button.label)
         btn.clicked.connect(lambda _checked=False, b=button: self._send(b))
         self.buttons.append(btn)
+        self._button_widgets[id(button)] = btn
         return btn
 
-    def _send(self, button: ButtonDef) -> None:
-        request = SendRequest(
-            self.panel.key, button, self.panel.button_column(button), self.values()
-        )
-        self.send_requested.emit(request)
+    # --- values ---
 
     def values(self) -> dict[str, dict[str, float]]:
         """{column: {parameter: value}}; check boxes are 1.0 or 0.0."""
@@ -116,24 +229,239 @@ class CommandPanel(QtWidgets.QWidget):
             for col, widgets in self.inputs.items()
         }
 
-    def set_values(self, values: dict[str, dict[str, float]]) -> None:
-        """Restores values (e.g. from the last session); unknown ones are ignored."""
-        for col, params in values.items():
-            for key, value in params.items():
-                widget = self.inputs.get(col, {}).get(key)
-                if widget is None:
-                    continue
-                widget.blockSignals(True)
-                if isinstance(widget, QtWidgets.QCheckBox):
-                    widget.setChecked(bool(value))
-                elif isinstance(widget, QtWidgets.QSpinBox):
-                    widget.setValue(int(value))
-                else:
-                    widget.setValue(float(value))
-                widget.blockSignals(False)
+    def _value(self, col: str, key: str) -> float:
+        return _value(self.inputs[col][key])
+
+    def set_values(self, values: dict[str, dict[str, float]], notify: bool = False) -> None:
+        """Restores values (e.g. from the last session or a preset); unknown ones are ignored."""
+        self._syncing = True
+        try:
+            for col, params in values.items():
+                for key, value in params.items():
+                    widget = self.inputs.get(col, {}).get(key)
+                    if widget is not None:
+                        _set(widget, value)
+        finally:
+            self._syncing = False
+        self._refresh_edited()
+        if notify:
+            self.values_changed.emit()
+            if self.live:
+                for col in values:
+                    self._schedule_live(col)
+
+    def _on_edit(self, col: str, key: str) -> None:
+        if self._syncing:
+            return
+        link = self.links.get(key)
+        cols = [col]
+        if link is not None and link.isChecked():
+            value = self._value(col, key)
+            self._syncing = True
+            try:
+                for other in self.panel.column_keys:
+                    if other != col:
+                        _set(self.inputs[other][key], value)
+                        cols.append(other)
+            finally:
+                self._syncing = False
+        self._refresh_edited()
+        self.values_changed.emit()
+        if self.live:
+            for c in cols:
+                self._schedule_live(c)
+
+    # --- linking ---
+
+    def reset_links(self) -> None:
+        """Links exactly the rows whose columns hold equal values (e.g. after a restore)."""
+        for key, link in self.links.items():
+            values = {self._value(col, key) for col in self.panel.column_keys}
+            link.blockSignals(True)
+            link.setChecked(len(values) == 1)
+            link.blockSignals(False)
+        self._sync_link_all()
+
+    def _on_link_all(self, checked: bool) -> None:
+        for key, link in self.links.items():
+            link.blockSignals(True)
+            link.setChecked(checked)
+            link.blockSignals(False)
+            if checked:  # linking makes the columns equal: the first column wins
+                first = self.panel.column_keys[0]
+                self._on_edit(first, key)
+
+    def _sync_link_all(self) -> None:
+        if not self.links:
+            return
+        self.link_all.blockSignals(True)
+        self.link_all.setChecked(all(link.isChecked() for link in self.links.values()))
+        self.link_all.blockSignals(False)
+
+    # --- edited vs sent ---
+
+    def mark_sent(self, sent: dict[str, dict[str, float]]) -> None:
+        """Records what a send carried ({column: {parameter: value}})."""
+        for col, params in sent.items():
+            self._sent.setdefault(col, {}).update(params)
+        self._refresh_edited()
+
+    def last_sent(self, col: str, key: str) -> float | None:
+        return self._sent.get(col, {}).get(key)
+
+    def edited(self) -> list[tuple[str, str]]:
+        """(column, parameter) whose value differs from what was last sent."""
+        out: list[tuple[str, str]] = []
+        for col, params in self._sent.items():
+            for key, sent in params.items():
+                if key in self.inputs.get(col, {}) and abs(self._value(col, key) - sent) > 1e-12:
+                    out.append((col, key))
+        return out
+
+    def revert(self) -> None:
+        """Puts every edited value back to what was last sent."""
+        self.set_values({col: dict(params) for col, params in self._sent.items()}, notify=False)
+        self.values_changed.emit()
+
+    def _refresh_edited(self) -> None:
+        edited = set(self.edited())
+        for col, widgets in self.inputs.items():
+            for key, widget in widgets.items():
+                is_edited = (col, key) in edited
+                widget.setStyleSheet(EDITED_STYLE if is_edited else "")
+                sent = self.last_sent(col, key)
+                widget.setToolTip(f"Last sent: {sent:g}" if sent is not None else "Not sent yet")
+        self.unsent_lbl.setText(f"{len(edited)} unsent")
+        self.unsent_lbl.setVisible(bool(edited))
+        self.revert_btn.setEnabled(bool(edited))
+
+    # --- sending ---
+
+    def _send(self, button: ButtonDef, live: bool = False) -> None:
+        request = SendRequest(
+            self.panel.key, button, self.panel.button_column(button), self.values(), live
+        )
+        self.send_requested.emit(request)
+
+    def press_default(self) -> None:
+        """Ctrl+Enter: the first button spanning the panel, else the first button."""
+        spanning = [b for b in self.panel.buttons if b.column is None]
+        buttons = spanning or list(self.panel.buttons)
+        if buttons:
+            self._send(buttons[0])
+
+    def button_for(self, label: str) -> QtWidgets.QPushButton | None:
+        return next((b for b in self.buttons if b.text() == label), None)
+
+    # --- live mode ---
+
+    @property
+    def live(self) -> bool:
+        return self.live_btn.isChecked()
+
+    def set_live(self, live: bool) -> None:
+        (self.live_btn if live else self.manual_btn).setChecked(True)
+
+    def _on_live_toggled(self, live: bool) -> None:
+        self.live_btn.setStyleSheet(
+            "QToolButton { background: #3A2C14; color: #F2C26B; font-weight: 600; }" if live else ""
+        )
+        if not live:
+            for timer in self._live_timers.values():
+                timer.stop()
+        self.live_changed.emit(live)
+
+    def live_button(self, col: str) -> ButtonDef | None:
+        """The button Live mode presses for a column: the first one placed in it."""
+        if self.panel.columns:
+            return next((b for b in self.panel.buttons if b.column == col), None)
+        return next(iter(self.panel.buttons), None)
+
+    def _schedule_live(self, col: str) -> None:
+        if self.live_button(col) is None:
+            return
+        timer = self._live_timers.get(col)
+        if timer is None:
+            timer = QtCore.QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda c=col: self._fire_live(c))
+            self._live_timers[col] = timer
+        timer.start(LIVE_DEBOUNCE_MS)
+
+    def _fire_live(self, col: str, clock: Callable[[], float] = time.monotonic) -> None:
+        button = self.live_button(col)
+        if button is None or not self.live:
+            return
+        wait = self._last_live.get(col, -1e9) + LIVE_MIN_INTERVAL_S - clock()
+        if wait > 0:
+            self._live_timers[col].start(int(wait * 1000) + 1)
+            return
+        self._last_live[col] = clock()
+        self._send(button, live=True)
+
+    # --- presets ---
+
+    def set_presets(self, presets: dict[str, dict[str, dict[str, float]]]) -> None:
+        self._presets = dict(presets)
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.clear()
+        self.preset_combo.addItem(PRESET_PLACEHOLDER, None)
+        for name in sorted(self._presets):
+            self.preset_combo.addItem(name, name)
+        self.preset_combo.blockSignals(False)
+        self.delete_preset_btn.setEnabled(bool(self._presets))
+
+    def preset_names(self) -> list[str]:
+        return sorted(self._presets)
+
+    def apply_preset(self, name: str) -> None:
+        values = self._presets.get(name)
+        if values is not None:
+            self.set_values(values, notify=True)
+            self.preset_combo.setCurrentIndex(max(self.preset_combo.findData(name), 0))
+
+    def save_preset(self, name: str) -> None:
+        name = name.strip()
+        if not name:
+            return
+        self._presets[name] = self.values()
+        self.set_presets(self._presets)
+        self.preset_combo.setCurrentIndex(self.preset_combo.findData(name))
+        self.preset_saved.emit(name, self.values())
+
+    def delete_preset(self, name: str) -> None:
+        if self._presets.pop(name, None) is not None:
+            self.set_presets(self._presets)
+            self.preset_deleted.emit(name)
+
+    def _on_preset_chosen(self, index: int) -> None:
+        name = self.preset_combo.itemData(index)
+        if isinstance(name, str):
+            self.apply_preset(name)
+
+    def _ask_preset_name(self) -> None:
+        name, ok = QtWidgets.QInputDialog.getText(self, "Save preset", "Preset name:")
+        if ok:
+            self.save_preset(name)
+
+    def _delete_current_preset(self) -> None:
+        name = self.preset_combo.currentData()
+        if isinstance(name, str):
+            self.delete_preset(name)
 
 
 def _value(widget: ParamWidget) -> float:
     if isinstance(widget, QtWidgets.QCheckBox):
         return 1.0 if widget.isChecked() else 0.0
     return float(widget.value())
+
+
+def _set(widget: ParamWidget, value: float) -> None:
+    widget.blockSignals(True)
+    if isinstance(widget, QtWidgets.QCheckBox):
+        widget.setChecked(bool(value))
+    elif isinstance(widget, QtWidgets.QSpinBox):
+        widget.setValue(int(value))
+    else:
+        widget.setValue(float(value))
+    widget.blockSignals(False)

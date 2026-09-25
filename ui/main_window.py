@@ -10,6 +10,7 @@ lifecycle, and global events.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,7 @@ from core.analysis.export import ExportError, export_table, parquet_available
 from core.analysis.step_response import StepMetrics, step_metrics
 from core.analysis.trigger import TriggerSpec
 from core.config import DEFAULT_CONFIG_PATH, SCHEMA_VERSION, StreamConfigLoader
-from core.protocol.commands import CommandError, encode_command, resolve_values
+from core.protocol.commands import CommandDef, CommandError, encode_command, resolve_values
 from core.protocol.stats import LinkReport, format_link_report
 from core.recording.sbtp import SUFFIX as RECORDING_SUFFIX
 from core.recording.sbtp import recording_name
@@ -38,11 +39,14 @@ from ui.charts.live_feed import LiveFeed
 from ui.charts.telemetry_plot import TelemetryPlot
 from ui.charts.trigger_controller import TriggerController
 from ui.config.tab import ConfiguratorTab
-from ui.panels.command_panel import SendRequest
+from ui.panels.command_log import CommandLog, LogEntry
+from ui.panels.command_panel import CommandPanel, SendRequest
 from ui.panels.container import MainControlPanel
 from ui.ui_state import UiState
 
 logger = logging.getLogger(__name__)
+
+MAX_MARKERS = 200  # per stream; older ones have long left the buffer
 
 
 def _action(
@@ -60,6 +64,35 @@ def _action(
         slot
     )
     return act
+
+
+def _popup_button(text: str, content: QtWidgets.QWidget) -> QtWidgets.QToolButton:
+    """A toolbar-style button that opens `content` in a popup below it."""
+    button = QtWidgets.QToolButton()
+    button.setText(text)
+    button.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+    button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
+    menu = QtWidgets.QMenu(button)
+    action = QtWidgets.QWidgetAction(menu)
+    action.setDefaultWidget(content)
+    menu.addAction(action)
+    button.setMenu(menu)
+    return button
+
+
+def _dock(
+    title: str, name: str, content: QtWidgets.QWidget, parent: QtWidgets.QMainWindow
+) -> QtWidgets.QDockWidget:
+    """A dock the user can move, float or close; `name` keys its place in the saved layout."""
+    dock = QtWidgets.QDockWidget(title, parent)
+    dock.setObjectName(name)
+    dock.setWidget(content)
+    dock.setFeatures(
+        QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable
+        | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        | QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable
+    )
+    return dock
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -111,42 +144,62 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # --- Window Setup ---
         self.setWindowTitle("Serial Binary Plotter")
-        self.resize(1280, 800)
+        self.resize(1440, 900)
+        self.setDockOptions(
+            QtWidgets.QMainWindow.DockOption.AnimatedDocks
+            | QtWidgets.QMainWindow.DockOption.AllowTabbedDocks
+        )
 
-        # --- MAIN LAYOUT (TABS) ---
-        # Top-level tabs: dashboard (panel + plot) and configuration editor
-        self.tabs = QtWidgets.QTabWidget()
-        self.setCentralWidget(self.tabs)
-
-        # ================= TAB 1: DASHBOARD =================
-        self.dashboard_widget = QtWidgets.QWidget()
-        dashboard_layout = QtWidgets.QVBoxLayout(self.dashboard_widget)
-        dashboard_layout.setContentsMargins(0, 0, 0, 0)
-
-        # Splitter (control panel + plot)
-        self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
-
-        # Instantiate the main view components
+        # The dashboard's controls; their pieces are placed below (R6.1).
         self.panel = MainControlPanel(self.stream_loader, self.ui_state)
+        self.panel.setParent(self)
         remembered = self.ui_state.connection()
         if remembered is not None:
             self.panel.conn_panel.select(*remembered)
         self.plot = TelemetryPlot()
 
-        self.splitter.addWidget(self.panel)
-        self.splitter.addWidget(self.plot)
-        self.splitter.setSizes([350, 930])
+        # --- Centre: stream tabs (+ time window) over the plot ---
+        central = QtWidgets.QWidget()
+        central_layout = QtWidgets.QVBoxLayout(central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+        tabs_row = QtWidgets.QHBoxLayout()
+        tabs_row.setContentsMargins(6, 2, 6, 2)
+        tabs_row.addWidget(self.panel.stream_tabs, 1)
+        self.time_btn = _popup_button("Time window", self.panel.time_panel)
+        self.time_btn.setToolTip("Period of the shown stream, and how much history is kept")
+        tabs_row.addWidget(self.time_btn)
+        central_layout.addLayout(tabs_row)
+        central_layout.addWidget(self.plot, 1)
+        self.setCentralWidget(central)
 
-        # Put the splitter into the dashboard tab
-        dashboard_layout.addWidget(self.splitter)
+        # --- Docks: signals left, controls and step response right ---
+        self.signals_dock = _dock("Signals", "signals_dock", self.panel.sig_panel, self)
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, self.signals_dock)
+        self.command_log = CommandLog()
+        controls = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        controls.addWidget(self.panel.controls_stack)
+        controls.addWidget(self.command_log)
+        controls.setStretchFactor(0, 3)
+        controls.setStretchFactor(1, 1)
+        self.controls_dock = _dock("Controls", "controls_dock", controls, self)
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, self.controls_dock)
+        self.step_dock = _dock("Step response", "step_dock", self.panel.trigger_panel.results, self)
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, self.step_dock)
+        self.tabifyDockWidget(self.controls_dock, self.step_dock)
+        self.controls_dock.raise_()
+        self.resizeDocks([self.signals_dock], [290], QtCore.Qt.Orientation.Horizontal)
+        self.resizeDocks([self.controls_dock], [360], QtCore.Qt.Orientation.Horizontal)
 
-        # Register the dashboard tab
-        self.tabs.addTab(self.dashboard_widget, "📊 Dashboard")
-
-        # ================= TAB 2: CONFIGURATION =================
+        # --- Configuration editor: its own window (File > Edit streams.json) ---
         self.configurator = ConfiguratorTab(self.stream_loader)
         self.configurator.config_saved.connect(self._reload_configuration)
-        self.tabs.addTab(self.configurator, "⚙️ Configuration")
+        self.config_window = QtWidgets.QDialog(self)
+        self.config_window.setWindowTitle(f"Configuration: {self.stream_loader.path.name}")
+        self.config_window.resize(1100, 750)
+        config_layout = QtWidgets.QVBoxLayout(self.config_window)
+        config_layout.setContentsMargins(0, 0, 0, 0)
+        config_layout.addWidget(self.configurator)
 
         # --- Status Bar Initialization ---
         self.status_bar = QtWidgets.QStatusBar()
@@ -154,14 +207,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.lbl_status = QtWidgets.QLabel("Ready")
         self.lbl_cursor = QtWidgets.QLabel("")
-        self.lbl_link = QtWidgets.QLabel("")
+        self.lbl_link = QtWidgets.QLabel("")  # in the toolbar
         self.lbl_rec = QtWidgets.QLabel("")
         self.lbl_rec.setStyleSheet("color: #F44336; font-weight: bold;")
 
         self.status_bar.addWidget(self.lbl_status)
         self.status_bar.addPermanentWidget(self.lbl_rec)
-        self.status_bar.addPermanentWidget(self.lbl_link)
         self.status_bar.addPermanentWidget(self.lbl_cursor)
+
+        # Command markers (R6.3): per stream, (time on that stream's time base, label).
+        self._markers: dict[str, list[tuple[float, str]]] = {}
+        self._next_marker = 1
+        # Stream activity (R6.1): samples stored per stream at the last statistics tick.
+        self._activity: tuple[float, dict[str, int]] | None = None
+        self._rec_started: float | None = None
 
         # --- Engine & Thread Initialization ---
         # Retrieve initial settings via the Panel's public API
@@ -186,6 +245,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.panel.stream_changed.connect(self._on_stream_changed)
         self.panel.period_changed.connect(self._on_period_changed)
         self.panel.samples_changed.connect(self.engine.set_capacity)
+        self.panel.samples_changed.connect(lambda _n: self._update_time_button())
         self.panel.send_requested.connect(self._send_command)
         self.send_packet.connect(self.engine.send_packet)
         self.commands_configured.connect(self.engine.configure_commands)
@@ -217,8 +277,28 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # 6. Interactivity: Plot -> UI
         self.plot.cursor_moved.connect(self.lbl_cursor.setText)
+        self.plot.readout_changed.connect(self.panel.sig_panel.show_readout)
+
+        # 7. Phase 6 layout: trigger on the plot, controls dock, log (R6.3, R6.5)
+        self.plot.trigger_level_changed.connect(trigger_panel.set_level)
+        trigger_panel.changed.connect(self._update_trigger_ui)
+        self.panel.controls_changed.connect(
+            lambda title: self.controls_dock.setWindowTitle(title or "Controls")
+        )
+        self.command_log.resend_requested.connect(self._resend)
 
         self._build_menus()
+        self._build_toolbar()
+        self._update_trigger_ui()
+        self.controls_dock.setWindowTitle(
+            (panel.panel.title if (panel := self.panel.current_control_panel()) else "")
+            or "Controls"
+        )
+        geometry, state = self.ui_state.window_state()
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        if state is not None:
+            self.restoreState(state)
 
         # --- Final Setup ---
         self._configure_engine_streams()
@@ -261,8 +341,8 @@ class MainWindow(QtWidgets.QMainWindow):
             parts.append(text)
         if loader.migrated:
             parts.append(
-                f"schema {loader.source_version} read as {SCHEMA_VERSION}; save it from the "
-                "Configuration tab to update the file"
+                f"schema {loader.source_version} read as {SCHEMA_VERSION}; save it from "
+                "File > Edit streams.json to update the file"
             )
             details += loader.migration_notes
         if not parts:
@@ -303,9 +383,10 @@ class MainWindow(QtWidgets.QMainWindow):
         is told only so the virtual device simulates the shown stream.
         """
         self.plot.configure_stream(stream_cfg)
+        key = self.panel.current_stream_key()
+        self.plot.set_markers(self._markers.get(key or "", []))
         self._bind_live_feed()
         self._show_period()
-        key = self.panel.current_stream_key()
         if key is not None:
             QtCore.QMetaObject.invokeMethod(
                 self.engine,
@@ -325,6 +406,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.panel.time_panel.show_period(
             scale_s * time_cfg.step * 1000.0, time_cfg.period_s * 1000.0
         )
+        self._update_time_button()
+
+    def _update_time_button(self) -> None:
+        tp = self.panel.time_panel
+        self.time_btn.setText(f"{tp.get_period():.3f} ms · {tp.get_samples():,} samples")
+        self.time_btn.setStyleSheet("color: #FFB74D;" if tp.is_overridden() else "")
 
     def _on_period_changed(self, period_ms: float) -> None:
         """The user overrode the shown stream's period: re-time that stream (all history)."""
@@ -334,6 +421,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         scale_s = period_ms / 1000.0 / time_base_config(cfg).step
         self._scale_overrides[key] = scale_s
+        self._update_time_button()
         QtCore.QMetaObject.invokeMethod(
             self.engine,
             "set_time_scale",
@@ -376,10 +464,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_menus()
         if running:
             self.lbl_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
+            # A new session starts new stream time: markers of the last one no longer apply.
+            self._markers.clear()
+            self.plot.set_markers([])
+            self._activity = None
             if self.act_record_on_connect.isChecked() and not self._replaying:
                 self._start_recording()
         else:
             self._replaying = False
+            self._activity = None
+            for key in self.stores.keys():
+                self.panel.stream_tabs.set_activity(key, None)
             self._update_menus()
 
     def _on_session_ended(self, message: str) -> None:
@@ -401,6 +496,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_link.setText(text)
         self.lbl_link.setToolTip(tooltip)
         self.lbl_link.setStyleSheet("color: #FFB74D;" if has_problems else "")
+        self._update_activity()
+
+    def _update_activity(self, clock: Callable[[], float] = time.monotonic) -> None:
+        """Each stream's sample rate on its tab, from the stores' counts (R6.1)."""
+        now = clock()
+        totals = {}
+        for key in self.stores.keys():
+            store = self.stores.get(key)
+            totals[key] = store.total_stored if store is not None else 0
+        previous = self._activity
+        self._activity = (now, totals)
+        if previous is None or now <= previous[0]:
+            return
+        dt = now - previous[0]
+        for key, total in totals.items():
+            rate = (total - previous[1].get(key, total)) / dt
+            self.panel.stream_tabs.set_activity(key, rate)
+        self._update_record_button()
 
     def _handle_pause(self, paused: bool) -> None:
         """
@@ -420,24 +533,75 @@ class MainWindow(QtWidgets.QMainWindow):
     # --- commands (R5.2) -----------------------------------------------------------------
 
     def _send_command(self, request: SendRequest) -> None:
-        """Encodes a panel button's command and hands the packet to the engine."""
+        """
+        Encodes a panel button's command and hands the packet to the engine; logs it, marks
+        it on the plot and tells the panel what was sent (R6.3).
+        """
         command = self.stream_loader.commands.get(request.button.command)
         if command is None:
             return  # a panel only offers valid commands; kept for reloads in flight
+        label = request.button.label
         if self.engine_state != EngineState.RUNNING:
-            self._command_status(f"Not connected: '{request.button.label}' not sent", error=True)
+            self._command_status(f"Not connected: '{label}' not sent", error=True)
+            if not request.live:  # Live edits while disconnected aren't worth a log row each
+                self._log_refused(label, "not connected")
             return
         try:
             values = resolve_values(command, request.params, request.column, request.button.values)
             packet = encode_command(command, values)
         except CommandError as e:
             self._command_status(f"Not sent: {e}", error=True)
+            self._log_refused(label, str(e))
             return
         self.send_packet.emit(packet)
-        self._command_status(
-            f"Sent '{request.button.label}': {command.label} "
-            f"(ID 0x{command.packet_id:02X}, {len(packet)} B)"
+        sent = _sent_params(command, request)
+        panel = self.panel.control_panels.get(request.panel)
+        detail = _describe_change(panel, sent) + (" · live" if request.live else "")
+        if panel is not None:
+            panel.mark_sent(sent)
+        number = self._mark_send(label)
+        self.command_log.add(
+            LogEntry(number, time.strftime("%H:%M:%S"), label, detail, packet, command.key)
         )
+        self._command_status(
+            f"Sent '{label}': {command.label} (ID 0x{command.packet_id:02X}, {len(packet)} B)"
+        )
+
+    def _resend(self, entry: LogEntry) -> None:
+        """Sends a logged packet again, exactly as it was."""
+        if self.engine_state != EngineState.RUNNING:
+            self._command_status(f"Not connected: '{entry.label}' not sent again", error=True)
+            return
+        self.send_packet.emit(entry.packet)
+        number = self._mark_send(entry.label)
+        self.command_log.add(
+            LogEntry(
+                number,
+                time.strftime("%H:%M:%S"),
+                entry.label,
+                f"again (as ▲ {entry.number})",
+                entry.packet,
+                entry.command,
+            )
+        )
+        self._command_status(f"Sent '{entry.label}' again ({len(entry.packet)} B)")
+
+    def _log_refused(self, label: str, reason: str) -> None:
+        self.command_log.add(LogEntry(None, time.strftime("%H:%M:%S"), label, reason))
+
+    def _mark_send(self, label: str) -> int:
+        """Numbers a send and marks it on every stream with data, at that stream's now."""
+        number = self._next_marker
+        self._next_marker += 1
+        for key in self.stores.keys():
+            store = self.stores.get(key)
+            t = store.latest_time_s() if store is not None else None
+            if t is not None:
+                markers = self._markers.setdefault(key, [])
+                markers.append((t, f"▲ {number} {label}"))
+                del markers[:-MAX_MARKERS]
+        self.plot.set_markers(self._markers.get(self.panel.current_stream_key() or "", []))
+        return number
 
     def _command_status(self, text: str, error: bool = False) -> None:
         self.lbl_status.setText(text)
@@ -452,10 +616,16 @@ class MainWindow(QtWidgets.QMainWindow):
         view_menu = bar.addMenu("&View")
         rec_menu = bar.addMenu("&Recording")
         assert file_menu is not None and view_menu is not None and rec_menu is not None
+        for dock in (self.signals_dock, self.controls_dock, self.step_dock):
+            view_menu.addAction(dock.toggleViewAction())
+        view_menu.addSeparator()
         self.act_reset_view = _action(
             view_menu, "Reset view to streams.json", self.panel.reset_view
         )
 
+        self.act_edit_config = _action(file_menu, "Edit streams.json…", self.show_configuration)
+        self.act_edit_config.setShortcut(QtGui.QKeySequence("Ctrl+,"))
+        file_menu.addSeparator()
         self.act_export_shown = _action(file_menu, "Export shown stream…", self._export_shown)
         self.act_export_all = _action(file_menu, "Export all streams…", self._export_all)
 
@@ -488,6 +658,69 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_replay_step = _action(rec_menu, "Step replay (one read)", self._replay_step)
         self._update_menus()
 
+    def _build_toolbar(self) -> None:
+        """Session and acquisition controls in one row (R6.1)."""
+        bar = QtWidgets.QToolBar("Session", self)
+        bar.setObjectName("session_toolbar")
+        bar.setMovable(False)
+        bar.setFloatable(False)
+        self.addToolBar(QtCore.Qt.ToolBarArea.TopToolBarArea, bar)
+        self.toolbar = bar
+        bar.addWidget(self.panel.conn_panel)
+        bar.addSeparator()
+        self.record_btn = QtWidgets.QToolButton()
+        self.record_btn.setCheckable(True)
+        self.record_btn.setToolTip("Record the session's raw bytes (Ctrl+R)")
+        self.record_btn.clicked.connect(lambda _=False: self.act_record.trigger())
+        bar.addWidget(self.record_btn)
+        self.trigger_btn = _popup_button("Trigger", self.panel.trigger_panel.setup)
+        self.trigger_btn.setToolTip("Capture a step: trigger on a signal crossing a level")
+        bar.addWidget(self.trigger_btn)
+        spacer = QtWidgets.QWidget()
+        spacer.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred
+        )
+        bar.addWidget(spacer)
+        bar.addWidget(self.lbl_link)
+        self._update_record_button()
+        pause = QtGui.QShortcut(QtGui.QKeySequence("Space"), self)
+        pause.activated.connect(self.panel.conn_panel.pause_btn.click)
+
+    def show_configuration(self) -> None:
+        self.config_window.show()
+        self.config_window.raise_()
+        self.config_window.activateWindow()
+
+    def _update_record_button(self) -> None:
+        recording = bool(self._recording_path)
+        self.record_btn.setChecked(recording)
+        self.record_btn.setEnabled(self.act_record.isEnabled())
+        if recording and self._rec_started is not None:
+            elapsed = int(time.monotonic() - self._rec_started)
+            self.record_btn.setText(f"● REC {elapsed // 60:02d}:{elapsed % 60:02d}")
+            self.record_btn.setStyleSheet("QToolButton { color: #FF8F8F; font-weight: 600; }")
+        else:
+            self.record_btn.setText("● Record")
+            self.record_btn.setStyleSheet("")
+
+    def _update_trigger_ui(self) -> None:
+        """The toolbar's Trigger button shows its state; the level line shows while armed."""
+        panel = self.panel.trigger_panel
+        state = panel.state
+        if state == "armed":
+            text, style = f"{panel.summary()} · ARMED", "color: #F2C26B; font-weight: 600;"
+        elif state == "fired":
+            text, style = f"{panel.summary()} · capturing…", "color: #F2C26B;"
+        else:
+            text, style = "Trigger", ""
+        self.trigger_btn.setText(text)
+        self.trigger_btn.setStyleSheet(f"QToolButton {{ {style} }}" if style else "")
+        spec = panel.spec()
+        if state in ("armed", "fired") and spec is not None:
+            self.plot.set_trigger_level(spec.signal, spec.level)
+        else:
+            self.plot.set_trigger_level(None)
+
     def _update_menus(self) -> None:
         running = self.engine_state == EngineState.RUNNING
         self.act_record.setEnabled(running or bool(self._recording_path))
@@ -495,6 +728,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_replay_step.setEnabled(running and self._replaying)
         if not (running and self._replaying):
             self.act_replay_pause.setChecked(False)
+        if hasattr(self, "record_btn"):
+            self._update_record_button()
 
     def _invoke(self, method: str, *args: QtCore.QGenericArgument) -> None:
         QtCore.QMetaObject.invokeMethod(
@@ -523,6 +758,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_record.blockSignals(False)
         self.lbl_rec.setText(f"● REC {Path(path).name}" if path else "")
         self.lbl_rec.setToolTip(path)
+        self._rec_started = time.monotonic() if path else None
         self._update_menus()
 
     def _save_record_on_connect(self, checked: bool) -> None:
@@ -674,6 +910,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.plot.set_reference(previous[0], t_trig - previous[1])
         self._last_capture = (packet, t_trig)
         self._last_metrics = metrics
+        spec = panel.spec()
+        if spec is not None:  # shade what came before the trigger
+            self.plot.set_capture_window((t_trig - spec.pre_s, t_trig))
+        self.step_dock.show()
+        self.step_dock.raise_()
         text = f"Triggered at {t_trig:.3f} s (paused; Resume for live view)"
         self.lbl_status.setText(text + (f": {note}" if note else ""))
         self.lbl_status.setStyleSheet("color: #FFB74D; font-weight: bold;")
@@ -687,6 +928,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         if not self._shut_down:
             self._shut_down = True
+            self.ui_state.set_window_state(self.saveGeometry(), self.saveState())
             if self.engine_thread.isRunning():
                 QtCore.QMetaObject.invokeMethod(
                     self.engine,
@@ -699,3 +941,40 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if event is not None:
             event.accept()
+
+
+def _sent_params(command: CommandDef, request: SendRequest) -> dict[str, dict[str, float]]:
+    """The panel parameters a send carried: {column: {parameter: value}}."""
+    sent: dict[str, dict[str, float]] = {}
+    for f in command.fields:
+        if f.param is None or f.name in request.button.values or f.value is not None:
+            continue
+        col = f.column if f.column is not None else request.column
+        if col is not None and f.param in request.params.get(col, {}):
+            sent.setdefault(col, {})[f.param] = request.params[col][f.param]
+    return sent
+
+
+def _describe_change(panel: CommandPanel | None, sent: dict[str, dict[str, float]]) -> str:
+    """What a send changed since the last one, e.g. "kp 0.1 → 0.25 (Left, Right)"."""
+    if panel is None or not sent:
+        return ""
+    changes: dict[tuple[str, float, float], list[str]] = {}
+    first = True
+    for col, params in sent.items():
+        for key, value in params.items():
+            before = panel.last_sent(col, key)
+            if before is None:
+                continue
+            first = False
+            if abs(before - value) > 1e-12:
+                changes.setdefault((key, before, value), []).append(col)
+    if first:
+        return "first send"
+    if not changes:
+        return "same values"
+    parts = []
+    for (key, before, value), cols in changes.items():
+        where = f" ({', '.join(c for c in cols if c)})" if any(cols) and len(sent) > 1 else ""
+        parts.append(f"{key} {before:g} → {value:g}{where}")
+    return "; ".join(parts[:3]) + (" …" if len(parts) > 3 else "")

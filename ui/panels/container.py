@@ -1,12 +1,18 @@
 """
-Main Control Panel Container Module.
+The dashboard's controls and their logic (R6.1): the main window places the pieces.
 
-This module aggregates specialized sub-panels into a single sidebar widget. A
-**QStackedWidget** shows the control panel the shown stream names in `controls`, one of
-the panels generated from streams.json `panels` (R5.2).
+- `conn_panel`: the toolbar's port, baud, Connect and Pause.
+- `stream_tabs` and `time_panel`: above the plot (the Period / History buttons open the
+  time panel).
+- `sig_panel`: the Signals dock (left), grouped by lane, with the cursor readout.
+- `controls_stack`: the Controls dock (right). It shows the control panel the shown
+  stream names in `controls`, one generated per streams.json `panels` entry (R5.2).
+- `trigger_panel`: its `setup` opens from the toolbar's Trigger button, and its `results`
+  (step response) is a tab of the right dock.
 
-With a `UiState`, the shown stream, visibility, lane moves and panel values are remembered
-between runs (R5.3) and applied on top of streams.json.
+With a `UiState`, the shown stream, visibility, lane moves, panel values, presets and each
+panel's Live mode are remembered between runs (R5.3, R6.4) and applied on top of
+streams.json.
 """
 
 from __future__ import annotations
@@ -15,18 +21,25 @@ from PyQt6 import QtCore, QtWidgets
 
 from core.config import StreamConfigLoader
 from core.types import StreamConfig
-from ui.common.widgets import CollapsableSection
 from ui.panels.command_panel import CommandPanel
 from ui.panels.connection import ConnectionPanel
 from ui.panels.signals import SignalListPanel
+from ui.panels.stream_tabs import StreamTabs
 from ui.panels.timing import TimeConfigPanel
 from ui.panels.trigger import TriggerPanel
 from ui.ui_state import UiState, apply_view_overrides
 
+NO_CONTROLS = (
+    "This stream has no control panel.\n\n"
+    "Add a `panels` entry and name it in the stream's `controls` (streams.json)."
+)
+
 
 class MainControlPanel(QtWidgets.QWidget):
     """
-    The main sidebar widget containing all configuration controls.
+    Owns the dashboard's controls (hidden itself: its pieces live in the toolbar, above the
+    plot and in the docks) and the logic between them: stream selection, control panels,
+    persistence.
     """
 
     # --- Public Signals ---
@@ -39,104 +52,111 @@ class MainControlPanel(QtWidgets.QWidget):
     stream_changed = QtCore.pyqtSignal(dict)
     signal_visibility_changed = QtCore.pyqtSignal(str, bool)
     signal_lane_changed = QtCore.pyqtSignal(str, str, str)  # signal id, lane key, lane label
+    controls_changed = QtCore.pyqtSignal(str)  # the shown control panel's title ("" for none)
 
     def __init__(self, stream_loader: StreamConfigLoader, ui_state: UiState | None = None) -> None:
         super().__init__()
+        self.setVisible(False)
         self.ui_state = ui_state
-
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(5, 5, 5, 5)
-        layout.setSpacing(10)
-
-        # 1. Fixed Top Panel (Connection)
-        self.conn_panel = ConnectionPanel()
-
-        # 2. Stream Selection (Shared)
-        self.grp_stream = QtWidgets.QGroupBox("Stream Type")
-        l_stream = QtWidgets.QVBoxLayout(self.grp_stream)
         self.stream_loader = stream_loader
-        self.payload_combo = QtWidgets.QComboBox()
 
-        for sid, s in self.stream_loader.list_streams().items():
-            self.payload_combo.addItem(s["name"], sid)
-        remembered = ui_state.stream() if ui_state else None
-        if remembered is not None and self.payload_combo.findData(remembered) >= 0:
-            self.payload_combo.setCurrentIndex(self.payload_combo.findData(remembered))
+        self.conn_panel = ConnectionPanel()
+        self.stream_tabs = StreamTabs()
+        self.time_panel = TimeConfigPanel()
+        self.sig_panel = SignalListPanel()
+        self.trigger_panel = TriggerPanel(self)
 
-        self.payload_combo.currentIndexChanged.connect(self._on_stream_selection)
-        l_stream.addWidget(self.payload_combo)
+        self.controls_stack = QtWidgets.QStackedWidget()
+        self.empty_controls = QtWidgets.QLabel(NO_CONTROLS)
+        self.empty_controls.setWordWrap(True)
+        self.empty_controls.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
+        self.empty_controls.setContentsMargins(12, 12, 12, 12)
+        self.empty_controls.setStyleSheet("color: #9aa4b2;")
+        self.controls_stack.addWidget(self.empty_controls)
+        # Owned here until the main window places them (never left to garbage collection).
+        for widget in (
+            self.conn_panel,
+            self.stream_tabs,
+            self.time_panel,
+            self.sig_panel,
+            self.controls_stack,
+            self.trigger_panel.setup,
+            self.trigger_panel.results,
+        ):
+            widget.setParent(self)
 
-        # 3. Dynamic Stacked Panel (Context-Aware UI)
-        self.dynamic_stack = QtWidgets.QStackedWidget()
-
-        self.empty_panel = QtWidgets.QWidget()
-        self.dynamic_stack.addWidget(self.empty_panel)
         # Generated from streams.json `panels`, by key (R5.2).
         self.control_panels: dict[str, CommandPanel] = {}
-        self.control_sections: dict[str, CollapsableSection] = {}
         self._build_control_panels()
 
-        # 4. Fixed Bottom Panels
-        self.time_panel = TimeConfigPanel()
-        self.trigger_panel = TriggerPanel()
-        self.trigger_section = CollapsableSection("Trigger / Step Response", self.trigger_panel)
-        self.sig_panel = SignalListPanel()
+        for sid, s in self.stream_loader.list_streams().items():
+            self.stream_tabs.addItem(s["name"], sid)
+        remembered = ui_state.stream() if ui_state else None
+        if remembered is not None and self.stream_tabs.findData(remembered) >= 0:
+            self.stream_tabs.setCurrentIndex(self.stream_tabs.findData(remembered))
+        self.stream_tabs.currentChanged.connect(self._on_stream_selection)
 
-        # 5. Assemble Main Layout
-        layout.addWidget(self.conn_panel)
-        layout.addWidget(self.grp_stream)
-
-        # Insert the dynamic stack here
-        layout.addWidget(self.dynamic_stack)
-
-        layout.addWidget(self.time_panel)
-        layout.addWidget(self.trigger_section)
-        layout.addWidget(self.sig_panel, 1)
-
-        # 6. Wiring & Init
         self._connect_signals()
-
-        if self.payload_combo.count() > 0:
-            self._on_stream_selection(self.payload_combo.currentIndex())
+        if self.stream_tabs.count() > 0:
+            self._on_stream_selection(self.stream_tabs.currentIndex())
 
     def _connect_signals(self) -> None:
-        """Wires internal signals. All panels are wired even if hidden."""
-        # Global
         self.conn_panel.connection_requested.connect(self.connection_requested)
         self.conn_panel.pause_requested.connect(self.pause_requested)
         self.time_panel.period_changed.connect(self.period_changed)
         self.time_panel.samples_changed.connect(self.samples_changed)
         self.sig_panel.signal_visibility_changed.connect(self.signal_visibility_changed)
         self.sig_panel.signal_lane_changed.connect(self.signal_lane_changed)
-
         # Remembered between runs (R5.3)
         self.sig_panel.signal_visibility_changed.connect(self._remember_visibility)
         self.sig_panel.signal_lane_changed.connect(self._remember_lane)
 
+    # --- control panels ---
+
     def _build_control_panels(self) -> None:
-        """(Re)creates one panel per valid streams.json panel, with remembered values."""
-        for key, section in self.control_sections.items():
-            self.dynamic_stack.removeWidget(section)
-            # A collapsed section's content has no parent: delete both explicitly (on
-            # this thread), never leave them to garbage collection.
-            self.control_panels[key].deleteLater()
-            section.deleteLater()
+        """(Re)creates one panel per valid streams.json panel, with remembered state."""
+        for panel in self.control_panels.values():
+            self.controls_stack.removeWidget(panel)
+            panel.deleteLater()  # on this thread, never left to garbage collection
         self.control_panels.clear()
-        self.control_sections.clear()
         for key, definition in self.stream_loader.panels.items():
             panel = CommandPanel(definition)
             if self.ui_state is not None:
                 panel.set_values(self.ui_state.panel_values(key))
+                panel.reset_links()
+                panel.set_presets(self.ui_state.presets(key))
+                panel.set_live(self.ui_state.panel_live(key))
             panel.values_changed.connect(lambda k=key: self._remember_panel_values(k))
+            panel.preset_saved.connect(
+                lambda name, values, k=key: self._save_preset(k, name, values)
+            )
+            panel.preset_deleted.connect(lambda name, k=key: self._delete_preset(k, name))
+            panel.live_changed.connect(lambda live, k=key: self._remember_live(k, live))
             panel.send_requested.connect(self.send_requested)
-            section = CollapsableSection(definition.title, panel)
-            self.dynamic_stack.addWidget(section)
+            self.controls_stack.addWidget(panel)
             self.control_panels[key] = panel
-            self.control_sections[key] = section
+
+    def current_control_panel(self) -> CommandPanel | None:
+        panel = self.stream_loader.panel_for(self.current_stream_key())
+        return self.control_panels.get(panel.key) if panel is not None else None
 
     def _remember_panel_values(self, key: str) -> None:
         if self.ui_state is not None and key in self.control_panels:
             self.ui_state.set_panel_values(key, self.control_panels[key].values())
+
+    def _save_preset(self, key: str, name: str, values: dict[str, dict[str, float]]) -> None:
+        if self.ui_state is not None:
+            self.ui_state.save_preset(key, name, values)
+
+    def _delete_preset(self, key: str, name: str) -> None:
+        if self.ui_state is not None:
+            self.ui_state.delete_preset(key, name)
+
+    def _remember_live(self, key: str, live: bool) -> None:
+        if self.ui_state is not None:
+            self.ui_state.set_panel_live(key, live)
+
+    # --- view overrides ---
 
     def _remember_visibility(self, sid: str, visible: bool) -> None:
         key = self.current_stream_key()
@@ -148,11 +168,11 @@ class MainControlPanel(QtWidgets.QWidget):
         if self.ui_state is not None and key is not None:
             self.ui_state.set_lane(key, sid, lane, label)
 
+    # --- stream selection ---
+
     def _on_stream_selection(self, idx: int) -> None:
-        """
-        Handles switching the data config AND the visible control UI.
-        """
-        sid = self.payload_combo.itemData(idx)
+        """Shows another stream: its signals, its control panel, its trigger choices."""
+        sid = self.stream_tabs.itemData(idx)
         if sid is None:
             return
 
@@ -160,24 +180,24 @@ class MainControlPanel(QtWidgets.QWidget):
         if self.ui_state is not None:
             self.ui_state.set_stream(sid)
 
-        # The stream's control panel, if it names one; nothing otherwise.
-        panel = self.stream_loader.panel_for(sid)
-        if panel is None:
-            self.dynamic_stack.setVisible(False)
-        else:
-            self.dynamic_stack.setCurrentWidget(self.control_sections[panel.key])
-            self.dynamic_stack.setVisible(True)
+        panel = self.current_control_panel()
+        self.controls_stack.setCurrentWidget(panel if panel is not None else self.empty_controls)
+        self.controls_changed.emit(panel.panel.title if panel is not None else "")
 
-        # Update Signal List & Notify Main Window
         self.sig_panel.rebuild_list(cfg)
         self.trigger_panel.set_signals(cfg)
         self.stream_changed.emit(cfg)
+
+    def select_stream(self, key: str) -> None:
+        index = self.stream_tabs.findData(key)
+        if index >= 0:
+            self.stream_tabs.setCurrentIndex(index)
 
     def get_initial_sample_count(self) -> int:
         return self.time_panel.get_samples()
 
     def current_stream_key(self) -> str | None:
-        key = self.payload_combo.currentData()
+        key = self.stream_tabs.currentData()
         return key if isinstance(key, str) else None
 
     def get_current_stream_config(self) -> StreamConfig | None:
@@ -196,26 +216,26 @@ class MainControlPanel(QtWidgets.QWidget):
         sid = self.current_stream_key()
         if self.ui_state is not None and sid is not None:
             self.ui_state.reset_view(sid)
-            self._on_stream_selection(self.payload_combo.currentIndex())
+            self._on_stream_selection(self.stream_tabs.currentIndex())
 
     def reload_streams(self) -> None:
         """
-        Reloads configuration from disk and refreshes the stream list, keeping the current
+        Reloads configuration from disk and refreshes the streams, keeping the current
         stream selected if it still exists. The selection is always re-applied, so the plot
         and engine pick up edits to the current stream.
         """
-        current = self.payload_combo.currentData()
+        current = self.stream_tabs.currentData()
         self.stream_loader.load()
         self._build_control_panels()
 
-        self.payload_combo.blockSignals(True)
-        self.payload_combo.clear()
+        self.stream_tabs.blockSignals(True)
+        self.stream_tabs.clear()
         for sid, s in self.stream_loader.list_streams().items():
-            self.payload_combo.addItem(s["name"], sid)
-        idx = max(self.payload_combo.findData(current), 0)
-        if self.payload_combo.count() > 0:
-            self.payload_combo.setCurrentIndex(idx)
-        self.payload_combo.blockSignals(False)
+            self.stream_tabs.addItem(s["name"], sid)
+        idx = max(self.stream_tabs.findData(current), 0)
+        if self.stream_tabs.count() > 0:
+            self.stream_tabs.setCurrentIndex(idx)
+        self.stream_tabs.blockSignals(False)
 
-        if self.payload_combo.count() > 0:
+        if self.stream_tabs.count() > 0:
             self._on_stream_selection(idx)

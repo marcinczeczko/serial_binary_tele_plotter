@@ -4,6 +4,7 @@ import threading
 import time
 
 import numpy as np
+import pytest
 
 from core.acquisition.storage import SampleStore
 from core.acquisition.timebase import TimeBaseConfig
@@ -150,3 +151,16 @@ def test_concurrent_writer_never_produces_torn_snapshots() -> None:
     finally:
         stop.set()
         thread.join()
+
+
+def test_latest_time_is_the_newest_sample_in_seconds():
+    """Command markers and stream activity (R6.3) read where a stream's time is now."""
+    store = SampleStore(4)
+    store.configure({"v": {"field": "v"}}, TimeBaseConfig(scale_s=0.01))
+    assert store.latest_time_s() is None
+    store.append({"loop_cntr": i, "v": 1.0} for i in range(10, 16))  # the ring keeps 4
+    assert store.latest_time_s() == pytest.approx(0.15)  # counter 15, like snapshot().time
+    store.set_time_scale(0.02)
+    assert store.latest_time_s() == pytest.approx(0.30)
+    store.clear()
+    assert store.latest_time_s() is None

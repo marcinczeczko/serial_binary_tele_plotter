@@ -1,7 +1,8 @@
 """
 Time Configuration Panel Module.
 
-`TimeConfigPanel` controls:
+`TimeConfigPanel` controls (shown from the "Period" and "History" buttons next to the
+stream tabs, R6.1):
 1. **Period** of the stream shown: the time between two of its frames. It comes from the
    stream's `time` block in streams.json (R2.5). Editing it here overrides it for this
    session only. Set it permanently in the Configuration tab.
@@ -15,7 +16,7 @@ from PyQt6 import QtCore, QtWidgets
 _OVERRIDE_STYLE = "QDoubleSpinBox { color: #FFB74D; }"
 
 
-class TimeConfigPanel(QtWidgets.QGroupBox):
+class TimeConfigPanel(QtWidgets.QWidget):
     """
     Attributes:
         period_changed (pyqtSignal): the user edited the shown stream's period (ms).
@@ -26,9 +27,10 @@ class TimeConfigPanel(QtWidgets.QGroupBox):
     samples_changed = QtCore.pyqtSignal(int)
 
     def __init__(self) -> None:
-        super().__init__("Time Window")
+        super().__init__()
 
         layout = QtWidgets.QGridLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
 
         self._configured_ms: float | None = None
