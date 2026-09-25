@@ -63,8 +63,9 @@ core/types.py           TypedDict config shapes, PlotMode, EngineState
 core/config/            document (load -> migrate -> validate -> save, StreamConfigLoader), streams (stream
                         validation), controls (CommandDef/PanelDef parsing), migrate (schema versions),
                         draft (StreamDraft: the editor's model), cstruct (C struct in and out)
-core/protocol/          wire format: constants, crc (CRC-8), frame_parser (sync/CRC, all IDs), record_decoder (numpy dtype),
-                        router (multi-stream dispatch), handler (single-stream API), commands (encode/decode), stats
+core/protocol/          wire format: link (LinkDecoder: bytes -> records per stream; the engine's only view of the
+                        format, ADR-0010), constants, crc (CRC-8), frame_parser (sync/CRC, all IDs), record_decoder
+                        (numpy dtype), router (multi-stream dispatch), handler (single-stream API), commands, stats
 core/transport/         Transport protocol, SerialTransport, SimTransport (the VIRTUAL port), ReplayTransport
                         (plays an .sbtp file), ReaderThread (no Qt)
 core/recording/         .sbtp raw recordings (ADR-0006): RecordingWriter/Reader; no Qt
@@ -115,7 +116,8 @@ hold these bytes verbatim (ADR-0006), so a wire change also affects replaying ol
   mirrors `state_changed`. Every configured stream is decoded all the time, so
   `select_stream(key)` is a view choice: it only retargets the simulator (`SimTransport`). The GUI
   re-looks-up stores after `streams_configured`.
-  Bytes are read and parsed on a `ReaderThread`; parser and storage state are shared with
+  Bytes are read and decoded (`engine.link`, a `LinkDecoder`) on a `ReaderThread`; decoder
+  and storage state are shared with
   the engine thread only under `TelemetryEngine._data_lock`. Keep those sections short.
   Reader failures reach the engine thread through a queued signal, never a direct call.
 - **Bulk data doesn't belong in the Qt event queue.** The reader thread appends to the

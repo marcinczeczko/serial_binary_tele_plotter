@@ -3,8 +3,8 @@ Acquisition pipeline micro-benchmark.
 
 Measures the Qt-free hot paths so performance work can be compared before/after:
   1. parse + store throughput at a typical read size, via the engine's vectorised path
-     (FrameParser -> StreamRouter -> SampleStore.append_records) and via the per-frame
-     dict path (ProtocolHandler -> SampleStore.append) for comparison
+     (the binary LinkDecoder: FrameParser -> StreamRouter, then SampleStore.append_records)
+     and via the per-frame dict path (ProtocolHandler -> SampleStore.append) for comparison
   2. decode ratio for large reads (regression guard for review finding C1)
   3. CRC-8 cost per frame
   4. GUI pull cost for several buffer sizes, all signals or only the visible ones:
@@ -33,9 +33,8 @@ from core.acquisition.timebase import time_base_config  # noqa: E402
 from core.config import StreamConfigLoader  # noqa: E402
 from core.protocol.constants import MAGIC_0, MAGIC_1, STRUCT_TYPE_MAP  # noqa: E402
 from core.protocol.crc import calculate_crc8  # noqa: E402
-from core.protocol.frame_parser import FrameParser  # noqa: E402
 from core.protocol.handler import ProtocolHandler  # noqa: E402
-from core.protocol.router import StreamRouter  # noqa: E402
+from core.protocol.link import make_link_decoder  # noqa: E402
 from core.types import StreamConfig  # noqa: E402
 
 N_FRAMES = 20_000
@@ -75,16 +74,15 @@ def best_of(
 
 
 def parse_and_store(cfg: StreamConfig, blob: bytes, chunk: int) -> tuple[int, float]:
-    """The engine's path: FrameParser -> StreamRouter -> append_records (R2.2/R2.3)."""
-    parser = FrameParser()
-    router = StreamRouter(parser.stats)
-    router.configure({"s": cfg})
+    """The engine's path: the binary LinkDecoder (R8.1) -> append_records (R2.2/R2.3)."""
+    link = make_link_decoder("binary")
+    link.configure({"s": cfg})
     store = SampleStore(2_000)
     store.configure(cfg.get("signals", {}), time_base_config(cfg))
     decoded = 0
     t0 = time.perf_counter()
     for off in range(0, len(blob), chunk):
-        batches = router.route(parser.feed(blob[off : off + chunk]))
+        batches = link.feed(blob[off : off + chunk])
         if "s" in batches:
             decoded += store.append_records(batches["s"])
     return decoded, time.perf_counter() - t0

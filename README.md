@@ -506,8 +506,9 @@ serial_binary_tele_plotter/
 │   ├── config/                # streams.json: document (load, migrate, validate, save),
 │   │                          #   streams, controls (commands, panels), schema migrations,
 │   │                          #   the editor's StreamDraft, C structs in and out
-│   ├── protocol/              # Wire format: CRC-8, FrameParser, RecordDecoder (numpy),
-│   │                          #   StreamRouter (multi-stream), stats, commands (encoding)
+│   ├── protocol/              # Wire format: link (the LinkDecoder slot), CRC-8, FrameParser,
+│   │                          #   RecordDecoder (numpy), StreamRouter (multi-stream), stats,
+│   │                          #   commands (encoding)
 │   ├── transport/             # Transport interface, SerialTransport, SimTransport,
 │   │                          #   ReplayTransport, ReaderThread
 │   ├── simulation/            # Frame synthesis from `sim` config, PID motor model
@@ -539,8 +540,9 @@ serial_binary_tele_plotter/
 - **Threading:** a dedicated reader thread does blocking serial reads and parses them, so
   the OS buffer is drained however busy the GUI is. `TelemetryEngine` runs in its own
   `QThread`. The GUI talks to it only through Qt signals and queued calls.
-- **Data flow:** `SerialTransport`, `SimTransport` or `ReplayTransport` → `ReaderThread` → `FrameParser` (sync, CRC, all IDs) →
-  `StreamRouter` (numpy batch decode per layout) → one `SampleStore` per stream (a versioned
+- **Data flow:** `SerialTransport`, `SimTransport` or `ReplayTransport` → `ReaderThread` → a
+  `LinkDecoder` (binary frames: `FrameParser` for sync, CRC and all IDs, then `StreamRouter`
+  for a numpy batch decode per layout) → one `SampleStore` per stream (a versioned
   ring buffer shared between threads). `LiveFeed` then pulls snapshots of the
   visible signals into `TelemetryPlot` at up to 30 FPS, only when there's new data, and
   backs off when frames are expensive. See `docs/adr/0002-target-acquisition-pipeline.md`.

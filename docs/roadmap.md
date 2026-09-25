@@ -314,6 +314,44 @@ stream couldn't be started from the firmware's struct.
   *Done when:* every bundled stream round-trips through it.
   *Done.*
 
+## Phase 8: device profiles and text-line streams (ADR-0010)
+
+Added after the CSV spike (2026-09-25): many boards print text lines (CSV or any other
+layout) instead of binary frames. Binary or text is a property of the device, so the
+choice lives in a named **device profile** picked before connecting, and each text stream
+is a **line pattern** inferred from pasted console output.
+
+- [x] **R8.1 Decoder slot**: the receive path's byte-to-records step becomes a
+  `LinkDecoder` interface. Today's `FrameParser` + `StreamRouter` sit behind it as
+  `BinaryFrameDecoder`; the engine only knows the interface.
+  *Done when:* no behaviour change (every test passes unchanged in what it checks), and
+  `bench_pipeline` shows no regression against main in interleaved runs.
+  *Done.*
+- [ ] **R8.2 Device profiles**: a top-level `profile` block (name, format, default baud)
+  in a schema 3 file, one file per profile in a profiles folder, a profile picker first
+  in the dashboard toolbar (switch only while disconnected), New profile (name, format,
+  baud, empty or a copy), and baud remembered per profile. A schema 2 file loads as a
+  binary profile named after the file.
+  *Done when:* two profiles can be switched between, each keeps its own streams, port
+  and baud, and a recording replays with its profile's format.
+- [ ] **R8.3 Text-line decoder**: `TextLineDecoder` splits lines (bounded length) and
+  matches each against the streams' patterns (`IMU,{ms},{ax}`: fixed text plus number
+  slots; `nan`, `inf` and exponents accepted; an empty slot is a gap). Lines matching no
+  pattern, and overlong lines, are counted in the link statistics. Validation for text
+  profiles (a pattern per stream, its slots are the fields, `loop_cntr` optional: without
+  a counter the X axis is the line number). VIRTUAL prints lines for text profiles.
+  *Done when:* a text profile plots from VIRTUAL and from a recording, and every
+  dropped line is counted.
+- [ ] **R8.4 Editor for text profiles**: the profile row (name, format, baud), a
+  **Pattern** field and the Line view (fixed text and value blocks) instead of ID and
+  byte order, "From console output…" (paste raw lines or listen for a few seconds;
+  infers patterns, names values from the text next to them or `v1`…, suggests a rising
+  integer as the X axis, ignores lines seen once), and "Copy as printf".
+  *Done when:* pasting mixed console output creates one stream per repeated line layout
+  that decodes those lines.
+- [ ] **R8.5 Text commands** (a later phase): host-to-board commands as text templates
+  (`"PID {kp} {ki}\n"`) for text profiles.
+
 ---
 
 ## Suggested order and sizing
@@ -330,3 +368,4 @@ stream couldn't be started from the firmware's struct.
 | 8 | R5.* | M | Can run in parallel with R3/R4 once R1.5 exists |
 | 9 | R6.* | M | UX, once the config model (R5) defines the panels |
 | 10 | R7.* | M | The editor, once the dashboard (R6) sets the look |
+| 11 | R8.1 → R8.4 | M | Decoder slot first (no behaviour change), then profiles, then text |

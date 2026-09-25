@@ -100,7 +100,7 @@ def test_virtual_port_streams_simulated_bytes_through_the_parser(pyqt_stub):
         imu = engine.stores.get("imu")
         assert wait_for(lambda: len(imu) >= 5)
         assert len(engine.stores.get("a")) == 0  # only the shown stream is simulated
-        stats = engine.parser.stats
+        stats = engine.link.stats
         assert stats.bytes_rx > 0 and stats.frames_decoded >= 5  # real frames, parsed
         assert stats.errors == 0 and stats.counter_gaps == 0
 
@@ -188,7 +188,7 @@ def test_serial_data_is_read_on_reader_thread_and_stored(pyqt_stub):
         assert wait_for(lambda: store.total_stored == 200)
         snap = store.snapshot()
         assert list(snap.signals["v"][:3]) == [7, 7, 7]
-        assert engine.parser.stats.bytes_rx == len(blob)
+        assert engine.link.stats.bytes_rx == len(blob)
     finally:
         engine.stop_working()
     assert transport.closed
@@ -213,7 +213,7 @@ def test_every_configured_stream_is_decoded_at_once(pyqt_stub):
         assert list(a.signals["v"]) == [5] * 30
         assert list(view.signals["counter"]) == list(range(30))  # same frames, other signals
         assert list(b.signals["w"]) == [-i for i in range(30)]
-        stats = engine.parser.stats
+        stats = engine.link.stats
         assert stats.unknown_id_frames == 30
         assert stats.frames_decoded == 60  # A and "A view" share one decode
         assert stats.counter_gaps == 0
