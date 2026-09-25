@@ -196,7 +196,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.configurator.config_saved.connect(self._reload_configuration)
         self.config_window = QtWidgets.QDialog(self)
         self.config_window.setWindowTitle(f"Configuration: {self.stream_loader.path.name}")
-        self.config_window.resize(1100, 750)
+        self.config_window.resize(1300, 860)
         config_layout = QtWidgets.QVBoxLayout(self.config_window)
         config_layout.setContentsMargins(0, 0, 0, 0)
         config_layout.addWidget(self.configurator)

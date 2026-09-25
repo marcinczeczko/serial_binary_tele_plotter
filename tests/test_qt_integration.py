@@ -270,8 +270,8 @@ def config_copy(tmp_path: Path, monkeypatch: Any, message_boxes: Any) -> Path:
 
 
 def _select(tab: Any, key: str) -> None:
-    (item,) = tab.stream_list.findItems(key, QtCore.Qt.MatchFlag.MatchExactly)
-    tab.stream_list.setCurrentItem(item)
+    tab.select_stream(key)
+    assert tab.current_key() == key
 
 
 def _tab(qtbot: Any, path: Path) -> Any:
@@ -286,9 +286,10 @@ def _tab(qtbot: Any, path: Path) -> Any:
 def test_config_save_without_edits_is_byte_identical(qtbot: Any, config_copy: Path) -> None:
     original = config_copy.read_bytes()
     tab = _tab(qtbot, config_copy)
-    for row in range(tab.stream_list.count()):  # visit every stream: commits on each switch
-        tab.stream_list.setCurrentRow(row)
-    tab.stream_list.setCurrentRow(0)
+    for index in range(tab.stream_tabs.count()):  # visit every stream
+        tab.stream_tabs.setCurrentIndex(index)
+    tab.stream_tabs.setCurrentIndex(0)
+    assert not tab.is_dirty()
 
     tab.save_to_file()
 
@@ -298,52 +299,56 @@ def test_config_save_without_edits_is_byte_identical(qtbot: Any, config_copy: Pa
 
 def test_config_edits_survive_switching_streams(qtbot: Any, config_copy: Path) -> None:
     tab = _tab(qtbot, config_copy)
-    tab.stream_list.setCurrentRow(0)
+    tab.stream_tabs.setCurrentIndex(0)
     tab.editor.name_edit.setText("Renamed PID")
-    tab.stream_list.setCurrentRow(1)
-    tab.stream_list.setCurrentRow(0)
+    tab.editor.name_edit.textEdited.emit("Renamed PID")  # still being typed: applied on the switch
+    tab.stream_tabs.setCurrentIndex(1)
+    tab.stream_tabs.setCurrentIndex(0)
     assert tab.editor.name_edit.text() == "Renamed PID"
+    assert tab.stream_tabs.tabText(0) == "Renamed PID · 0x01"
+    assert tab.is_dirty()
 
     tab.save_to_file()
 
     saved = json.loads(config_copy.read_text(encoding="utf-8"))
     assert saved["streams"]["pid"]["name"] == "Renamed PID"
+    assert not tab.is_dirty()
 
 
-def test_config_signals_sharing_a_field_get_distinct_keys(qtbot: Any, config_copy: Path) -> None:
+def test_config_plotting_a_field_adds_a_signal_named_after_it(
+    qtbot: Any, config_copy: Path
+) -> None:
     tab = _tab(qtbot, config_copy)
     _select(tab, "imu_6axis")
     editor = tab.editor
-    editor.add_signal_row(
-        {
-            "label": "Acc X copy",
-            "field": "acc_x",
-            "color": "#fff",
-            "visible": True,
-            "style": "solid",
-            "width": 1,
-        }
-    )
+    editor.select("gyro_y")
+    assert editor.selected_signal is None and editor.plot_btn.text() == "Plot this field"
+
+    editor.plot_btn.click()
 
     _, data = editor.get_data()
+    assert data["signals"]["gyro_y"]["field"] == "gyro_y"
+    assert data["signals"]["gyro_y"]["label"] == "gyro_y"
+    assert editor.selected_signal == "gyro_y" and editor.label_edit.text() == "gyro_y"
 
-    assert "acc_x" in data["signals"]
-    assert data["signals"]["acc_x_2"]["field"] == "acc_x"
-    assert data["signals"]["acc_x_2"]["label"] == "Acc X copy"
 
-
-def test_config_field_choices_follow_frame_edits(qtbot: Any, config_copy: Path) -> None:
-    from PyQt6 import QtWidgets
-
+def test_config_renaming_a_field_follows_its_signal(qtbot: Any, config_copy: Path) -> None:
     tab = _tab(qtbot, config_copy)
+    _select(tab, "imu_6axis")
     editor = tab.editor
-    editor.add_frame_row("brand_new", "f32")
-    root = editor.sig_tree.invisibleRootItem()
-    assert root is not None and root.childCount() > 0
-    combo = editor.sig_tree.itemWidget(root.child(0), 1)
-    assert isinstance(combo, QtWidgets.QComboBox)
-    choices = [combo.itemText(i) for i in range(combo.count())]
-    assert "brand_new" in choices
+    editor.select("acc_x")
+    editor.field_name_edit.setText("accel_x")
+    editor.field_name_edit.editingFinished.emit()
+
+    _, data = editor.get_data()
+    assert data["signals"]["acc_x"]["field"] == "accel_x"
+    names = [editor.time_field_combo.itemText(i) for i in range(editor.time_field_combo.count())]
+    assert "accel_x" in names and "acc_x" not in names
+
+    editor.field_name_edit.setText("acc_y")  # taken: refused, and said why
+    editor.field_name_edit.editingFinished.emit()
+    assert editor.field_name_edit.text() == "accel_x"
+    assert "already a field 'acc_y'" in tab.status_lbl.text()
 
 
 def test_config_save_refuses_invalid_document(
@@ -351,25 +356,17 @@ def test_config_save_refuses_invalid_document(
 ) -> None:
     original = config_copy.read_bytes()
     tab = _tab(qtbot, config_copy)
-    tab.stream_list.setCurrentRow(0)
-    editor = tab.editor
-    editor.add_signal_row(
-        {
-            "label": "Ghost",
-            "field": "does_not_exist",
-            "color": "#fff",
-            "visible": True,
-            "style": "solid",
-            "width": 1,
-        }
-    )
+    _select(tab, "imu_6axis")
+    tab.editor.select("loop_cntr")
+    tab.editor.remove_field_btn.click()
+    assert "loop_cntr" in tab.status_lbl.text()  # the problem shows as you edit
 
     tab.save_to_file()
 
     assert config_copy.read_bytes() == original
     ((kind, text),) = message_boxes
     assert kind == "critical"
-    assert "'does_not_exist'" in text
+    assert "'loop_cntr'" in text
 
 
 def test_main_window_keeps_selected_stream_after_config_save(qtbot: Any, config_copy: Path) -> None:
@@ -583,14 +580,23 @@ def test_stream_editor_time_base_round_trip_and_edits(qtbot: Any) -> None:
     assert "time" not in editor.get_data()[1]  # defaults don't add a block
     fields = [editor.time_field_combo.itemText(i) for i in range(editor.time_field_combo.count())]
     assert fields == [f["name"] for f in bare["frame"]["fields"]]
+    assert editor.time_scale_edit.text() == "5 ms"
 
     editor.time_scale_edit.setText("1e-06")
+    editor.time_scale_edit.editingFinished.emit()
+    assert editor.time_scale_edit.text() == "1 µs"
     editor.time_step_edit.setText("5000")
+    editor.time_step_edit.textEdited.emit("5000")  # typed, not left yet: kept by the redraw
     editor.time_field_combo.setCurrentText("motor")
+    editor.time_field_combo.activated.emit(editor.time_field_combo.currentIndex())
     assert editor.get_data()[1]["time"] == {"field": "motor", "scale_s": 1e-06, "step": 5000}
 
+    editor.time_scale_edit.setText("2.5 ms")
+    editor.time_scale_edit.editingFinished.emit()
+    assert editor.get_data()[1]["time"]["scale_s"] == 0.0025
+
     with_extra = {**bare, "time": {"step": 1, "note": "kept", "scale_s": 0.005}}
-    editor.load_data("imu", copy.deepcopy(with_extra))  # type: ignore[arg-type]
+    editor.load_data("imu", copy.deepcopy(with_extra))
     assert editor.get_data()[1]["time"] == with_extra["time"]  # same keys, same order
 
 

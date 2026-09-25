@@ -220,13 +220,14 @@ def test_config_tab_saves_a_schema_1_file_as_schema_2(
     assert "panel_type 'pid' -> controls" in win.lbl_status.toolTip()
 
     tab = win.configurator
-    tab.stream_list.setCurrentRow(0)  # pid
+    tab.select_stream("pid")
     combo = tab.editor.panel_combo
     assert [combo.itemText(i) for i in range(combo.count())] == ["(none)", "diffbot_pid"]
     assert combo.currentData() == "diffbot_pid"
-    tab.stream_list.setCurrentRow(1)  # pid_ff: no controls from now on
+    tab.select_stream("pid_ff")  # no controls from now on
     combo.setCurrentIndex(combo.findData(None))
-    tab.stream_list.setCurrentRow(0)
+    combo.activated.emit(combo.currentIndex())
+    tab.select_stream("pid")
     tab.save_to_file()
 
     saved = json.loads(config.read_text(encoding="utf-8"))

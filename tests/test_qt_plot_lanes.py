@@ -218,7 +218,7 @@ def test_signal_panel_groups_by_lane_and_moves_signals(qtbot: Any) -> None:
     assert panel.value_text("err") == ""  # hidden signals show no value
 
 
-def test_stream_editor_lane_column_round_trips(qtbot: Any) -> None:
+def test_stream_editor_lanes_round_trip_and_change(qtbot: Any) -> None:
     import copy
 
     from ui.config.stream_editor import StreamEditor
@@ -234,20 +234,24 @@ def test_stream_editor_lane_column_round_trips(qtbot: Any) -> None:
             "b": {"label": "B", "field": "loop_cntr", "color": "#fff"},
         },
     }
-    editor.load_data("s", copy.deepcopy(stream))  # type: ignore[arg-type]
+    editor.load_data("s", copy.deepcopy(stream))
     _, data = editor.get_data()
-    assert data["signals"]["a"]["group"] == "big"
-    assert "group" not in data["signals"]["b"]
+    assert data == stream
 
-    root = editor.sig_tree.invisibleRootItem()
-    assert root is not None
-    lane_a = editor.sig_tree.itemWidget(root.child(0), 6)
-    lane_b = editor.sig_tree.itemWidget(root.child(1), 6)
-    lane_a.setCurrentText("")  # type: ignore[union-attr]
-    lane_b.setCurrentText("fresh")  # type: ignore[union-attr]
+    editor.select("loop_cntr", "a")
+    combo = editor.lane_combo
+    combo.setCurrentIndex(combo.findData(""))  # the default lane
+    combo.activated.emit(combo.currentIndex())
+    editor.select("loop_cntr", "b")
+    combo.setCurrentText("fresh")  # a new lane, by name
+    line_edit = combo.lineEdit()
+    assert line_edit is not None
+    line_edit.editingFinished.emit()
+
     _, data = editor.get_data()
     assert "group" not in data["signals"]["a"]
     assert data["signals"]["b"]["group"] == "fresh"
+    assert data["groups"]["fresh"]["label"] == "fresh"
 
 
 def test_live_feed_draws_the_overview_and_reads_exact_values(qtbot: Any) -> None:

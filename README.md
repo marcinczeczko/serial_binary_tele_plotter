@@ -27,8 +27,9 @@ Primary use cases:
   decoded at the same time**; the selector only chooses which one to show, so switching
   keeps each stream's history and never interrupts acquisition. Streams may share a
   `stream_id`: they're told apart by payload size, and identical layouts are decoded once.
-- Built-in configuration editor (File → Edit streams.json) — edit frame fields and signal
-  definitions in-app, save to `streams.json` without restarting.
+- Built-in configuration editor (File → Edit streams.json), in the scope's look: the frame
+  drawn byte by byte, its signals by lane, and a form per field. **Paste a C struct** to start
+  a stream (or update one) and **copy any stream as a C struct** for the firmware.
 - **Control panels defined in `streams.json`**: parameters (spin boxes, check boxes) and
   buttons that send command packets to the MCU over the same serial connection. The bundled
   PID tuning panel (two motors, signed values) is one such entry, and any other command can
@@ -149,8 +150,8 @@ on the right. Docks can be closed (View menu), moved, or floated; the layout is 
      lane), or right-click it → **Move to lane** / **New lane**.
    - Visibility and lane moves are remembered per stream (and per config file) between
      runs, on top of `streams.json`. **View → Reset view to streams.json** forgets them for
-     the shown stream. To change the file itself, use the Visible and Lane columns of the
-     stream editor.
+     the shown stream. To change the file itself, use the stream editor (a signal's check
+     box and lane).
    - Live, time follows the newest data and the mouse zooms or pans a lane's Y. That lane
      then holds its range. Right-click a lane → **Lane Y range** to choose Auto (fit the
      data in view), Auto-grow (only widens) or Manual, and whether zero is always included.
@@ -161,7 +162,7 @@ on the right. Docks can be closed (View menu), moved, or floated; the layout is 
    **Period** of the shown stream (the time between two frames, from its `time` block) and
    the **Samples** of history every stream keeps. Changing the period re-times that
    stream's whole history for this session; the button turns orange while it differs from
-   the file. Set it in the stream editor (Time Base) to keep it.
+   the file. Set it in the stream editor (X axis × time per tick) to keep it.
 7. **Controls** dock: the shown stream's control panel (e.g. PID Tuning for the `pid`
    streams), generated from `streams.json` `panels`. Its buttons send commands while
    connected; the status bar says what was sent, or why not.
@@ -183,10 +184,32 @@ on the right. Docks can be closed (View menu), moved, or floated; the layout is 
      previous one (`kp 0.1 → 0.25`); refused sends are listed in red. The number is also a
      dashed marker on the plot at the stream time it was sent. **Send again** (or a double
      click) re-sends a row's exact packet.
-8. **File → Edit streams.json…** (Ctrl+,) opens the stream editor: streams, frame fields,
-   signal definitions and each stream's **Control Panel**. Saving updates `streams.json`
-   (the previous file is kept as `streams.json.bak`). Commands and panels are edited in the
-   file itself.
+8. **File → Edit streams.json…** (Ctrl+,) opens the stream editor, laid out like the scope:
+   - Streams are tabs. One row holds the stream's key, name, ID, byte order, X axis and time
+     per tick (`5 ms`, `1 µs`), step and **Controls** panel.
+   - **Frame**: the payload as the device sends it, 32 bytes per row, each field in its
+     signal's color (grey: not plotted). Click a field to select it; right-click to plot
+     it, add a field after it, move it or remove it.
+   - Below, the signals by lane, as in the Signals dock, and **Not plotted** for the fields
+     without a signal. Drag a field onto a lane to plot it there, a signal onto another lane
+     to move it, or onto Not plotted to remove it. The check box is "shown when the stream
+     opens". Right-click a lane to rename it.
+   - The form on the right edits the selected field (name, type) and its signal (label,
+     lane: pick one or type a new name, color, line, shown).
+   - **From C struct…** reads a pasted struct (or just its member lines, or a `.h` file)
+     and draws its frame as you type: `uint8_t`…`int64_t`, `float`, `double`, `bool`,
+     `char`/`short`/`int`, several names per line, arrays (`ticks[2]` → `ticks_0`,
+     `ticks_1`), `__attribute__((packed))` and a `#define` with `ID` in its name. Without
+     `packed`, the compiler's padding becomes `_pad` fields. What it can't read (`long`,
+     pointers, bit-fields, nested structs) is listed, not guessed. It creates a new stream
+     (every field plotted, labelled with its name), or **replaces the fields** of the
+     shown stream: fields that keep their name keep their label, color and lane.
+   - **Copy as C struct** puts the stream on the clipboard as a packed struct with its ID
+     and a `_Static_assert` on its size.
+   - Save (Ctrl+S) is orange while there are unsaved changes; the status line shows the
+     stream's size and its first problem as you edit. Saving updates `streams.json` (the
+     previous file is kept as `streams.json.bak`); a file with errors isn't saved.
+     Commands and panels are edited in the file itself.
 9. **Recording** menu (and the toolbar's `● Record`, which shows the elapsed time):
    - **Record** (Ctrl+R) saves everything the port delivers, until you stop it or
      disconnect. The file goes to the recordings folder (default `~/telemetry-recordings`),
@@ -271,7 +294,7 @@ The bundled PID panel sends `0x10` (`motor_id: u8`, then `kp ki k1 k2 k3 k_aw al
 ## Configuration: `streams.json`
 
 `streams.json` is the single source of truth for all stream definitions. Edit it directly or
-use the in-app **Configuration** tab. The document has four top-level keys:
+use the in-app stream editor. The document has four top-level keys:
 
 | Key | Description |
 |-----|-------------|
@@ -481,7 +504,8 @@ serial_binary_tele_plotter/
 ├── core/                      # protocol/, transport/, simulation/ are Qt-free
 │   ├── types.py               # Shared TypedDicts and Enums
 │   ├── config/                # streams.json: document (load, migrate, validate, save),
-│   │                          #   streams, controls (commands, panels), schema migrations
+│   │                          #   streams, controls (commands, panels), schema migrations,
+│   │                          #   the editor's StreamDraft, C structs in and out
 │   ├── protocol/              # Wire format: CRC-8, FrameParser, RecordDecoder (numpy),
 │   │                          #   StreamRouter (multi-stream), stats, commands (encoding)
 │   ├── transport/             # Transport interface, SerialTransport, SimTransport,
@@ -503,7 +527,8 @@ serial_binary_tele_plotter/
 │   │                          #   the store's overview), TriggerController, lanes/series
 │   ├── panels/                # Toolbar connection, stream tabs, Signals (legend + readout),
 │   │                          #   control panels + send log, time window, trigger
-│   └── config/                # Stream configuration editor (File → Edit streams.json)
+│   └── config/                # Stream editor (File → Edit streams.json): frame view,
+│                              #   lanes, field form, From C struct… dialog
 ├── tests/                     # pytest; `qt`-marked tests use real Qt
 ├── tools/                     # bench_pipeline.py (parser/storage), bench_render.py (GUI FPS)
 └── docs/                      # Roadmap, project log, reviews, ADRs
