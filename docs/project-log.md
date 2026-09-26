@@ -6,6 +6,15 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-26 — Fix: segfault when a signal's check box is toggled in the editor
+
+- `main` CI crashed (SIGSEGV) in `test_unchecking_a_signal_hides_it_when_the_stream_opens`.
+  `StreamEditor._on_tree_item_changed` redrew at once, and the redraw's `tree.clear()` freed
+  the item whose `setData` was still emitting `itemChanged`: a use-after-free since R7.1 that
+  crashes only sometimes. The draft now changes at once and the redraw runs on the next
+  event-loop turn, as drops already did. The test waits for the redraw and checks the lane
+  count. 30 repeated runs of `test_qt_config_editor.py` pass.
+
 ## 2026-09-26 — R10.1 Live cursor moves wait for the next frame
 
 - `TelemetryPlot._on_mouse_moved`: live, while frames arrive (one in the last 100 ms), a

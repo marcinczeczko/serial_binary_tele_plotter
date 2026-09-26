@@ -142,7 +142,9 @@ def test_unchecking_a_signal_hides_it_when_the_stream_opens(qtbot: Any, config: 
     assert item is not None
     item.setCheckState(0, QtCore.Qt.CheckState.Unchecked)
     assert tab.editor.draft.signal("acc_x")["visible"] is False
-    assert tab.editor.shown_chk.isChecked() is False
+    qtbot.waitUntil(lambda: not tab.editor.shown_chk.isChecked())
+    lane = tree.topLevelItem(0)
+    assert lane is not None and lane.text(1) == "2/3"  # the redraw ran, on a fresh tree
 
 
 def test_edits_keep_what_the_editor_doesnt_show(qtbot: Any, config: Path) -> None:
