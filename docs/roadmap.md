@@ -414,6 +414,24 @@ in each item's PR.
   *Done when:* the markers show as designed and `bench_render.py` stays at one paint per frame
   and ≥ 30 FPS, interleaved against `main`.
 
+## Phase 10: render headroom (the GUI thread's time)
+
+Added 2026-09-26. A GPU renderer (pygfx on wgpu) was analysed and **dropped**: on the owner's
+M1 the plot already holds its frame cap with headroom, and the biggest waste R10.0 found is
+extra repaints, which the current QPainter renderer can avoid. The analysis is kept in
+[`docs/specs/serial_bin_plotter_gpu-rendering_2026-09-26.md`](specs/serial_bin_plotter_gpu-rendering_2026-09-26.md),
+along with when it would be worth revisiting.
+
+- [x] **R10.0 Baseline the whole window**: `tools/bench_window.py` runs the real `MainWindow`
+  on VIRTUAL with the `bench_render` fixture and splits the GUI thread's time into pull + draw,
+  plot paint and the rest of the window.
+  *Done (2026-09-26, macOS):* the plot's paint is 57–67% of the GUI thread; a moving cursor
+  makes it paint about 2.7 times per live frame.
+- [ ] **R10.1 Cursor repaints**: each cursor move repaints every curve. Coalesce cursor updates
+  into the live frame.
+  *Done when:* `bench_window --cursor` shows one plot paint per live frame, and the cursor
+  readout still follows the mouse.
+
 ---
 
 ## Suggested order and sizing
@@ -432,3 +450,4 @@ in each item's PR.
 | 10 | R7.* | M | The editor, once the dashboard (R6) sets the look |
 | 11 | R8.1 → R8.4 | M | Decoder slot first (no behaviour change), then profiles, then text |
 | 12 | R9.1 → R9.6 | M | Look first (everything inherits it), then the frame (panes, top bar), then the pieces |
+| 13 | R10.0, R10.1 | S | Measure the whole window, then remove the extra repaints it found |

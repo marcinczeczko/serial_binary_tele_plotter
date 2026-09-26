@@ -6,6 +6,29 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-26 — R10.0 Whole-window baseline; GPU renderer analysed and dropped
+
+- A GPU renderer (pygfx on wgpu: Metal on macOS, D3D12 or Vulkan on Windows) was analysed
+  and **dropped by the owner**. The plot already has headroom on the M1, and the main waste
+  is fixable on QPainter; the rewrite's cost (about 1000 lines, a pre-1.0 dependency, GPU CI,
+  two renderers) isn't worth it now. The record, and when to revisit, is in
+  `docs/specs/serial_bin_plotter_gpu-rendering_2026-09-26.md`. Also rejected there: pyqtgraph
+  `useOpenGL` (−33% paint on the M1, but macOS GL is deprecated), VisPy, Qt Graphs, Qt Charts
+  GL, and a Qt Quick scene graph.
+- `tools/bench_window.py`: the real `MainWindow` on VIRTUAL with the `bench_render` fixture.
+  It splits the GUI thread's CPU (`thread_time`) into pull + draw, plot paint and the rest.
+  Options: `--cursor` (60 Hz sweep), `--fps`, `--size`, `--paints`, `--profile`.
+- M1 Pro, Retina, 1440×900, 34 × 100k at 1 kHz, measured twice:
+  - Mouse idle: 30.3 FPS, GUI thread 41% busy, of which the plot's paint is **67%**.
+  - Cursor sweeping: 78% busy, plot paint **61%**, rest of window 30%.
+  - 60 FPS cap: 58.8 FPS, 82–91% busy, plot paint 57%. 0 lost.
+- Found: a moving cursor repaints every curve, about 2.7 plot paints per live frame (R10.1).
+  The Signals pane's row painting costs about 90 ms/s while the readout updates.
+- `bench_render` on the same Mac, plot only: 9.7 ms paint natively (8.0 ms offscreen), 6.5
+  ms with `useOpenGL`; at a 60 FPS cap and 2400×1400, 58.8 FPS either way.
+
+---
+
 ## 2026-09-25 — R9.6 Graticule and markers: Phase 9 complete
 
 - `ui/charts/graticule.py`: per lane, a `Graticule` behind the traces (1 px frame, 10 dotted

@@ -17,8 +17,9 @@ so you can work without hardware.
 3. `docs/reviews/2026-09-24-architecture-review.md`: known defects, with stable IDs
    (`C*` correctness, `P*` performance, `A*` architecture, `T*` tooling).
 4. `docs/adr/`: design decisions. ADR-0002 is the target pipeline.
-5. `docs/specs/`: working specs for the next roadmap items. **Phase 9 is in progress (R9.1–R9.6):
-   the scope view, `docs/specs/phase9-scope-view.md` (ADR-0012, proposed). R9.1–R9.6 done: Phase 9 is complete.**
+5. `docs/specs/`: working specs for the next roadmap items. Phase 9 (the scope view,
+   ADR-0012) is complete. Phase 10 is render headroom on the current renderer: a GPU
+   renderer was analysed and dropped (`docs/specs/serial_bin_plotter_gpu-rendering_2026-09-26.md`).
 
 Before starting non-trivial work, check whether a roadmap item or finding already covers
 it, and reference its ID in commits and PRs.
@@ -36,6 +37,7 @@ uv run ruff check . && uv run ruff format --check .
 uv run mypy .                         # strict for app code and tools; must exit 0
 uv run python tools/bench_pipeline.py # parser/storage benchmark (C1 guard, snapshot cost)
 uv run python tools/bench_render.py   # GUI render budget (R3.4): 34 signals x 100k @ 1 kHz, >= 30 FPS
+uv run python tools/bench_window.py --cursor  # whole window (R10.0): GUI thread split, plot vs rest
 ```
 
 CI (`.github/workflows/ci.yml`) runs exactly these on every PR. Keep them green. The two benchmarks
@@ -114,7 +116,7 @@ ui/config/              streams.json editor (ADR-0009): tab (toolbar, profile ro
 ui/common/              color_button, numbers (format_number, ScopeDoubleSpinBox: dot decimal, significant
                         digits, whatever the locale; use it for every float input)
 tests/                  pytest: pure logic, stubbed-Qt legacy tests, `qt`-marked real-Qt tests
-tools/                  dev scripts (bench_pipeline.py)
+tools/                  dev scripts (bench_pipeline, bench_render, bench_window)
 .github/workflows/      CI
 .claude/                settings (read denies for secrets) and the web SessionStart hook
 docs/                   records and specs (see "Start here")
