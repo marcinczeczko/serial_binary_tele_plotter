@@ -414,6 +414,47 @@ in each item's PR.
   *Done when:* the markers show as designed and `bench_render.py` stays at one paint per frame
   and ≥ 30 FPS, interleaved against `main`.
 
+## Phase 10: GPU rendering (proposed ADR-0013)
+
+Added 2026-09-26. The plot is the dominant GUI cost, and its render rules (no text on the
+plot, one paint per frame, 1 px pens, major ticks only, ADR-0005) were shaped by QPainter
+on the CPU. Target: a GPU renderer that runs natively on macOS (Metal) and Windows (D3D12 or
+Vulkan), with pyqtgraph + QPainter kept as the fallback. Analysis, measurements and options:
+[`docs/specs/serial_bin_plotter_gpu-rendering_2026-09-26.md`](specs/serial_bin_plotter_gpu-rendering_2026-09-26.md).
+
+- [ ] **R10.0 Baseline the whole window**: `tools/bench_window.py` runs the real `MainWindow`
+  on VIRTUAL with the `bench_render` fixture and splits the GUI thread's time into pull + draw,
+  plot paint and the rest of the window.
+  *Done when:* the log names where frame time goes on macOS and on Windows (1080p and 4K). If
+  the plot is under 30% of it, Phase 10 stops and the dominant cost is fixed instead.
+  *macOS done (2026-09-26): the plot is 57–67%. Windows still to run.*
+- [ ] **R10.1 Renderer seam**: a `PlotRenderer` protocol in `ui/charts`; lane logic, range
+  modes, readout, anchor and trigger stay renderer-free; today's code becomes `PgRenderer`.
+  *Done when:* no behaviour change, the full test suite passes, and `bench_render` matches
+  `main` interleaved.
+- [ ] **R10.2 Spike: pygfx in one lane** (canvas first, owner review). Go/no-go gate.
+  *Done when:* ≥ 60 FPS at 34 × 1000-bucket live on macOS and Windows with less GUI-thread
+  time than `PgRenderer`, the look accepted, no crash in 10 min of connect, disconnect and
+  profile switching. Or: the numbers are logged and Phase 10 closes with `PgRenderer`.
+- [ ] **R10.3 `GfxRenderer`, live parity**: lanes on one shared X, curves from preallocated
+  buffers updated in place, graticule, time axis, markers, cursor, trigger level, capture
+  shading, range modes.
+  *Done when:* the `qt` tests pass against both renderers, and `bench_render --renderer gfx`
+  shows ≥ 60 FPS on the M1.
+- [ ] **R10.4 Paused at full resolution**: the frozen snapshot uploaded once; zoom and pan
+  move the camera only.
+  *Done when:* zooming 34 × 100k paused holds ≥ 60 FPS, and the readout and Δ are unchanged.
+- [ ] **R10.5 Lift ADR-0005's render rules** for `GfxRenderer`: pen width and dash from
+  `streams.json`, an optional minor grid, an optional readout on the plot. ADR-0013
+  supersedes ADR-0005's render rules.
+- [ ] **R10.6 Selection, fallback and CI**: `renderer = auto | gpu | raster` setting and
+  `--renderer`; `auto` falls back to `PgRenderer` if no GPU adapter is found; a `gpu` extra;
+  GPU tests on lavapipe in CI; a Windows smoke-test job.
+- [ ] **R10.7 Cursor repaints** (found by R10.0): each cursor move repaints every curve (2.7
+  plot paints per live frame while the mouse moves). Coalesce cursor updates into the live
+  frame in `PgRenderer`.
+  *Done when:* `bench_window --cursor` shows one plot paint per live frame.
+
 ---
 
 ## Suggested order and sizing
@@ -432,3 +473,4 @@ in each item's PR.
 | 10 | R7.* | M | The editor, once the dashboard (R6) sets the look |
 | 11 | R8.1 → R8.4 | M | Decoder slot first (no behaviour change), then profiles, then text |
 | 12 | R9.1 → R9.6 | M | Look first (everything inherits it), then the frame (panes, top bar), then the pieces |
+| 13 | R10.0 → R10.2, then R10.3 → R10.6 | L | Measure, seam, spike and gate before any rewrite; R10.7 any time |
