@@ -61,12 +61,12 @@ def test_a_text_profile_lays_the_editor_out_for_lines(qtbot: Any, profile: Path)
     assert tab.profile_name_edit.text() == "arduino-imu"
     assert tab.profile_baud_combo.currentText() == "115200"
     assert editor.pattern_edit.isVisible() and not editor.id_spin.isVisible()
-    assert editor.line_view.isVisible() and not editor.frame_view.isVisible()
-    assert not tab.paste_btn.isVisible() and not tab.copy_btn.isVisible()
+    assert editor.line_view.isVisible() and not editor.frame_strip.isVisible()
+    assert not tab.paste_act.isVisible() and not tab.copy_act.isVisible()
+    assert tab.tools_btn.text() == "Console ▾"
     assert editor.pattern_edit.text() == "IMU,{ms},{ax},{ay},{az}"
     assert [tab.stream_tabs.tabText(i) for i in range(2)] == ["IMU", "Environment"]
-    assert editor.size_lbl.text() == "4 values"
-    assert editor.form_title.text() == "Value"
+    assert editor.form_title.text() == "VALUE"
     # The X axis offers the integer values and the line number.
     combo = editor.time_field_combo
     assert [combo.itemText(i) for i in range(combo.count())] == ["ms", "(line number)"]
@@ -188,7 +188,7 @@ def test_the_line_view_shows_the_newest_line_and_whether_it_matches(
 
 def test_a_new_stream_in_a_text_profile_is_a_pattern(qtbot: Any, profile: Path) -> None:
     tab = _tab(qtbot, profile)
-    tab.new_btn.click()
+    tab.new_act.trigger()
     assert tab.editor.draft.pattern == "new,{v1}"
     assert "new_stream" in tab.drafts
     tab.save_to_file()
@@ -273,8 +273,8 @@ def test_copy_as_printf(qtbot: Any, profile: Path) -> None:
     from PyQt6 import QtWidgets
 
     tab = _tab(qtbot, profile, "env")
-    assert tab.printf_btn.isVisible() and tab.console_btn.isVisible()
-    tab.printf_btn.click()
+    assert tab.printf_act.isVisible() and tab.console_act.isVisible()
+    tab.printf_act.trigger()
     clipboard = QtWidgets.QApplication.clipboard()
     assert clipboard is not None
     assert clipboard.text() == 'printf("ENV t=%fC h=%lu%%\\r\\n", t, h);'

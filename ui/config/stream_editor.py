@@ -1,15 +1,19 @@
 """
-Stream editor (R7.1): one stream, laid out like the scope.
+Stream editor (R7.1, R11): one stream, in the scope look of the main window.
 
-- One row of stream settings: key, name, ID, byte order, X axis and time per tick, controls.
-- The frame, as `FrameView` draws it: what the device sends, in wire order.
-- The signals by lane, like the dashboard's Signals dock, with the fields that aren't
-  plotted in their own group: how it's shown. Dragging a field or signal onto a lane plots
-  it there; dragging a signal onto "Not plotted" removes it.
-- A form for the selected field and its signal.
+- One row of stream settings in words: key, name, ID, byte order (`LE | BE`), the X axis and
+  time per tick, and the Tune panel shown with it.
+- The frame as one strip (`FrameStrip`): what the device sends, in wire order.
+- The signals as the main window's Signals pane lists them (`FieldTree`): lanes, one row per
+  left/right pair, each side with its swatch (shown at open), field and byte, then the fields
+  that aren't plotted. Dragging a field or row onto a lane plots or moves it there; onto
+  "Not plotted" stops plotting it.
+- The inspector: the selected signal (`SIGNAL`) and its field (`FIELD`), with the actions in
+  their section headers. `L=R` (on by default) gives a pair's other side the same lane, colour
+  and line width, as the Tune pane's `L=R` does for gains.
 
 In a text profile (R8.4) a stream is a line pattern: Pattern replaces ID and byte order,
-`LineView` replaces the frame view, and the form edits a value (its slot in the pattern).
+`LineView` replaces the strip, and the inspector edits a value (its slot in the pattern).
 
 Every edit is an operation on a `StreamDraft` (`core/config/draft.py`), so the editor
 never rebuilds a stream from its widgets and can't lose what it doesn't show (C4).
@@ -22,28 +26,68 @@ from typing import Any
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from core.config import ENDIANNESS, MAX_PAYLOAD_BYTES
+from core.config import ENDIANNESS
 from core.config.draft import LINE_STYLES, StreamDraft, unique_name
 from core.protocol.constants import STRUCT_TYPE_MAP
 from core.protocol.text_line import LINE_FIELD, Pattern, PatternError, parse_pattern
 from core.types import StreamConfig
-from styles import MONO_CSS
+from styles import (
+    BORDER,
+    BORDER_DIM,
+    MONO_CSS,
+    PANEL,
+    TEXT,
+    TEXT_BRIGHT,
+    TEXT_DISABLED,
+    TEXT_MUTED,
+)
 from ui.charts.lanes import DEFAULT_LANE, lane_layout
 from ui.common.color_button import ColorButton
-from ui.config.frame_view import TIME_FIELD, FrameView
+from ui.config.frame_strip import FrameStrip
+from ui.config.frame_view import TIME_FIELD
 from ui.config.line_view import LineView
-from ui.panels.signals import DEFAULT_LANE_LABEL, NEW_LANE, ROLE_LANE, ROLE_SIGNAL, SignalTree
+from ui.config.signal_list import FIELD_MARK, ROLE_FIELD, UNPLOTTED_LANE, FieldTree
+from ui.panels.signal_rows import pair_rows
+from ui.panels.signals import DEFAULT_LANE_LABEL, NEW_LANE, ROLE_LANE, SWATCH_PX, draw_swatch
 
-ROLE_FIELD = QtCore.Qt.ItemDataRole.UserRole + 2
-UNPLOTTED_LANE = "__unplotted__"
-FIELD_MARK = "field:"  # ROLE_SIGNAL of a row for a field without a signal
+__all__ = ["FIELD_MARK", "ROLE_FIELD", "UNPLOTTED_LANE", "StreamEditor"]
+
 LINE_NUMBER = "(line number)"  # the X axis of a text stream without a counter
 # The value types the editor offers for text; a file's other types are shown as they are.
 TEXT_TYPES = (("f32", "number"), ("u32", "integer"), ("i32", "signed integer"))
 MONO_STYLE = MONO_CSS
 PATTERN_ERROR_STYLE = "QLineEdit { border: 1px solid #FF4040; " + MONO_STYLE + " }"
-MUTED = QtGui.QColor("#888888")
-DIM = QtGui.QColor("#666666")
+LINE_WIDTHS = (1, 2, 3)
+LINKED = ("group", "color", "width")  # what L=R gives the other side
+INSPECTOR_WIDTH = 300
+ROW_BG = "#0a0a0a"
+MUTED_LABEL = "#8a8a8a"
+
+WORD_BUTTON = (
+    f"QPushButton, QToolButton {{ background: transparent; border: none; color: {MUTED_LABEL};"
+    " padding: 0; font-size: 11px; }"
+    f" QPushButton:hover, QToolButton:hover {{ color: {TEXT_BRIGHT}; background: transparent; }}"
+    f" QPushButton:disabled {{ color: {TEXT_DISABLED}; }}"
+)
+SEGMENT = (
+    "QPushButton { background: transparent; border: none; border-right: 1px solid #3a3a3a;"
+    f" color: {MUTED_LABEL}; padding: 0 9px; font-size: 11px; min-height: 20px; }}"
+    " QPushButton:last-child { border-right: none; }"
+    f" QPushButton:checked {{ background: {TEXT}; color: #000; font-weight: bold; }}"
+    " QPushButton:hover:!checked { background: #1c1c1c; }"
+)
+LINE_SEGMENT = SEGMENT.replace(
+    f"QPushButton:checked {{ background: {TEXT}; color: #000; font-weight: bold; }}",
+    "QPushButton:checked { background: #2a2a2a; }",
+)
+LINK_ON = (
+    f"QPushButton {{ background: {TEXT}; border: 1px solid {TEXT}; color: #000;"
+    " font-weight: bold; font-size: 11px; padding: 0 6px; min-height: 18px; }"
+)
+LINK_OFF = (
+    f"QPushButton {{ background: #000; border: 1px solid {TEXT_DISABLED}; color: {MUTED_LABEL};"
+    " font-weight: bold; font-size: 11px; padding: 0 6px; min-height: 18px; }"
+)
 
 
 def format_seconds(value: Any) -> str:
@@ -93,7 +137,7 @@ def _line_icon(color: str, style: str) -> QtGui.QIcon:
     pixmap = QtGui.QPixmap(22, 12)
     pixmap.fill(QtGui.QColor(0, 0, 0, 0))
     painter = QtGui.QPainter(pixmap)
-    pen = QtGui.QPen(QtGui.QColor(color), 3)
+    pen = QtGui.QPen(QtGui.QColor(color), 2)
     pen.setStyle(
         {"dashed": QtCore.Qt.PenStyle.DashLine, "dotted": QtCore.Qt.PenStyle.DotLine}.get(
             style, QtCore.Qt.PenStyle.SolidLine
@@ -103,6 +147,15 @@ def _line_icon(color: str, style: str) -> QtGui.QIcon:
     painter.drawLine(1, 6, 21, 6)
     painter.end()
     return QtGui.QIcon(pixmap)
+
+
+def _swatch_pixmap(color: str, shown: bool, dashed: bool) -> QtGui.QPixmap:
+    pixmap = QtGui.QPixmap(SWATCH_PX, SWATCH_PX)
+    pixmap.fill(QtGui.QColor(0, 0, 0, 0))
+    painter = QtGui.QPainter(pixmap)
+    draw_swatch(painter, QtCore.QRectF(0, 0, SWATCH_PX, SWATCH_PX), color, shown, dashed)
+    painter.end()
+    return pixmap
 
 
 HEADER_STYLE = (
@@ -153,6 +206,18 @@ def field_colors(draft: StreamDraft) -> dict[str, str]:
     return colors
 
 
+def plotted_fields(draft: StreamDraft) -> tuple[dict[str, str], frozenset[str]]:
+    """(field -> its first signal's colour, fields whose signals are all hidden at open)."""
+    colors: dict[str, str] = {}
+    shown: set[str] = set()
+    for sig in draft.signals.values():
+        if isinstance(sig, dict) and isinstance(sig.get("field"), str):
+            colors.setdefault(sig["field"], str(sig.get("color", "#ffffff")))
+            if sig.get("visible", True):
+                shown.add(sig["field"])
+    return colors, frozenset(f for f in colors if f not in shown)
+
+
 class PatternEdit(QtWidgets.QLineEdit):
     """The Pattern field: Esc drops what was typed (a pattern is applied on leaving)."""
 
@@ -163,6 +228,36 @@ class PatternEdit(QtWidgets.QLineEdit):
             self.escaped.emit()
             return
         super().keyPressEvent(event)
+
+
+class SwatchToggle(QtWidgets.QPushButton):
+    """Shown when the stream opens: the signal's swatch (filled or hollow) and a few words."""
+
+    def __init__(self, text: str, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self.setCheckable(True)
+        self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self._color = TEXT
+        self._dashed = False
+        self.setStyleSheet(
+            "QPushButton { background: transparent; border: none; text-align: left;"
+            f" padding: 0 0 0 20px; color: {MUTED_LABEL}; min-height: 24px; }}"
+            f" QPushButton:checked {{ background: transparent; color: {MUTED_LABEL}; }}"
+            f" QPushButton:hover {{ color: {TEXT}; background: transparent; }}"
+        )
+        self.toggled.connect(lambda _on: self.update())
+
+    def set_swatch(self, color: str, dashed: bool) -> None:
+        self._color, self._dashed = color, dashed
+        self.update()
+
+    def paintEvent(self, event: QtGui.QPaintEvent | None) -> None:  # noqa: N802
+        super().paintEvent(event)
+        painter = QtGui.QPainter(self)
+        y = self.height() / 2 - SWATCH_PX / 2
+        box = QtCore.QRectF(0, y, SWATCH_PX, SWATCH_PX)
+        draw_swatch(painter, box, self._color, self.isChecked(), self._dashed)
+        painter.end()
 
 
 class StreamEditor(QtWidgets.QWidget):
@@ -193,116 +288,39 @@ class StreamEditor(QtWidgets.QWidget):
     def _build(self) -> None:
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(0)
+        layout.addWidget(self._build_stream_row())
 
-        row = QtWidgets.QHBoxLayout()
-        row.setContentsMargins(8, 6, 8, 0)
-        row.setSpacing(6)
-        self.key_edit = QtWidgets.QLineEdit()
-        self.key_edit.setFixedWidth(110)
-        self.key_edit.setToolTip("The stream's key in streams.json")
-        self.name_edit = QtWidgets.QLineEdit()
-        self.name_edit.setFixedWidth(170)
-        self.id_spin = HexSpinBox()
-        self.id_spin.setFixedWidth(64)
-        self.endian_combo = QtWidgets.QComboBox()
-        self.endian_combo.addItems(ENDIANNESS)
-        self.pattern_edit = PatternEdit()
-        self.pattern_edit.setFixedWidth(300)
-        self.pattern_edit.setStyleSheet("QLineEdit { " + MONO_STYLE + " }")
-        self.pattern_edit.setToolTip(
-            "The line the board prints: fixed text and a {name} per value, e.g. "
-            "IMU,{ms},{ax},{ay}. Applied when you leave the field; Esc drops the edit."
+        frame_box = QtWidgets.QWidget()
+        frame_box.setObjectName("frame_box")
+        frame_box.setStyleSheet(
+            f"QWidget#frame_box {{ background: #000; border-bottom: 1px solid {BORDER_DIM}; }}"
         )
-        self.time_field_combo = QtWidgets.QComboBox()
-        self.time_field_combo.setToolTip("The field that drives the X axis")
-        self.time_scale_edit = QtWidgets.QLineEdit()
-        self.time_scale_edit.setFixedWidth(64)
-        self.time_scale_edit.setToolTip(
-            "Time per tick of the X-axis field: the MCU loop period for a loop counter "
-            "(5 ms), or 1 µs for a microsecond timestamp"
-        )
-        self.time_step_edit = QtWidgets.QLineEdit()
-        self.time_step_edit.setFixedWidth(50)
-        self.time_step_edit.setToolTip(
-            "How much the X-axis field goes up per frame: 1 for a loop counter. A larger "
-            "jump is drawn as a gap (lost frames)."
-        )
-        self.time_unit_lbl = QtWidgets.QLabel("per line")
-        self.time_unit_lbl.setStyleSheet("color: #888;")
-        self.panel_combo = QtWidgets.QComboBox()  # the stream's `controls` panel (R5.2)
-        self.set_panel_choices([])
-        self._row_labels: dict[QtWidgets.QWidget, QtWidgets.QLabel] = {}
-        for label, widget in (
-            ("Key:", self.key_edit),
-            ("Name:", self.name_edit),
-            ("ID:", self.id_spin),
-            ("Byte order:", self.endian_combo),
-            ("Pattern:", self.pattern_edit),
-            ("X axis:", self.time_field_combo),
-            ("×", self.time_scale_edit),
-            ("Step:", self.time_step_edit),
-            ("Controls:", self.panel_combo),
-        ):
-            lbl = QtWidgets.QLabel(label)
-            if label not in ("Key:", "×"):
-                lbl.setContentsMargins(8, 0, 0, 0)
-            row.addWidget(lbl)
-            row.addWidget(widget)
-            self._row_labels[widget] = lbl
-            if widget is self.time_scale_edit:
-                row.addWidget(self.time_unit_lbl)
-        row.addStretch()
-        layout.addLayout(row)
-
-        frame_box = QtWidgets.QVBoxLayout()
-        frame_box.setContentsMargins(8, 0, 8, 0)
-        frame_box.setSpacing(3)
-        head = QtWidgets.QHBoxLayout()
-        self.frame_title = QtWidgets.QLabel("Frame")
-        self.frame_title.setStyleSheet("color: #aaa; font-weight: bold;")
-        self.size_lbl = QtWidgets.QLabel("")
-        head.addWidget(self.frame_title)
-        head.addStretch()
-        head.addWidget(self.size_lbl)
-        frame_box.addLayout(head)
-        self.frame_view = FrameView()
-        frame_box.addWidget(self.frame_view)
+        frame_layout = QtWidgets.QVBoxLayout(frame_box)
+        frame_layout.setContentsMargins(0, 0, 0, 0)
+        frame_layout.setSpacing(0)
+        self.frame_strip = FrameStrip()
+        frame_layout.addWidget(self.frame_strip)
         self.line_view = LineView()
-        frame_box.addWidget(self.line_view)
-        layout.addLayout(frame_box)
+        self.line_box = QtWidgets.QWidget()  # the margins go with the view
+        line_box = QtWidgets.QHBoxLayout(self.line_box)
+        line_box.setContentsMargins(12, 8, 12, 8)
+        line_box.addWidget(self.line_view)
+        frame_layout.addWidget(self.line_box)
+        layout.addWidget(frame_box)
 
-        split = QtWidgets.QSplitter()
-        split.setHandleWidth(1)
-        split.setStyleSheet("QSplitter::handle { background-color: #333; }")
-        self.tree = SignalTree()
-        self.tree.setColumnCount(4)
-        self.tree.setHeaderLabels(["Signal", "Field", "Type", "Byte"])
-        self.tree.setRootIsDecorated(True)
-        self.tree.setIndentation(14)
-        self.tree.setUniformRowHeights(True)
-        self.tree.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
-        self.tree.setStyleSheet(
-            "QTreeWidget { border: none; }"
-            " QTreeWidget::item:selected { background: #333333; color: white; }" + HEADER_STYLE
-        )
-        header = self.tree.header()
-        assert header is not None
-        header.setStretchLastSection(False)
-        header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
-        for col, width in ((1, 200), (2, 50), (3, 50)):
-            header.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeMode.Fixed)
-            header.resizeSection(col, width)
-        split.addWidget(self.tree)
-        split.addWidget(self._build_form())
-        split.setStretchFactor(0, 1)
-        split.setSizes([900, 340])
-        layout.addWidget(split, 1)
+        body = QtWidgets.QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        self.tree = FieldTree()
+        body.addWidget(self.tree, 1)
+        body.addWidget(self._build_inspector())
+        layout.addLayout(body, 1)
 
         self.key_edit.editingFinished.connect(self._on_key_edited)
         self.name_edit.editingFinished.connect(self._on_name_edited)
         self.id_spin.valueChanged.connect(self._on_id_changed)
-        self.endian_combo.activated.connect(self._on_endianness)
+        self.order_group.idClicked.connect(self._on_endianness)
         self.time_field_combo.activated.connect(self._on_time_field)
         self.pattern_edit.editingFinished.connect(self._on_pattern)
         self.pattern_edit.escaped.connect(self._revert_pattern)
@@ -319,73 +337,272 @@ class StreamEditor(QtWidgets.QWidget):
         ):
             edit.textEdited.connect(lambda _text, e=edit: self._typed.add(e))
             edit.editingFinished.connect(lambda e=edit: self._typed.discard(e))
-        self.frame_view.field_clicked.connect(self._on_frame_clicked)
-        self.frame_view.menu_requested.connect(self._show_field_menu)
+        self.frame_strip.field_clicked.connect(self._on_frame_clicked)
+        self.frame_strip.menu_requested.connect(self._show_field_menu)
         self.line_view.field_clicked.connect(self._on_frame_clicked)
         self.line_view.menu_requested.connect(self._show_field_menu)
-        self.tree.currentItemChanged.connect(self._on_tree_current)
-        self.tree.itemChanged.connect(self._on_tree_item_changed)
+        self.tree.picked.connect(self._on_picked)
+        self.tree.toggled.connect(self._on_toggled)
         self.tree.dropped.connect(self._on_dropped)
         self.tree.customContextMenuRequested.connect(self._on_tree_menu)
 
-    def _build_form(self) -> QtWidgets.QWidget:
+    def _build_stream_row(self) -> QtWidgets.QWidget:
+        bar = QtWidgets.QWidget()
+        bar.setObjectName("stream_row")
+        bar.setFixedHeight(36)
+        bar.setStyleSheet(
+            f"QWidget#stream_row {{ background: {ROW_BG}; border-bottom: 1px solid {BORDER_DIM}; }}"
+            f" QWidget#stream_row QLabel {{ color: {MUTED_LABEL}; }}"
+        )
+        row = QtWidgets.QHBoxLayout(bar)
+        row.setContentsMargins(12, 0, 12, 0)
+        row.setSpacing(7)
+        self.key_edit = QtWidgets.QLineEdit()
+        self.key_edit.setFixedWidth(100)
+        self.key_edit.setStyleSheet("QLineEdit { " + MONO_STYLE + " }")
+        self.key_edit.setToolTip("The stream's key in streams.json")
+        self.name_edit = QtWidgets.QLineEdit()
+        self.name_edit.setFixedWidth(160)
+        self.id_spin = HexSpinBox()
+        self.id_spin.setFixedWidth(52)
+        self.id_spin.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.id_spin.setToolTip("The frame's TYPE byte")
+        self.order_box, self.order_group = self._segment(
+            [("LE", "Little-endian"), ("BE", "Big-endian")], SEGMENT
+        )
+        self.pattern_edit = PatternEdit()
+        self.pattern_edit.setFixedWidth(300)
+        self.pattern_edit.setStyleSheet("QLineEdit { " + MONO_STYLE + " }")
+        self.pattern_edit.setToolTip(
+            "The line the board prints: fixed text and a {name} per value, e.g. "
+            "IMU,{ms},{ax},{ay}. Applied when you leave the field; Esc drops the edit."
+        )
+        self.time_field_combo = QtWidgets.QComboBox()
+        self.time_field_combo.setToolTip("The field that drives the X axis")
+        self.time_scale_edit = QtWidgets.QLineEdit()
+        self.time_scale_edit.setFixedWidth(60)
+        self.time_scale_edit.setToolTip(
+            "Time per tick of the X-axis field: the MCU loop period for a loop counter "
+            "(5 ms), or 1 µs for a microsecond timestamp"
+        )
+        self.time_step_edit = QtWidgets.QLineEdit()
+        self.time_step_edit.setFixedWidth(36)
+        self.time_step_edit.setToolTip(
+            "How much the X-axis field goes up per frame: 1 for a loop counter. A larger "
+            "jump is drawn as a gap (lost frames)."
+        )
+        self.time_unit_lbl = QtWidgets.QLabel("per line")
+        self.panel_combo = QtWidgets.QComboBox()  # the stream's `controls` panel (R5.2)
+        self.panel_combo.setToolTip("The Tune pane shown with this stream")
+        self.set_panel_choices([])
+        self._row_labels: dict[QtWidgets.QWidget, QtWidgets.QLabel] = {}
+        for label, widget in (
+            ("Key", self.key_edit),
+            ("Name", self.name_edit),
+            ("ID", self.id_spin),
+            ("Order", self.order_box),
+            ("Pattern", self.pattern_edit),
+            ("X", self.time_field_combo),
+            ("×", self.time_scale_edit),
+            ("step", self.time_step_edit),
+            ("Tune", self.panel_combo),
+        ):
+            lbl = QtWidgets.QLabel(label)
+            if label not in ("Key", "×", "step"):
+                lbl.setContentsMargins(11, 0, 0, 0)
+            row.addWidget(lbl)
+            row.addWidget(widget)
+            self._row_labels[widget] = lbl
+            if widget is self.time_scale_edit:
+                row.addWidget(self.time_unit_lbl)
+        row.addStretch()
+        return bar
+
+    @staticmethod
+    def _segment(
+        options: list[tuple[str, str]], style: str
+    ) -> tuple[QtWidgets.QFrame, QtWidgets.QButtonGroup]:
+        """A row of exclusive square buttons in one 1 px box (Manual | Live, LE | BE)."""
+        box = QtWidgets.QFrame()
+        box.setObjectName("segment")
+        box.setStyleSheet(
+            "QFrame#segment { border: 1px solid #3a3a3a; background: transparent; } " + style
+        )
+        row = QtWidgets.QHBoxLayout(box)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        group = QtWidgets.QButtonGroup(box)
+        group.setExclusive(True)
+        for i, (text, tip) in enumerate(options):
+            btn = QtWidgets.QPushButton(text)
+            btn.setCheckable(True)
+            btn.setToolTip(tip)
+            btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+            row.addWidget(btn)
+            group.addButton(btn, i)
+        return box, group
+
+    @staticmethod
+    def _section(
+        title: str, *actions: QtWidgets.QWidget
+    ) -> tuple[QtWidgets.QWidget, QtWidgets.QLabel]:
+        """A section header: small caps, a hairline, then quiet word actions."""
+        head = QtWidgets.QWidget()
+        row = QtWidgets.QHBoxLayout(head)
+        row.setContentsMargins(12, 14, 12, 6)
+        row.setSpacing(10)
+        lbl = QtWidgets.QLabel(title)
+        lbl.setStyleSheet(
+            f"color: {MUTED_LABEL}; font-size: 11px; font-weight: bold; letter-spacing: 1px;"
+        )
+        line = QtWidgets.QFrame()
+        line.setFixedHeight(1)
+        line.setStyleSheet(f"background: {BORDER_DIM};")
+        row.addWidget(lbl)
+        row.addWidget(line, 1)
+        for action in actions:
+            action.setStyleSheet(WORD_BUTTON)
+            action.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            row.addWidget(action)
+        return head, lbl
+
+    @staticmethod
+    def _grid() -> tuple[QtWidgets.QWidget, QtWidgets.QGridLayout]:
         box = QtWidgets.QWidget()
-        box.setMinimumWidth(300)
+        grid = QtWidgets.QGridLayout(box)
+        grid.setContentsMargins(12, 0, 12, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
+        grid.setColumnMinimumWidth(0, 56)
+        grid.setColumnStretch(1, 1)
+        return box, grid
+
+    @staticmethod
+    def _grid_row(grid: QtWidgets.QGridLayout, label: str, widget: Any) -> QtWidgets.QLabel:
+        lbl = QtWidgets.QLabel(label)
+        lbl.setStyleSheet(f"color: {MUTED_LABEL};")
+        r = grid.rowCount()
+        grid.addWidget(lbl, r, 0)
+        if isinstance(widget, QtWidgets.QLayout):
+            grid.addLayout(widget, r, 1)
+        else:
+            grid.addWidget(widget, r, 1)
+        return lbl
+
+    def _build_inspector(self) -> QtWidgets.QWidget:
+        box = QtWidgets.QWidget()
+        box.setObjectName("inspector")
+        box.setFixedWidth(INSPECTOR_WIDTH)
+        box.setStyleSheet(
+            f"QWidget#inspector {{ background: {PANEL}; border-left: 1px solid {BORDER}; }}"
+        )
         outer = QtWidgets.QVBoxLayout(box)
-        outer.setContentsMargins(12, 6, 10, 8)
-        self.form_title = QtWidgets.QLabel("Field")
-        self.form_title.setStyleSheet("color: #aaa; font-weight: bold;")
-        outer.addWidget(self.form_title)
+        outer.setContentsMargins(0, 0, 0, 12)
+        outer.setSpacing(0)
 
-        form = QtWidgets.QFormLayout()
-        self.field_name_edit = QtWidgets.QLineEdit()
-        self.field_type_combo = QtWidgets.QComboBox()
-        self._fill_type_combo()
-        self.field_byte_lbl = QtWidgets.QLabel("")
-        self.field_byte_title = QtWidgets.QLabel("Byte:")
-        form.addRow("Name:", self.field_name_edit)
-        form.addRow("Type:", self.field_type_combo)
-        form.addRow(self.field_byte_title, self.field_byte_lbl)
-        outer.addLayout(form)
+        # --- header: the selection, in its colour ---
+        head = QtWidgets.QWidget()
+        head.setObjectName("inspector_head")
+        head.setStyleSheet(f"QWidget#inspector_head {{ border-bottom: 1px solid {BORDER_DIM}; }}")
+        hrow = QtWidgets.QHBoxLayout(head)
+        hrow.setContentsMargins(12, 12, 12, 10)
+        hrow.setSpacing(10)
+        self.head_swatch = QtWidgets.QLabel()
+        self.head_swatch.setFixedSize(SWATCH_PX, SWATCH_PX)
+        titles = QtWidgets.QVBoxLayout()
+        titles.setSpacing(3)
+        self.title_lbl = QtWidgets.QLabel("")
+        self.sub_lbl = QtWidgets.QLabel("")
+        self.sub_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px; {MONO_STYLE}")
+        titles.addWidget(self.title_lbl)
+        titles.addWidget(self.sub_lbl)
+        self.link_btn = QtWidgets.QPushButton("L=R")
+        self.link_btn.setCheckable(True)
+        self.link_btn.setChecked(True)
+        self.link_btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.link_btn.setToolTip(
+            "Lane, colour and line width apply to both sides of the pair (R stays dashed)"
+        )
+        self.link_btn.toggled.connect(self._style_link)
+        self._style_link(True)
+        hrow.addWidget(self.head_swatch, 0, QtCore.Qt.AlignmentFlag.AlignTop)
+        hrow.addLayout(titles, 1)
+        hrow.addWidget(self.link_btn, 0, QtCore.Qt.AlignmentFlag.AlignTop)
+        outer.addWidget(head)
 
-        self.signal_box = QtWidgets.QWidget()
-        sform = QtWidgets.QFormLayout(self.signal_box)
-        sform.setContentsMargins(0, 6, 0, 0)
+        # --- SIGNAL ---
+        self.unplot_btn = QtWidgets.QPushButton("Stop plotting")
+        self.unplot_btn.setToolTip("Keep the field, drop its signal (or drag it to Not plotted)")
+        self.signal_head, self.signal_title = self._section("SIGNAL", self.unplot_btn)
+        outer.addWidget(self.signal_head)
+        self.signal_box, sgrid = self._grid()
         self.label_edit = QtWidgets.QLineEdit()
         self.lane_combo = QtWidgets.QComboBox()
         self.lane_combo.setEditable(True)
         self.lane_combo.setInsertPolicy(QtWidgets.QComboBox.InsertPolicy.NoInsert)
         self.lane_combo.setToolTip("Pick a lane, or type a new lane's name")
         self.color_btn = ColorButton()
-        self.style_combo = QtWidgets.QComboBox()
-        self.style_combo.addItems(LINE_STYLES)
-        self.width_spin = QtWidgets.QSpinBox()
-        self.width_spin.setRange(1, 5)
-        self.width_spin.setSuffix(" px")
         line = QtWidgets.QHBoxLayout()
-        line.addWidget(self.style_combo, 1)
-        line.addWidget(self.width_spin)
-        self.shown_chk = QtWidgets.QCheckBox("when the stream opens")
-        sform.addRow("Label:", self.label_edit)
-        sform.addRow("Lane:", self.lane_combo)
-        sform.addRow("Color:", self.color_btn)
-        sform.addRow("Line:", line)
-        sform.addRow("Shown:", self.shown_chk)
+        line.setSpacing(8)
+        self.style_box, self.style_group = self._segment(
+            [("", s.capitalize()) for s in LINE_STYLES], LINE_SEGMENT
+        )
+        self.width_box, self.width_group = self._segment(
+            [(str(w), f"{w} px") for w in LINE_WIDTHS], SEGMENT
+        )
+        line.addWidget(self.style_box)
+        line.addWidget(self.width_box)
+        line.addStretch()
+        self.shown_chk = SwatchToggle("when the stream opens")
+        self._grid_row(sgrid, "Label", self.label_edit)
+        self._grid_row(sgrid, "Lane", self.lane_combo)
+        self._grid_row(sgrid, "Colour", self.color_btn)
+        self._grid_row(sgrid, "Line", line)
+        self._grid_row(sgrid, "Shown", self.shown_chk)
         outer.addWidget(self.signal_box)
 
+        self.loose_box = QtWidgets.QWidget()
+        lrow = QtWidgets.QHBoxLayout(self.loose_box)
+        lrow.setContentsMargins(12, 0, 12, 0)
         self.not_plotted_lbl = QtWidgets.QLabel("Not plotted.")
-        self.not_plotted_lbl.setStyleSheet("color: #888;")
-        outer.addWidget(self.not_plotted_lbl)
-        outer.addStretch()
+        self.not_plotted_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
+        self.plot_btn = QtWidgets.QToolButton()
+        self.plot_btn.setText("Plot")
+        self.plot_btn.setToolTip("Plot in the first lane; the arrow picks another")
+        self.plot_btn.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.plot_btn.setStyleSheet(
+            f"QToolButton {{ background: {TEXT}; color: #000; border: 1px solid {TEXT};"
+            " font-weight: bold; padding: 2px 10px; }"
+            " QToolButton::menu-button { border-left: 1px solid #000; width: 16px; }"
+        )
+        self.plot_menu = QtWidgets.QMenu(self.plot_btn)
+        self.plot_menu.aboutToShow.connect(self._fill_plot_menu)
+        self.plot_btn.setMenu(self.plot_menu)
+        lrow.addWidget(self.not_plotted_lbl, 1)
+        lrow.addWidget(self.plot_btn)
+        outer.addWidget(self.loose_box)
 
-        self.plot_btn = QtWidgets.QPushButton("Plot this field")
-        buttons = QtWidgets.QHBoxLayout()
-        self.add_field_btn = QtWidgets.QPushButton("Add field after")
-        self.remove_field_btn = QtWidgets.QPushButton("Remove field")
-        buttons.addWidget(self.add_field_btn)
-        buttons.addWidget(self.remove_field_btn)
-        outer.addWidget(self.plot_btn)
-        outer.addLayout(buttons)
+        # --- FIELD ---
+        self.add_field_btn = QtWidgets.QPushButton("Insert after")
+        self.add_field_btn.setToolTip("Insert a field after this one")
+        self.remove_field_btn = QtWidgets.QPushButton("Remove")
+        self.remove_field_btn.setToolTip("Remove this field and its signals")
+        field_head, self.form_title = self._section(
+            "FIELD", self.add_field_btn, self.remove_field_btn
+        )
+        outer.addWidget(field_head)
+        field_box, fgrid = self._grid()
+        self.field_name_edit = QtWidgets.QLineEdit()
+        self.field_name_edit.setStyleSheet("QLineEdit { " + MONO_STYLE + " }")
+        self.field_type_combo = QtWidgets.QComboBox()
+        self._fill_type_combo()
+        self.field_byte_lbl = QtWidgets.QLabel("")
+        self._grid_row(fgrid, "Name", self.field_name_edit)
+        self._grid_row(fgrid, "Type", self.field_type_combo)
+        self.field_byte_title = self._grid_row(fgrid, "Byte", self.field_byte_lbl)
+        outer.addWidget(field_box)
+        outer.addStretch()
 
         self.field_name_edit.editingFinished.connect(self._on_field_name)
         self.field_type_combo.activated.connect(self._on_field_type)
@@ -395,15 +612,17 @@ class StreamEditor(QtWidgets.QWidget):
         assert lane_edit is not None
         lane_edit.editingFinished.connect(self._on_lane_typed)
         self.color_btn.colorChanged.connect(lambda c: self._set_signal("color", c))
-        self.style_combo.activated.connect(
-            lambda _i: self._set_signal("style", self.style_combo.currentText())
-        )
-        self.width_spin.valueChanged.connect(lambda v: self._set_signal("width", v))
-        self.shown_chk.toggled.connect(lambda on: self._set_signal("visible", on))
+        self.style_group.idClicked.connect(lambda i: self._set_signal("style", LINE_STYLES[i]))
+        self.width_group.idClicked.connect(lambda i: self._set_signal("width", LINE_WIDTHS[i]))
+        self.shown_chk.clicked.connect(lambda on: self._set_signal("visible", on))
+        self.unplot_btn.clicked.connect(self._toggle_plot)
         self.plot_btn.clicked.connect(self._toggle_plot)
         self.add_field_btn.clicked.connect(self.add_field_after)
         self.remove_field_btn.clicked.connect(self.remove_selected_field)
         return box
+
+    def _style_link(self, on: bool) -> None:
+        self.link_btn.setStyleSheet(LINK_ON if on else LINK_OFF)
 
     # --- the profile's format (R8.4) ---
 
@@ -420,22 +639,19 @@ class StreamEditor(QtWidgets.QWidget):
         """Lays the editor out for a profile's format: binary frames or text lines."""
         text = fmt == "text"
         self._text = text
-        for widget in (self.id_spin, self.endian_combo):
+        for widget in (self.id_spin, self.order_box):
             widget.setVisible(not text)
             self._row_labels[widget].setVisible(not text)
         self.pattern_edit.setVisible(text)
         self._row_labels[self.pattern_edit].setVisible(text)
-        self.frame_view.setVisible(not text)
+        self.frame_strip.setVisible(not text)
         self.line_view.setVisible(text)
-        self.frame_title.setText("Line" if text else "Frame")
-        self.form_title.setText("Value" if text else "Field")
-        self.field_byte_title.setText("Position:" if text else "Byte:")
-        self.add_field_btn.setText("Add value after" if text else "Add field after")
-        self.remove_field_btn.setText("Remove value" if text else "Remove field")
-        self.plot_btn.setText("Plot this value" if text else "Plot this field")
-        self.tree.setHeaderLabels(
-            ["Signal", "Value", "Type", "#"] if text else ["Signal", "Field", "Type", "Byte"]
-        )
+        self.line_box.setVisible(text)
+        self.form_title.setText("VALUE" if text else "FIELD")
+        self.field_byte_title.setText("Position" if text else "Byte")
+        thing = "value" if text else "field"
+        self.add_field_btn.setToolTip(f"Insert a {thing} after this one")
+        self.remove_field_btn.setToolTip(f"Remove this {thing} and its signals")
         self._fill_type_combo()
 
     def _fill_type_combo(self) -> None:
@@ -454,7 +670,7 @@ class StreamEditor(QtWidgets.QWidget):
         """The document's panels a stream can show (`controls`), plus none."""
         self._panel_keys = list(keys)
         self.panel_combo.clear()
-        self.panel_combo.addItem("(none)", None)
+        self.panel_combo.addItem("none", None)
         for key in keys:
             self.panel_combo.addItem(key, key)
 
@@ -515,8 +731,6 @@ class StreamEditor(QtWidgets.QWidget):
             self._refresh_stream_row()
             slots = self.draft.layout()
             if self._text:
-                self.size_lbl.setText(f"{len(slots)} values")
-                self.size_lbl.setStyleSheet("color: #888;")
                 self.line_view.set_pattern(
                     self._shown_pattern(),
                     field_colors(self.draft),
@@ -524,18 +738,25 @@ class StreamEditor(QtWidgets.QWidget):
                     dimmed=self._pattern_error is not None,
                 )
             else:
-                size = sum(s.size for s in slots)
-                self.size_lbl.setText(f"{size} / {MAX_PAYLOAD_BYTES} B")
-                self.size_lbl.setStyleSheet(
-                    "color: #FF4040; font-weight: bold;"
-                    if size > MAX_PAYLOAD_BYTES
-                    else "color: #888;"
-                )
-                self.frame_view.set_frame(slots, field_colors(self.draft), self._field_index())
-            self._rebuild_tree()
+                colors, hidden = plotted_fields(self.draft)
+                self.frame_strip.set_frame(slots, colors, self._field_index(), hidden)
+            specs, assignment = lane_layout(self.draft.data)
+            time_field = self.draft.time_value("field")
+            self.tree.show_stream(
+                specs,
+                assignment,
+                self._signal_dicts(),
+                slots,
+                time_field if isinstance(time_field, str) else None,
+                self._text,
+            )
+            self.tree.select(self._selection_key())
             self._refresh_form()
         finally:
             self._loading = False
+
+    def _signal_dicts(self) -> dict[str, dict[str, Any]]:
+        return {k: v for k, v in self.draft.signals.items() if isinstance(v, dict)}
 
     def _shown_pattern(self) -> Pattern | None:
         """The draft's pattern; while the one typed is invalid, the last valid one."""
@@ -560,9 +781,11 @@ class StreamEditor(QtWidgets.QWidget):
             )
         else:
             self.id_spin.setValue(d.stream_id)
-            if self.endian_combo.findText(d.endianness) < 0:
-                self.endian_combo.addItem(d.endianness)  # shown as is; validation reports it
-            self.endian_combo.setCurrentText(d.endianness)
+            order = ENDIANNESS.index(d.endianness) if d.endianness in ENDIANNESS else -1
+            self.order_group.setExclusive(False)  # an unknown order: neither (validation says)
+            for i, btn in enumerate(self.order_group.buttons()):
+                btn.setChecked(i == order)
+            self.order_group.setExclusive(True)
         time_field = str(d.time_value("field"))
         self.time_field_combo.clear()
         for name, ftype in ((f.name, f.type) for f in d.layout()):
@@ -588,103 +811,6 @@ class StreamEditor(QtWidgets.QWidget):
             self.panel_combo.addItem(controls, controls)  # an unknown panel is kept as is
         self.panel_combo.setCurrentIndex(max(self.panel_combo.findData(controls), 0))
 
-    def _rebuild_tree(self) -> None:
-        tree = self.tree
-        tree.blockSignals(True)
-        tree.clear()
-        slots = {s.name: s for s in self.draft.layout()}
-        specs, assignment = lane_layout(self.draft.data)
-        bold = QtGui.QFont(tree.font())
-        bold.setBold(True)
-        current: QtWidgets.QTreeWidgetItem | None = None
-        lane_flags = QtCore.Qt.ItemFlag.ItemIsEnabled | QtCore.Qt.ItemFlag.ItemIsDropEnabled
-        for spec in specs:
-            members = [sid for sid, lane in assignment.items() if lane == spec.key]
-            shown = sum(1 for sid in members if self.draft.signal(sid).get("visible", True))
-            label = spec.label or DEFAULT_LANE_LABEL
-            lane_item = QtWidgets.QTreeWidgetItem([label, f"{shown}/{len(members)}"])
-            lane_item.setFont(0, bold)
-            lane_item.setForeground(1, MUTED)
-            lane_item.setData(0, ROLE_LANE, spec.key)
-            lane_item.setFlags(lane_flags)
-            tree.addTopLevelItem(lane_item)
-            for sid in members:
-                item = self._signal_item(sid, slots)
-                lane_item.addChild(item)
-                if sid == self._signal:
-                    current = item
-            lane_item.setExpanded(True)
-
-        plotted = {str(s.get("field")) for s in self.draft.signals.values() if isinstance(s, dict)}
-        unplotted = [s for s in slots.values() if s.name not in plotted]
-        if unplotted:
-            lane_item = QtWidgets.QTreeWidgetItem(["Not plotted", str(len(unplotted))])
-            lane_item.setFont(0, bold)
-            lane_item.setForeground(1, MUTED)
-            lane_item.setData(0, ROLE_LANE, UNPLOTTED_LANE)
-            lane_item.setFlags(lane_flags)
-            tree.addTopLevelItem(lane_item)
-            time_field = self.draft.time_value("field")
-            for slot in unplotted:
-                label = "X axis" if slot.name == time_field else ""
-                item = QtWidgets.QTreeWidgetItem([label, slot.name, slot.type, self._where(slot)])
-                item.setData(0, ROLE_SIGNAL, FIELD_MARK + slot.name)
-                item.setData(0, ROLE_FIELD, slot.name)
-                item.setFlags(
-                    QtCore.Qt.ItemFlag.ItemIsEnabled
-                    | QtCore.Qt.ItemFlag.ItemIsSelectable
-                    | QtCore.Qt.ItemFlag.ItemIsDragEnabled
-                )
-                for col in (1, 2):
-                    item.setForeground(col, MUTED)
-                item.setForeground(3, DIM)
-                lane_item.addChild(item)
-                if self._signal is None and slot.name == self._field:
-                    current = item
-            lane_item.setExpanded(True)
-        tree.blockSignals(False)
-        if current is not None:
-            tree.blockSignals(True)
-            tree.setCurrentItem(current)
-            tree.blockSignals(False)
-
-    def _signal_item(self, sid: str, slots: dict[str, Any]) -> QtWidgets.QTreeWidgetItem:
-        sig = self.draft.signal(sid)
-        field = str(sig.get("field", ""))
-        slot = slots.get(field)
-        line = _as_dict(sig.get("line"))
-        item = QtWidgets.QTreeWidgetItem(
-            [
-                str(sig.get("label", sid)),
-                field,
-                slot.type if slot else "?",
-                self._where(slot) if slot else "",
-            ]
-        )
-        item.setIcon(0, _line_icon(str(sig.get("color", "#fff")), str(line.get("style", ""))))
-        item.setData(0, ROLE_SIGNAL, sid)
-        item.setData(0, ROLE_FIELD, field)
-        item.setFlags(
-            QtCore.Qt.ItemFlag.ItemIsEnabled
-            | QtCore.Qt.ItemFlag.ItemIsSelectable
-            | QtCore.Qt.ItemFlag.ItemIsUserCheckable
-            | QtCore.Qt.ItemFlag.ItemIsDragEnabled
-            | QtCore.Qt.ItemFlag.ItemIsDropEnabled
-        )
-        visible = sig.get("visible", True)
-        item.setCheckState(
-            0, QtCore.Qt.CheckState.Checked if visible else QtCore.Qt.CheckState.Unchecked
-        )
-        item.setToolTip(0, "Checked: shown when the stream opens")
-        for col in (1, 2):
-            item.setForeground(col, MUTED)
-        item.setForeground(3, DIM)
-        return item
-
-    def _where(self, slot: Any) -> str:
-        """The tree's last column: a value's position (text), a field's byte offset."""
-        return str(slot.index + 1) if self._text else str(slot.offset)
-
     def _refresh_form(self) -> None:
         index = self._field_index()
         slot = next((s for s in self.draft.layout() if s.index == index), None)
@@ -692,11 +818,15 @@ class StreamEditor(QtWidgets.QWidget):
             w.setEnabled(slot is not None)
         self.remove_field_btn.setEnabled(slot is not None)
         self.plot_btn.setEnabled(slot is not None)
+        sig = self.draft.signal(self._signal) if self._signal else None
+        self.signal_box.setVisible(sig is not None)
+        self.unplot_btn.setVisible(sig is not None)
+        self.loose_box.setVisible(sig is None and slot is not None)
+        self.link_btn.setVisible(sig is not None and self._mate(self._signal) is not None)
         if slot is None:
             self.field_name_edit.setText("")
             self.field_byte_lbl.setText("")
-            self.signal_box.hide()
-            self.not_plotted_lbl.hide()
+            self._show_title("", "", None)
             return
         if not self.field_name_edit.hasFocus():
             self.field_name_edit.setText(slot.name)
@@ -706,30 +836,55 @@ class StreamEditor(QtWidgets.QWidget):
         if self._text:
             self.field_byte_lbl.setText(f"{slot.index + 1} of {len(self.draft.fields)}")
         else:
-            self.field_byte_lbl.setText(f"{slot.offset} (0x{slot.offset:02x}), {slot.size} B")
+            self.field_byte_lbl.setText(
+                f"{slot.offset}  <span style='color:{TEXT_MUTED}'>"
+                f"0x{slot.offset:02X} · {slot.size} B</span>"
+            )
 
-        sig = self.draft.signal(self._signal) if self._signal else None
-        self.signal_box.setVisible(sig is not None)
         is_time = slot.name == self.draft.time_value("field")
-        self.not_plotted_lbl.setText("The X axis; not plotted." if is_time else "Not plotted.")
-        self.not_plotted_lbl.setVisible(sig is None)
-        thing = "value" if self._text else "field"
-        self.plot_btn.setText("Stop plotting" if sig is not None else f"Plot this {thing}")
+        self.not_plotted_lbl.setText("The X axis." if is_time else "Not plotted.")
+        self.plot_btn.setVisible(not is_time)
         if sig is None:
             self.label_edit.setText("")
+            self._show_title(slot.name, "", None)
             return
+        color = str(sig.get("color", "#FFFFFF"))
+        line = _as_dict(sig.get("line"))
+        style = str(line.get("style", "solid"))
+        shown = bool(sig.get("visible", True))
+        self._show_title(str(sig.get("label", self._signal)), slot.name, (color, shown, style))
         if not self.label_edit.hasFocus():
             self.label_edit.setText(str(sig.get("label", "")))
         self._fill_lane_combo(str(sig.get("group", DEFAULT_LANE)))
-        self.color_btn.set_color(str(sig.get("color", "#FFFFFF")))
-        line = _as_dict(sig.get("line"))
-        style = str(line.get("style", "solid"))
-        if self.style_combo.findText(style) < 0:
-            self.style_combo.addItem(style)
-        self.style_combo.setCurrentText(style)
+        self.color_btn.set_color(color)
+        self._check(self.style_group, LINE_STYLES.index(style) if style in LINE_STYLES else -1)
+        for i, btn in enumerate(self.style_group.buttons()):
+            on = i == LINE_STYLES.index(style) if style in LINE_STYLES else False
+            btn.setIcon(_line_icon(color if on else "#6a6a6a", LINE_STYLES[i]))
+            btn.setIconSize(QtCore.QSize(22, 12))
         width = line.get("width", 1)
-        self.width_spin.setValue(int(width) if isinstance(width, int | float) else 1)
-        self.shown_chk.setChecked(bool(sig.get("visible", True)))
+        self._check(self.width_group, LINE_WIDTHS.index(width) if width in LINE_WIDTHS else -1)
+        self.shown_chk.setChecked(shown)
+        self.shown_chk.set_swatch(color, style != "solid")
+
+    @staticmethod
+    def _check(group: QtWidgets.QButtonGroup, index: int) -> None:
+        """Checks one button of an exclusive group, or none (a value it doesn't offer)."""
+        group.setExclusive(False)
+        for i, btn in enumerate(group.buttons()):
+            btn.setChecked(i == index)
+        group.setExclusive(True)
+
+    def _show_title(self, title: str, sub: str, swatch: tuple[str, bool, str] | None) -> None:
+        color = swatch[0] if swatch is not None else TEXT
+        self.title_lbl.setText(title)
+        self.title_lbl.setStyleSheet(f"color: {color}; font-size: 14px; font-weight: bold;")
+        self.sub_lbl.setText(sub)
+        self.sub_lbl.setVisible(bool(sub))
+        if swatch is None:
+            self.head_swatch.clear()
+            return
+        self.head_swatch.setPixmap(_swatch_pixmap(swatch[0], swatch[1], swatch[2] != "solid"))
 
     def _lanes(self) -> list[tuple[str, str]]:
         """(key, label) of every lane: in use (display order), then described but unused."""
@@ -749,6 +904,35 @@ class StreamEditor(QtWidgets.QWidget):
             self.lane_combo.addItem(label, key)
         self.lane_combo.setCurrentIndex(max(self.lane_combo.findData(lane), 0))
 
+    def _fill_plot_menu(self) -> None:
+        self.plot_menu.clear()
+        for key, label in self._lanes():
+            action = self.plot_menu.addAction(label)
+            assert action is not None
+            action.triggered.connect(lambda _=False, k=key: self.plot_in(k))
+        self.plot_menu.addSeparator()
+        new = self.plot_menu.addAction("New lane")
+        assert new is not None
+        new.triggered.connect(lambda: self.plot_in(NEW_LANE))
+
+    # --- pairs (L=R) ---
+
+    def _mate(self, sid: str | None) -> str | None:
+        """The other side of `sid`'s pair in its lane, if it has one."""
+        if sid is None:
+            return None
+        _, assignment = lane_layout(self.draft.data)
+        lane = assignment.get(sid)
+        members = [s for s, key in assignment.items() if key == lane]
+        for row in pair_rows(members, self._signal_dicts()):
+            if sid in row.members and row.left is not None and row.right is not None:
+                return row.right if sid == row.left else row.left
+        return None
+
+    @property
+    def linked(self) -> bool:
+        return self.link_btn.isChecked()
+
     # --- selection ---
 
     def _field_index(self) -> int | None:
@@ -760,6 +944,11 @@ class StreamEditor(QtWidgets.QWidget):
         if signal is None and field is not None:
             signal = next(iter(self.draft.signals_of_field(field)), None)
         self._signal = signal
+
+    def _selection_key(self) -> str | None:
+        if self._signal is not None:
+            return self._signal
+        return FIELD_MARK + self._field if self._field is not None else None
 
     @property
     def selected_field(self) -> str | None:
@@ -774,28 +963,30 @@ class StreamEditor(QtWidgets.QWidget):
         self._select_field(field, signal)
         self.refresh()
 
-    def _on_frame_clicked(self, index: int) -> None:
-        self.select(self.draft.field_names()[index])
-
-    def _on_tree_current(
-        self, current: QtWidgets.QTreeWidgetItem | None, _previous: Any = None
-    ) -> None:
-        if current is None or self._loading:
-            return
-        field = current.data(0, ROLE_FIELD)
-        if not isinstance(field, str):
-            return  # a lane row
-        sid = current.data(0, ROLE_SIGNAL)
-        signal = None if not isinstance(sid, str) or sid.startswith(FIELD_MARK) else sid
-        self.flush()
-        self._field, self._signal = field, signal
+    def _show_selection(self) -> None:
+        """A new selection: lights it everywhere without rebuilding the list."""
         self._loading = True
         try:
-            self.frame_view.set_selected(self._field_index())
+            self.tree.select(self._selection_key())
+            self.frame_strip.set_selected(self._field_index())
             self.line_view.set_selected(self._field_index())
             self._refresh_form()
         finally:
             self._loading = False
+
+    def _on_frame_clicked(self, index: int) -> None:
+        self.flush()
+        self._select_field(self.draft.field_names()[index])
+        self._show_selection()
+
+    def _on_picked(self, key: str) -> None:
+        """A cell or row pressed in the list: a signal, or a field without one."""
+        self.flush()
+        if key.startswith(FIELD_MARK):
+            self._field, self._signal = key[len(FIELD_MARK) :], None
+        else:
+            self._field, self._signal = str(self.draft.signal(key).get("field")), key
+        self._show_selection()
 
     # --- edits ---
 
@@ -803,6 +994,11 @@ class StreamEditor(QtWidgets.QWidget):
         self.flush()  # text still being typed elsewhere isn't overwritten by the redraw
         self.refresh()
         self.changed.emit()
+
+    def _edited_later(self) -> None:
+        """Redraws on the next event-loop turn: the list's item under the mouse must outlive
+        the Qt handler that reported it (a redraw frees it: the crash fixed in #32)."""
+        QtCore.QTimer.singleShot(0, self._edited)
 
     def _on_key_edited(self) -> None:
         text = self.key_edit.text().strip()
@@ -821,9 +1017,9 @@ class StreamEditor(QtWidgets.QWidget):
             self.draft.stream_id = value
             self.changed.emit()
 
-    def _on_endianness(self, _index: int) -> None:
-        if self.endian_combo.currentText() != self.draft.endianness:
-            self.draft.endianness = self.endian_combo.currentText()
+    def _on_endianness(self, index: int) -> None:
+        if ENDIANNESS[index] != self.draft.endianness:
+            self.draft.endianness = ENDIANNESS[index]
             self.changed.emit()
 
     def _on_time_field(self, _index: int) -> None:
@@ -857,7 +1053,7 @@ class StreamEditor(QtWidgets.QWidget):
         self._pattern_error = None
         self.pattern_edit.setText(self.draft.pattern or "")
         self.refresh()
-        self.changed.emit()  # the status line drops the error
+        self.changed.emit()  # the tab's message drops the error
 
     def _on_time_scale(self) -> None:
         if self._loading or self.current_stream_key is None:
@@ -925,16 +1121,27 @@ class StreamEditor(QtWidgets.QWidget):
             self.draft.set_signal(self._signal, "label", text)
             self._edited()
 
+    @staticmethod
+    def _current(sig: dict[str, Any], attr: str) -> Any:
+        if attr in ("style", "width"):
+            line = sig.get("line")
+            return line.get(attr) if isinstance(line, dict) else None
+        return sig.get(attr)
+
     def _set_signal(self, attr: str, value: Any) -> None:
+        """Sets one attribute of the selected signal, and of its pair's other side for the
+        attributes L=R links (lane, colour, width)."""
         if self._loading or self._signal is None:
             return
-        if attr in ("style", "width"):
-            line = self.draft.signal(self._signal).get("line")
-            old = line.get(attr) if isinstance(line, dict) else None
-        else:
-            old = self.draft.signal(self._signal).get(attr)
-        if old != value:
-            self.draft.set_signal(self._signal, attr, value)
+        # The mate is found before the change: a lane change would split the pair first.
+        mate = self._mate(self._signal) if self.linked and attr in LINKED else None
+        targets = [s for s in (self._signal, mate) if s is not None]
+        changed = False
+        for sid in targets:
+            if self._current(self.draft.signal(sid), attr) != value:
+                self.draft.set_signal(sid, attr, value)
+                changed = True
+        if changed:
             self._edited()
 
     def _on_lane_picked(self, index: int) -> None:
@@ -967,20 +1174,18 @@ class StreamEditor(QtWidgets.QWidget):
         self.draft.set_lane_label(key, label)
         return key
 
-    def _on_tree_item_changed(self, item: QtWidgets.QTreeWidgetItem, column: int) -> None:
-        sid = item.data(0, ROLE_SIGNAL)
-        if column != 0 or not isinstance(sid, str) or sid.startswith(FIELD_MARK):
-            return
-        visible = item.checkState(0) == QtCore.Qt.CheckState.Checked
-        if visible != self.draft.signal(sid).get("visible", True):
-            self.draft.set_signal(sid, "visible", visible)
-            self._signal, self._field = sid, str(self.draft.signal(sid).get("field"))
-            # The redraw clears the tree, which frees `item` while Qt is still inside its
-            # setData: run it on the next turn of the event loop (as drops do).
-            QtCore.QTimer.singleShot(0, self._edited)
+    def _on_toggled(self, sid: str) -> None:
+        """A swatch pressed in the list: shown when the stream opens, or not."""
+        visible = not self.draft.signal(sid).get("visible", True)
+        self.draft.set_signal(sid, "visible", visible)
+        self._edited_later()
+
+    def _row_members(self, sid: str) -> list[str]:
+        mate = self._mate(sid)
+        return [sid] + ([mate] if mate is not None else [])
 
     def _on_dropped(self, sid: str, lane: str) -> None:
-        """A drag onto a lane: plot a field there, move a signal, or stop plotting it."""
+        """A drag onto a lane: plot a field there, move a row, or stop plotting it."""
         if sid.startswith(FIELD_MARK):
             if lane == UNPLOTTED_LANE:
                 return
@@ -989,12 +1194,22 @@ class StreamEditor(QtWidgets.QWidget):
             self._field, self._signal = field, self.draft.add_signal(field, lane or None)
         elif lane == UNPLOTTED_LANE:
             field = str(self.draft.signal(sid).get("field"))
-            self.draft.remove_signal(sid)
+            for member in self._row_members(sid):
+                self.draft.remove_signal(member)
             self._select_field(field)
         else:
             lane = self.new_lane() if lane == NEW_LANE else lane
-            self.draft.set_signal(sid, "group", lane)
+            for member in self._row_members(sid):  # a pair moves together
+                self.draft.set_signal(member, "group", lane)
             self._signal = sid
+        self._edited()
+
+    def plot_in(self, lane: str) -> None:
+        """Plots the selected field in `lane` (`NEW_LANE`: a new one)."""
+        if self._field is None or self._signal is not None:
+            return
+        lane = self.new_lane() if lane == NEW_LANE else lane
+        self._signal = self.draft.add_signal(self._field, lane or None)
         self._edited()
 
     def _toggle_plot(self) -> None:
@@ -1057,7 +1272,7 @@ class StreamEditor(QtWidgets.QWidget):
         for text, slot in (
             ("Stop plotting" if self._signal else f"Plot this {thing}", self._toggle_plot),
             (None, None),
-            (f"Add {thing} after", self.add_field_after),
+            (f"Insert {thing} after", self.add_field_after),
             *moves,
             (None, None),
             (f"Remove {thing}", self.remove_selected_field),
@@ -1088,8 +1303,7 @@ class StreamEditor(QtWidgets.QWidget):
                 action.triggered.connect(lambda: self.rename_lane(lane))
                 menu.exec(global_pos)
             return
-        self._on_tree_current(item)
-        self._field_menu().exec(global_pos)
+        self._field_menu().exec(global_pos)  # the press already selected the cell
 
     def rename_lane(self, lane: str, label: str | None = None) -> None:
         if label is None:

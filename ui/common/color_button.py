@@ -6,13 +6,15 @@ from __future__ import annotations
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from styles import MONO_CSS
+from styles import NUMBER_CSS, TEXT, TEXT_BRIGHT
+
+CHIP_PX = 20
 
 
 class ColorButton(QtWidgets.QPushButton):
     """
-    Custom widget: A button that opens a color picker and displays the selected color code.
-    Updates its background color and text contrast automatically.
+    A colour chip and its hex (R11.4): a flat square in the colour, the code beside it.
+    Clicking opens the colour picker; `colorChanged` reports a new pick.
     """
 
     colorChanged = QtCore.pyqtSignal(str)
@@ -22,37 +24,21 @@ class ColorButton(QtWidgets.QPushButton):
         self.hex_color = hex_color
         self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(24)
-
+        self.setIconSize(QtCore.QSize(CHIP_PX, CHIP_PX))
+        self.setStyleSheet(
+            "QPushButton { background: transparent; border: none; text-align: left;"
+            f" padding: 0; color: {TEXT}; {NUMBER_CSS} }}"
+            f" QPushButton:hover {{ color: {TEXT_BRIGHT}; background: transparent; }}"
+        )
         self.clicked.connect(self.pick_color)
         self.refresh_style()
 
     def refresh_style(self) -> None:
-        """Updates the button background and text color based on brightness."""
-        text_col = "black"
-        try:
-            c = QtGui.QColor(self.hex_color)
-            if c.lightness() < 128:
-                text_col = "white"
-        except Exception:
-            pass
-
-        self.setStyleSheet(
-            f"""
-            QPushButton {{
-                background-color: {self.hex_color};
-                color: {text_col};
-                border: 1px solid #555;
-                border-radius: 0;
-                {MONO_CSS}
-                font-weight: bold;
-                padding: 0px;
-            }}
-            QPushButton:hover {{
-                border: 1px solid #FFF;
-            }}
-        """
-        )
-        self.setText(self.hex_color)
+        """The chip in the colour, and the code as text."""
+        pixmap = QtGui.QPixmap(CHIP_PX, CHIP_PX)
+        pixmap.fill(QtGui.QColor(self.hex_color))
+        self.setIcon(QtGui.QIcon(pixmap))
+        self.setText(f"  {self.hex_color.upper()}")
 
     def set_color(self, hex_color: str) -> None:
         self.hex_color = hex_color

@@ -320,7 +320,7 @@ def test_config_plotting_a_field_adds_a_signal_named_after_it(
     _select(tab, "imu_6axis")
     editor = tab.editor
     editor.select("gyro_y")
-    assert editor.selected_signal is None and editor.plot_btn.text() == "Plot this field"
+    assert editor.selected_signal is None and not editor.signal_box.isVisibleTo(editor)
 
     editor.plot_btn.click()
 

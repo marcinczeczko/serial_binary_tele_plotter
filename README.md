@@ -42,8 +42,8 @@ Primary use cases:
   decoded at the same time**; the selector only chooses which one to show, so switching
   keeps each stream's history and never interrupts acquisition. Streams may share a
   `stream_id`: they're told apart by payload size, and identical layouts are decoded once.
-- Built-in configuration editor (File → Edit profile), in the scope's look: the frame
-  drawn byte by byte, its signals by lane, and a form per field. **Paste a C struct** to start
+- Built-in configuration editor (File → Edit profile), in the scope's look: the frame as
+  one strip in wire order, its signals by lane in L/R pairs, and an inspector per signal. **Paste a C struct** to start
   a stream (or update one) and **copy any stream as a C struct** for the firmware.
 - **Control panels defined in `streams.json`**: parameters (spin boxes, check boxes) and
   buttons that send command packets to the MCU over the same serial connection. The bundled
@@ -190,8 +190,8 @@ profile; drag the edge between a pane and the plot to resize it.
      move.
    - Visibility and lane moves are remembered per stream (and per config file) between
      runs, on top of `streams.json`. **View → Reset view to the profile** forgets them for
-     the shown stream. To change the file itself, use the stream editor (a signal's check
-     box and lane).
+     the shown stream. To change the file itself, use the stream editor (a signal's swatch
+     and lane).
    - Live, time follows the newest data and the mouse zooms or pans a lane's Y. That lane
      then holds its range. Right-click a lane → **Lane Y range** to choose Auto (fit the
      data in view), Auto-grow (only widens) or Manual, and whether zero is always included.
@@ -234,18 +234,30 @@ profile; drag the edge between a pane and the plot to resize it.
      Double-click a line to send its exact packet again; its bytes are in the tooltip.
 9. **File → Edit profile…** (Ctrl+,) opens the current profile in the stream editor, laid
    out like the scope:
-   - The profile row: its name, format (read-only: chosen at New profile) and baud.
-   - Streams are tabs. One row holds the stream's key, name, ID, byte order, X axis and time
-     per tick (`5 ms`, `1 µs`), step and **Controls** panel.
-   - **Frame**: the payload as the device sends it, 32 bytes per row, each field in its
-     signal's color (grey: not plotted). Click a field to select it; right-click to plot
-     it, add a field after it, move it or remove it.
-   - Below, the signals by lane, as in the Signals pane, and **Not plotted** for the fields
-     without a signal. Drag a field onto a lane to plot it there, a signal onto another lane
-     to move it, or onto Not plotted to remove it. The check box is "shown when the stream
-     opens". Right-click a lane to rename it.
-   - The form on the right edits the selected field (name, type) and its signal (label,
-     lane: pick one or type a new name, color, line, shown).
+   - The bar at the top, as in the main window: the profile's name (click to edit), its
+     format (read-only: chosen at New profile) and baud, the streams as tabs (right-click
+     one to delete it), **+** for a new stream (empty, or from a C struct / console output),
+     the first problem of the shown stream (red: error, amber: warning), **C struct ▾** (or
+     **Console ▾** for a text profile), and **Revert** / **Save** while there are unsaved
+     changes.
+   - One row holds the stream's key, name, ID, byte order (**LE | BE**), X axis field, time
+     per tick (`5 ms`, `1 µs`) and step, and the **Tune** panel shown with it.
+   - **Frame**: one strip, each field as wide as its bytes. A plotted field has its signal's
+     color on its top edge (grey: hidden when the stream opens); the selected field is
+     filled. Offsets, the selected field and the size (`140 / 255 B`) are under it. Click a
+     field to select it; right-click to plot it, insert a field after it, move it or remove
+     it.
+   - Below, the signals by lane, as in the Signals pane: one row per L/R pair, each side
+     with its swatch, field and byte. Click a side to edit it; click its swatch to choose
+     whether it's shown when the stream opens. **Not plotted** lists the fields without a
+     signal. Drag a field onto a lane to plot it there, a row onto another lane to move it
+     (both sides go), or onto Not plotted to remove it. Right-click a lane to rename it.
+   - The inspector on the right edits the selected signal (label, lane: pick one or type a
+     new name, color, line style and width, shown) and its field (name, type), with **Stop
+     plotting**, **Insert after** and **Remove** in the section headers. A field that isn't
+     plotted has **Plot** (the arrow picks the lane). For a pair, **L=R** (on by default)
+     gives the other side the same lane, color and line width; its label and style stay
+     its own.
    - **From C struct…** reads a pasted struct (or just its member lines, or a `.h` file)
      and draws its frame as you type: `uint8_t`…`int64_t`, `float`, `double`, `bool`,
      `char`/`short`/`int`, several names per line, arrays (`ticks[2]` → `ticks_0`,
@@ -260,12 +272,12 @@ profile; drag the edge between a pane and the plot to resize it.
      the frame: the pattern's fixed text, and a block per value in its signal's color.
      Editing the pattern re-derives the values: one that keeps its name keeps its type and
      signal, a new one is a number, a removed one goes with its signal. An invalid pattern
-     is outlined red, with the reason in the status line, and isn't applied (Esc drops
+     is outlined red, with the reason in the bar, and isn't applied (Esc drops
      it). Under the blocks is the last line: the newest one the stream matched while
      connected (else the newest unmatched one), with `✓ matches` or `✗ no match`. The X
      axis offers the integer values and `(line number)`. The form edits a value: name,
-     type (number, integer, signed integer), position, and Add value after / Remove value,
-     which edit the pattern. The C struct buttons are for binary profiles only.
+     type (number, integer, signed integer), position, and Insert after / Remove, which edit
+     the pattern. **C struct ▾** is for binary profiles only.
    - **From console output…** (text profiles) finds the streams for you: paste what the
      board prints, or **Listen on the port for 5 s** while connected. Lines are split
      into numbers and the text between them; each layout seen at least twice becomes a
@@ -276,8 +288,8 @@ profile; drag the edge between a pane and the plot to resize it.
      Untick a pattern or rename it, then **Create N streams**.
    - **Copy as printf** puts the C line that prints the stream's pattern on the
      clipboard, e.g. `printf("ENV t=%fC h=%lu%%\r\n", t, h);`.
-   - Save (Ctrl+S) is orange while there are unsaved changes; the status line shows the
-     stream's size and its first problem as you edit. Saving updates `streams.json` (the
+   - Save (Ctrl+S) shows, amber, only while there are unsaved changes; the bar shows the
+     stream's first problem as you edit. Saving updates `streams.json` (the
      previous file is kept as `streams.json.bak`); a file with errors isn't saved.
      Commands and panels are edited in the file itself.
 10. **Recording** menu (while recording, the top bar shows a red `REC 02:14`; click it to
@@ -690,8 +702,8 @@ serial_binary_tele_plotter/
 │   ├── panels/                # Top bar (connection, RUN/STOP, stream tabs, Window, Trigger), Signals
 │   │                          #   (legend + readout), control panels + send log, time window,
 │   │                          #   trigger
-│   └── config/                # Stream editor (File → Edit profile): frame view,
-│                              #   lanes, field form, From C struct… dialog
+│   └── config/                # Stream editor (File → Edit profile): frame strip,
+│                              #   signal list, inspector, From C struct… dialog
 ├── tests/                     # pytest; `qt`-marked tests use real Qt
 ├── tools/                     # bench_pipeline.py (parser/storage), bench_render.py (GUI FPS)
 └── docs/                      # Roadmap, project log, reviews, ADRs

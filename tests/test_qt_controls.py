@@ -236,7 +236,7 @@ def test_config_tab_saves_a_schema_1_file_as_schema_3(
     tab = win.configurator
     tab.select_stream("pid")
     combo = tab.editor.panel_combo
-    assert [combo.itemText(i) for i in range(combo.count())] == ["(none)", "diffbot_pid"]
+    assert [combo.itemText(i) for i in range(combo.count())] == ["none", "diffbot_pid"]
     assert combo.currentData() == "diffbot_pid"
     tab.select_stream("pid_ff")  # no controls from now on
     combo.setCurrentIndex(combo.findData(None))

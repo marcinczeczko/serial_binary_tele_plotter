@@ -6,6 +6,21 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-26 — R11.1–R11.4 The config editor in the scope look
+
+- Designed on a canvas first (<https://claude.ai/artifact/RYAdURH9Zk94xBP5dpJN9C>: 14 findings
+  on the old editor, an interactive proposal); approved as proposed; spec
+  `docs/specs/phase11-config-editor.md`. Stays a separate window.
+- `ConfiguratorTab` uses the main window's `TopBar` in place of the button row, profile row,
+  tab row and status line; Revert and Save only while unsaved; problems in the bar's message.
+  New widgets: `frame_strip.FrameStrip` (the frame in one row) and `signal_list.FieldTree`
+  (lanes, L/R pairs with field and byte, swatch = shown at open). The inspector has `SIGNAL` /
+  `FIELD` sections, line style and width as segments, and `L=R` (lane, colour, width to both
+  sides). The bundled PID stream: 17 rows (was 34 plus 4 lane rows).
+- Swatch presses and drops redraw on the next event-loop turn (the #32 crash class). Checks:
+  ruff, format, mypy clean; full suite green but the macOS-only PTY test; editor Qt suites
+  15/15 repeated runs.
+
 ## 2026-09-26 — Fix: segfault when a signal's check box is toggled in the editor
 
 - `main` CI crashed (SIGSEGV) in `test_unchecking_a_signal_hides_it_when_the_stream_opens`.
