@@ -23,7 +23,9 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
   - 60 FPS cap: 58.8 FPS, 82–91% busy, plot paint 57%. 0 lost.
 - Found: a moving cursor repaints every curve, about 2.7 plot paints per live frame (R10.7).
   The Signals pane's row painting costs about 90 ms/s while the readout updates.
-- Windows is still to be measured, so R10.0 stays open.
+- Scope change: the owner deferred Windows. R10.0 is closed on macOS numbers, and the R10.2
+  gate is macOS-only. Windows is measured in R10.6's Windows CI job. The goal of running on
+  both platforms is unchanged.
 - `bench_render` on the same Mac, plot only: 9.7 ms paint natively (8.0 ms offscreen), 6.5
   ms with `useOpenGL`; at a 60 FPS cap and 2400×1400, 58.8 FPS either way.
 

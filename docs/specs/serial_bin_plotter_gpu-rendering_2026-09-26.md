@@ -70,8 +70,9 @@ What this shows:
   Signals pane repainting its rows for each readout (`SignalDelegate.paint`, about 90 ms/s),
   plus the readout itself. It's not the plot's problem, but it is worth a look if the GUI
   thread is still busy once the plot is on the GPU.
-- Windows (1080p and 4K) is still to be run by the owner:
-  `uv run python tools/bench_window.py --cursor [--size 3840x2160]`.
+- Windows is deferred (owner, 2026-09-26). R10.0 and the R10.2 gate use macOS numbers.
+  R10.6's Windows job runs `bench_window` and smoke tests. The target still has to run on
+  both platforms.
 
 ## 2. Options (multi-platform: macOS and Windows)
 

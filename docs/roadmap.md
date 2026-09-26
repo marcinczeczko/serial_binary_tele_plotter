@@ -422,19 +422,20 @@ on the CPU. Target: a GPU renderer that runs natively on macOS (Metal) and Windo
 Vulkan), with pyqtgraph + QPainter kept as the fallback. Analysis, measurements and options:
 [`docs/specs/serial_bin_plotter_gpu-rendering_2026-09-26.md`](specs/serial_bin_plotter_gpu-rendering_2026-09-26.md).
 
-- [ ] **R10.0 Baseline the whole window**: `tools/bench_window.py` runs the real `MainWindow`
+- [x] **R10.0 Baseline the whole window**: `tools/bench_window.py` runs the real `MainWindow`
   on VIRTUAL with the `bench_render` fixture and splits the GUI thread's time into pull + draw,
   plot paint and the rest of the window.
   *Done when:* the log names where frame time goes on macOS and on Windows (1080p and 4K). If
   the plot is under 30% of it, Phase 10 stops and the dominant cost is fixed instead.
-  *macOS done (2026-09-26): the plot is 57–67%. Windows still to run.*
+  *Done (2026-09-26, macOS only): the plot is 57–67% of the GUI thread. Windows deferred by
+  the owner; it's measured in R10.6's Windows job instead.*
 - [ ] **R10.1 Renderer seam**: a `PlotRenderer` protocol in `ui/charts`; lane logic, range
   modes, readout, anchor and trigger stay renderer-free; today's code becomes `PgRenderer`.
   *Done when:* no behaviour change, the full test suite passes, and `bench_render` matches
   `main` interleaved.
 - [ ] **R10.2 Spike: pygfx in one lane** (canvas first, owner review). Go/no-go gate.
-  *Done when:* ≥ 60 FPS at 34 × 1000-bucket live on macOS and Windows with less GUI-thread
-  time than `PgRenderer`, the look accepted, no crash in 10 min of connect, disconnect and
+  *Done when:* ≥ 60 FPS at 34 × 1000-bucket live on macOS with less GUI-thread time than
+  `PgRenderer` (Windows deferred to R10.6), the look accepted, no crash in 10 min of connect, disconnect and
   profile switching. Or: the numbers are logged and Phase 10 closes with `PgRenderer`.
 - [ ] **R10.3 `GfxRenderer`, live parity**: lanes on one shared X, curves from preallocated
   buffers updated in place, graticule, time axis, markers, cursor, trigger level, capture
@@ -449,7 +450,8 @@ Vulkan), with pyqtgraph + QPainter kept as the fallback. Analysis, measurements 
   supersedes ADR-0005's render rules.
 - [ ] **R10.6 Selection, fallback and CI**: `renderer = auto | gpu | raster` setting and
   `--renderer`; `auto` falls back to `PgRenderer` if no GPU adapter is found; a `gpu` extra;
-  GPU tests on lavapipe in CI; a Windows smoke-test job.
+  GPU tests on lavapipe in CI; a Windows job: smoke tests plus `bench_window` (the Windows
+  numbers deferred from R10.0 and R10.2).
 - [ ] **R10.7 Cursor repaints** (found by R10.0): each cursor move repaints every curve (2.7
   plot paints per live frame while the mouse moves). Coalesce cursor updates into the live
   frame in `PgRenderer`.
