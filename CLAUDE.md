@@ -20,6 +20,7 @@ so you can work without hardware.
 5. `docs/specs/`: working specs for the next roadmap items. Phase 9 (the scope view,
    ADR-0012) is complete. Phase 10 is render headroom on the current renderer: a GPU
    renderer was analysed and dropped (`docs/specs/serial_bin_plotter_gpu-rendering_2026-09-26.md`).
+   Phase 11 brings the config editor into the same look (`docs/specs/phase11-config-editor.md`).
 
 Before starting non-trivial work, check whether a roadmap item or finding already covers
 it, and reference its ID in commits and PRs.
@@ -109,8 +110,10 @@ ui/panels/              container (owns the controls; MainWindow places them), t
                         scrubbing, Esc revert), command_log (plain lines, double-click resends), terminal (a text profile's
                         input line and replies, R8.5),
                         timing, trigger (setup popup + Step view: Now / Prev / Δ)
-ui/config/              streams.json editor (ADR-0009): tab (toolbar, profile row, stream tabs, save),
-                        stream_editor (settings row, lanes tree, field form), frame_view (bus-decode drawing),
+ui/config/              streams.json editor (ADR-0009, R11): tab (the main window's TopBar: profile, stream tabs,
+                        +, message, C struct / Console menu, Save only while unsaved), stream_editor (stream row,
+                        inspector, L=R), frame_strip (the frame in one row), signal_list (FieldTree: lanes and
+                        L/R pairs with field and byte), frame_view (bus-decode drawing, the paste dialog's),
                         line_view (a text stream's pattern and last line, R8.4), paste_dialog,
                         console_dialog (From console output…: paste or listen, infer streams)
 ui/common/              color_button, numbers (format_number, ScopeDoubleSpinBox: dot decimal, significant

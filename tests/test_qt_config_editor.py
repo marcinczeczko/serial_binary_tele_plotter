@@ -80,7 +80,7 @@ def test_clicking_a_field_in_the_frame_selects_it_everywhere(qtbot: Any, config:
     tab.resize(1300, 800)
     tab.show()
     qtbot.waitExposed(tab)
-    view = tab.editor.frame_view
+    view = tab.editor.frame_strip
     piece = next(p for p in view.pieces() if p.slot.name == "acc_z")
 
     qtbot.mouseClick(view, QtCore.Qt.MouseButton.LeftButton, pos=piece.rect.center().toPoint())
@@ -101,11 +101,12 @@ def test_the_tree_groups_signals_by_lane_and_lists_unplotted_fields(
     tab = _tab(qtbot, config)
     tree = tab.editor.tree
     lanes = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
-    assert [(i.text(0), i.text(1)) for i in lanes if i is not None] == [
-        ("Accelerometer [g]", "3/3"),
-        ("Gyroscope [dps]", "0/2"),
-        ("Not plotted", "3"),
+    assert [i.text(0) for i in lanes if i is not None] == [
+        "ACCELEROMETER g",
+        "GYROSCOPE dps",
+        "NOT PLOTTED",
     ]
+    assert tree.isColumnHidden(2)  # no pairs: one Field column
     unplotted = lanes[2]
     assert unplotted is not None
     rows = [unplotted.child(i) for i in range(unplotted.childCount())]
@@ -133,18 +134,62 @@ def test_dragging_plots_moves_and_unplots(qtbot: Any, config: Path) -> None:
     assert tab.is_dirty()
 
 
-def test_unchecking_a_signal_hides_it_when_the_stream_opens(qtbot: Any, config: Path) -> None:
+def test_pressing_a_swatch_hides_the_signal_when_the_stream_opens(qtbot: Any, config: Path) -> None:
+    from ui.config.signal_list import ROLE_CELL
+
     tab = _tab(qtbot, config)
+    tab.resize(1300, 800)
+    tab.show()
+    qtbot.waitExposed(tab)
     tree = tab.editor.tree
     accel = tree.topLevelItem(0)
     assert accel is not None
     item = accel.child(0)
-    assert item is not None
-    item.setCheckState(0, QtCore.Qt.CheckState.Unchecked)
+    assert item is not None and item.data(1, ROLE_CELL).key == "acc_x"
+    rect = tree.visualItemRect(item)
+    swatch = QtCore.QPoint(tree.columnViewportPosition(1) + 12, rect.center().y())
+    qtbot.mouseClick(tree.viewport(), QtCore.Qt.MouseButton.LeftButton, pos=swatch)
     assert tab.editor.draft.signal("acc_x")["visible"] is False
-    qtbot.waitUntil(lambda: not tab.editor.shown_chk.isChecked())
-    lane = tree.topLevelItem(0)
-    assert lane is not None and lane.text(1) == "2/3"  # the redraw ran, on a fresh tree
+
+    def redrawn() -> bool:  # the redraw runs on the next turn, on fresh items
+        lane = tree.topLevelItem(0)
+        row = lane.child(0) if lane is not None else None
+        return row is not None and row.data(1, ROLE_CELL).shown is False
+
+    qtbot.waitUntil(redrawn)
+    assert tab.editor.selected_field == "motor"  # a swatch doesn't move the selection
+
+
+def test_the_pid_stream_lists_one_row_per_pair(qtbot: Any, config: Path) -> None:
+    tab = _tab(qtbot, config, "pid")
+    tree = tab.editor.tree
+    rows = [
+        lane.child(j)
+        for lane in (tree.topLevelItem(i) for i in range(tree.topLevelItemCount()))
+        if lane is not None
+        for j in range(lane.childCount())
+    ]
+    assert len(rows) == 17 + 1  # 34 signals in pairs, and loop_cntr not plotted
+    assert [tree.headerItem().text(c) for c in range(3)] == ["Signal", "L", "R"]
+
+
+def test_l_equals_r_gives_the_other_side_colour_lane_and_width(qtbot: Any, config: Path) -> None:
+    tab = _tab(qtbot, config, "pid")
+    editor = tab.editor
+    editor.select("left_setpoint", "left_setpoint")
+    assert editor.link_btn.isVisibleTo(editor) and editor.linked
+    editor._set_signal("color", "#123456")
+    editor.width_group.button(1).click()  # 2 px
+    right = editor.draft.signal("right_setpoint")
+    assert right["color"] == "#123456" and right["line"]["width"] == 2
+    assert right["line"]["style"] == "dashed"  # R stays dashed
+    editor.label_edit.setText("L: Speed setpoint")
+    editor.label_edit.editingFinished.emit()
+    assert editor.draft.signal("right_setpoint")["label"] == "R: Setpoint"  # per side
+
+    editor.link_btn.setChecked(False)
+    editor._set_signal("color", "#654321")
+    assert editor.draft.signal("right_setpoint")["color"] == "#123456"
 
 
 def test_edits_keep_what_the_editor_doesnt_show(qtbot: Any, config: Path) -> None:
@@ -153,7 +198,7 @@ def test_edits_keep_what_the_editor_doesnt_show(qtbot: Any, config: Path) -> Non
     editor.select("acc_x")
     editor.label_edit.setText("Accel X")
     editor.label_edit.editingFinished.emit()
-    editor.width_spin.setValue(2)
+    editor.width_group.button(1).click()  # 2 px
 
     tab.save_to_file()
 
@@ -166,13 +211,14 @@ def test_edits_keep_what_the_editor_doesnt_show(qtbot: Any, config: Path) -> Non
 def test_revert_goes_back_to_the_saved_document(qtbot: Any, config: Path) -> None:
     tab = _tab(qtbot, config)
     tab.editor.select("acc_x")
+    assert not tab.save_btn.isVisibleTo(tab)  # nothing to save: no Revert or Save
     tab.editor.remove_field_btn.click()
-    assert tab.is_dirty() and tab.dirty_lbl.text() == "Unsaved changes"
-    assert tab.revert_btn.isEnabled()
+    assert tab.is_dirty() and tab.save_btn.isVisibleTo(tab)
+    assert tab.revert_btn.isVisibleTo(tab)
 
     tab.revert()
 
-    assert not tab.is_dirty() and tab.dirty_lbl.text() == ""
+    assert not tab.is_dirty() and not tab.save_btn.isVisibleTo(tab)
     assert tab.current_key() == "imu_6axis"
     assert "acc_x" in tab.editor.draft.field_names()
 
@@ -262,7 +308,7 @@ def test_problems_in_the_paste_are_listed(qtbot: Any, config: Path) -> None:
 
 def test_copy_as_c_struct(qtbot: Any, config: Path) -> None:
     tab = _tab(qtbot, config)
-    tab.copy_btn.click()
+    tab.copy_act.trigger()
     clipboard = QtWidgets.QApplication.clipboard()
     assert clipboard is not None
     text = clipboard.text()

@@ -434,6 +434,31 @@ along with when it would be worth revisiting.
   *Done:* 171 plot paints for 171 frames (was about 470); the GUI thread is 47% busy with the
   cursor moving (was 78%).
 
+## Phase 11: the configuration editor in the scope look
+
+Added 2026-09-26. Phase 9 made the main window a scope; its editor window (File → Edit profile)
+still had four rows of controls, a loud byte map that repeats the tree, 34 rows where the
+Signals pane shows 17, and a sparse form. It stays a separate window. Approved on the canvas
+(<https://claude.ai/artifact/RYAdURH9Zk94xBP5dpJN9C>); the spec is
+[`docs/specs/phase11-config-editor.md`](specs/phase11-config-editor.md).
+
+- [x] **R11.1 Top bar and stream row**: the main window's 36 px bar (profile name, format and
+  baud, stream tabs, `+`, message, `C struct ▼` / `Console ▼`, Revert and Save only while
+  unsaved); one stream row in words (`LE | BE`, no spin arrows, `Tune`). No status line.
+  *Done when:* the window has no button row, profile row or status line.
+- [x] **R11.2 Frame strip**: one row of cells sized by bytes, colour as a top edge, the
+  selected field filled, offsets and size under it.
+  *Done when:* the bundled PID frame shows as one strip row and a click selects a field.
+- [x] **R11.3 Signals list**: lanes and L/R pairs as in the Signals pane, each side with its
+  swatch (shown at open), field and byte; `NOT PLOTTED` at the end; drag and drop kept.
+  *Done when:* the PID stream shows 17 pair rows.
+- [x] **R11.4 Inspector**: `SIGNAL` and `FIELD` sections with actions in their headers, line
+  style and width as segments, colour as a chip, and `L=R` for a pair (lane, colour, width).
+  *Done when:* with L=R on, a colour change on `L: Setpoint` changes `R: Setpoint`, and an
+  untouched stream still saves byte-identically (C4).
+  *Done (2026-09-26):* R11.1–R11.4 in one PR; `Plot` plots in the first lane and its arrow
+  picks another (the canvas's `Plot in ▼`, so a click never waits on a menu).
+
 ---
 
 ## Suggested order and sizing
@@ -453,3 +478,4 @@ along with when it would be worth revisiting.
 | 11 | R8.1 → R8.4 | M | Decoder slot first (no behaviour change), then profiles, then text |
 | 12 | R9.1 → R9.6 | M | Look first (everything inherits it), then the frame (panes, top bar), then the pieces |
 | 13 | R10.0, R10.1 | S | Measure the whole window, then remove the extra repaints it found |
+| 14 | R11.1 → R11.4 | M | The editor window in the same language: frame first, then the pieces |

@@ -1,13 +1,14 @@
 """
 The configuration editor window's content (R7.1): streams.json, laid out like the scope.
 
-- A toolbar: New stream, From C struct… and Copy as C struct (binary profiles), or From
-  console output… and Copy as printf (text profiles, R8.4), Delete, and Revert and Save
-  (orange while there are unsaved changes, Ctrl+S).
-- The profile row (R8.4): the profile's name, its format (read-only: chosen at New
-  profile) and baud, edited into the document's `profile` block.
-- The streams as tabs, as on the dashboard, and the `StreamEditor` for the shown one.
-- A status line: the stream's size and its first problem, as validation sees it now.
+- The main window's 36 px bar (R11.1): the profile's name (edited in place), its format
+  (read-only: chosen at New profile) and baud, the streams as tabs (right-click deletes one),
+  `+` (an empty stream, or from a C struct / console output), the message, `C struct ▾`
+  (binary) or `Console ▾` (text), and Revert and Save only while there are unsaved
+  changes (Ctrl+S).
+- The message is the shown stream's first problem, as validation sees it now, while there
+  is one; confirmations (saved, copied) fade.
+- The `StreamEditor` for the shown stream.
 
 Each stream is a `StreamDraft`, kept until saved or reverted, so switching streams never
 loses an edit (C4a). Saving writes the whole document (schema version, commands and
@@ -30,15 +31,17 @@ from core.config.draft import StreamDraft, unique_name
 from core.config.profile import FORMAT_LABELS, profile_of
 from core.protocol.constants import LOOP_CNTR_NAME
 from core.protocol.text_line import PatternError, parse_pattern, printf_line
+from styles import AMBER, TEXT_MUTED
 from ui.config.console_dialog import ConsoleOutputDialog
 from ui.config.paste_dialog import PasteStructDialog
 from ui.config.stream_editor import StreamEditor
 from ui.panels.connection import BAUD_RATES
+from ui.panels.top_bar import MessageLabel, TopBar
 
 logger = logging.getLogger(__name__)
 
 SAVE_DIRTY = (
-    "QPushButton { background: #FFB000; border: 1px solid #FFB000; color: #000;"
+    f"QPushButton {{ background: {AMBER}; border: 1px solid {AMBER}; color: #000;"
     " font-weight: bold; }"
     " QPushButton:hover { background: #FFC233; border-color: #FFC233; }"
 )
@@ -76,108 +79,106 @@ class ConfiguratorTab(QtWidgets.QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        bar = QtWidgets.QHBoxLayout()
-        bar.setContentsMargins(6, 6, 6, 6)
-        bar.setSpacing(6)
-        self.new_btn = QtWidgets.QPushButton("New stream")
-        self.paste_btn = QtWidgets.QPushButton("From C struct…")
-        self.copy_btn = QtWidgets.QPushButton("Copy as C struct")
-        self.console_btn = QtWidgets.QPushButton("From console output…")
-        self.printf_btn = QtWidgets.QPushButton("Copy as printf")
-        self.printf_btn.setToolTip("The C line that prints this stream's pattern")
-        self.delete_btn = QtWidgets.QPushButton("Delete stream")
-        self.dirty_lbl = QtWidgets.QLabel("")
-        self.dirty_lbl.setStyleSheet("color: #FFB000; font-weight: bold;")
-        self.revert_btn = QtWidgets.QPushButton("Revert")
-        self.save_btn = QtWidgets.QPushButton("Save")
-        self.save_btn.setToolTip("Save streams.json (Ctrl+S)")
-        for w in (
-            self.new_btn,
-            self.paste_btn,
-            self.copy_btn,
-            self.console_btn,
-            self.printf_btn,
-            self.delete_btn,
-        ):
-            bar.addWidget(w)
-        bar.addStretch()
-        bar.addWidget(self.dirty_lbl)
-        bar.addWidget(self.revert_btn)
-        bar.addWidget(self.save_btn)
-        layout.addLayout(bar)
-        line = QtWidgets.QFrame()
-        line.setFixedHeight(1)
-        line.setStyleSheet("background: #333;")
-        layout.addWidget(line)
-
-        profile_row = QtWidgets.QWidget()
-        profile_row.setStyleSheet("background: #111;")
-        prow = QtWidgets.QHBoxLayout(profile_row)
-        prow.setContentsMargins(10, 5, 10, 5)
-        prow.setSpacing(8)
+        self.bar = TopBar()
         self.profile_name_edit = QtWidgets.QLineEdit()
-        self.profile_name_edit.setFixedWidth(150)
-        self.profile_name_edit.setToolTip("What the profile menu shows")
+        self.profile_name_edit.setFixedWidth(130)
+        self.profile_name_edit.setToolTip("The profile's name, as the profile menu shows it")
+        self.profile_name_edit.setStyleSheet(
+            "QLineEdit { background: transparent; border: none; padding: 0 12px; }"
+            f" QLineEdit:focus {{ background: #000; border: 1px solid {TEXT_MUTED}; }}"
+        )
+        self.bar.add(self.profile_name_edit)
         self.format_lbl = QtWidgets.QLabel("")
-        self.format_lbl.setStyleSheet("color: white; font-weight: bold;")
+        self.format_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
         self.format_lbl.setToolTip("What the device sends; chosen when the profile is made")
         self.profile_baud_combo = QtWidgets.QComboBox()
         self.profile_baud_combo.setToolTip("The baud rate this profile connects at")
-        for text, widget in (
-            ("Profile:", self.profile_name_edit),
-            ("Format:", self.format_lbl),
-            ("Baud:", self.profile_baud_combo),
-        ):
-            lbl = QtWidgets.QLabel(text)
-            if text != "Profile:":
-                lbl.setContentsMargins(10, 0, 0, 0)
-            prow.addWidget(lbl)
-            prow.addWidget(widget)
-        prow.addStretch()
-        layout.addWidget(profile_row)
-        line3 = QtWidgets.QFrame()
-        line3.setFixedHeight(1)
-        line3.setStyleSheet("background: #333;")
-        layout.addWidget(line3)
+        self.bar.add(self.format_lbl, self.profile_baud_combo, spacing=4)
 
         self.stream_tabs = QtWidgets.QTabBar()
         self.stream_tabs.setExpanding(False)
         self.stream_tabs.setDrawBase(False)
-        tabs_row = QtWidgets.QHBoxLayout()
-        tabs_row.setContentsMargins(6, 4, 6, 0)
-        tabs_row.addWidget(self.stream_tabs)
-        tabs_row.addStretch()
-        layout.addLayout(tabs_row)
-        line2 = QtWidgets.QFrame()
-        line2.setFixedHeight(1)
-        line2.setStyleSheet("background: #333;")
-        layout.addWidget(line2)
+        self.stream_tabs.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+        self.stream_tabs.setToolTip("Right-click: delete the stream")
+        self.stream_tabs.setStyleSheet("QTabBar::tab { padding: 9px 14px 8px 14px; }")
+        self.new_act = QtGui.QAction("Empty stream", self)
+        self.paste_act = QtGui.QAction("From C struct…", self)
+        self.copy_act = QtGui.QAction("Copy as C struct", self)
+        self.console_act = QtGui.QAction("From console output…", self)
+        self.printf_act = QtGui.QAction("Copy as printf", self)
+        self.printf_act.setToolTip("The C line that prints this stream's pattern")
+        self.delete_act = QtGui.QAction("Delete stream", self)
+        new_menu = QtWidgets.QMenu(self)
+        new_menu.addActions([self.new_act, self.paste_act, self.console_act])
+        self.new_btn = self._menu_button("+", new_menu, "New stream")
+        self.new_btn.setFixedWidth(34)
+        self.bar.add(self.stream_tabs, self.new_btn)
+
+        self.status_lbl = MessageLabel()  # the stream's first problem, or what just happened
+        self.bar.add_stretch(self.status_lbl)
+        tools_menu = QtWidgets.QMenu(self)
+        tools_menu.addActions([self.paste_act, self.copy_act, self.console_act, self.printf_act])
+        self.tools_btn = self._menu_button("C struct ▾", tools_menu, "")
+        self.bar.add_divider()
+        self.bar.add(self.tools_btn)
+
+        self.revert_btn = QtWidgets.QPushButton("Revert")
+        self.save_btn = QtWidgets.QPushButton("Save")
+        self.save_btn.setToolTip("Save streams.json (Ctrl+S)")
+        self.save_btn.setStyleSheet(SAVE_DIRTY)
+        self.save_box = QtWidgets.QWidget()
+        save_row = QtWidgets.QHBoxLayout(self.save_box)
+        save_row.setContentsMargins(8, 0, 8, 0)
+        save_row.setSpacing(6)
+        save_row.addWidget(self.revert_btn)
+        save_row.addWidget(self.save_btn)
+        self.bar.add_optional(self.save_box)  # only while there are unsaved changes
+        layout.addWidget(self.bar)
 
         self.editor = StreamEditor()
         layout.addWidget(self.editor, 1)
 
-        self.status_lbl = QtWidgets.QLabel("")
-        self.status_lbl.setContentsMargins(6, 3, 6, 3)
-        self.status_lbl.setStyleSheet("color: #888;")
-        layout.addWidget(self.status_lbl)
-
-        self.new_btn.clicked.connect(self.create_stream)
-        self.paste_btn.clicked.connect(self.paste_struct)
-        self.copy_btn.clicked.connect(self.copy_struct)
-        self.console_btn.clicked.connect(self.from_console_output)
-        self.printf_btn.clicked.connect(self.copy_printf)
-        self.delete_btn.clicked.connect(self.delete_stream)
+        self.new_act.triggered.connect(self.create_stream)
+        self.paste_act.triggered.connect(self.paste_struct)
+        self.copy_act.triggered.connect(self.copy_struct)
+        self.console_act.triggered.connect(self.from_console_output)
+        self.printf_act.triggered.connect(self.copy_printf)
+        self.delete_act.triggered.connect(self.delete_stream)
         self.revert_btn.clicked.connect(self.revert)
         self.save_btn.clicked.connect(self.save_to_file)
         self.profile_name_edit.editingFinished.connect(self._on_profile_name)
         self.profile_baud_combo.activated.connect(self._on_profile_baud)
         self.stream_tabs.currentChanged.connect(self._on_tab_changed)
+        self.stream_tabs.customContextMenuRequested.connect(self._on_tab_menu)
         self.editor.changed.connect(self._on_changed)
         self.editor.key_rename_requested.connect(self.rename_stream)
         self.editor.problem.connect(self._show_problem)
         save = QtGui.QShortcut(QtGui.QKeySequence.StandardKey.Save, self)
         save.setContext(QtCore.Qt.ShortcutContext.WidgetWithChildrenShortcut)
         save.activated.connect(self.save_to_file)
+
+    @staticmethod
+    def _menu_button(text: str, menu: QtWidgets.QMenu, tip: str) -> QtWidgets.QToolButton:
+        btn = QtWidgets.QToolButton()
+        btn.setText(text)
+        btn.setToolTip(tip)
+        btn.setMenu(menu)
+        btn.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        btn.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Expanding
+        )
+        btn.setStyleSheet("QToolButton { padding: 0 12px; }")
+        return btn
+
+    def _on_tab_menu(self, pos: QtCore.QPoint) -> None:
+        index = self.stream_tabs.tabAt(pos)
+        if index < 0:
+            return
+        self.stream_tabs.setCurrentIndex(index)
+        menu = QtWidgets.QMenu(self)
+        menu.addAction(self.delete_act)
+        menu.exec(self.stream_tabs.mapToGlobal(pos))
 
     # --- document ---
 
@@ -207,10 +208,11 @@ class ConfiguratorTab(QtWidgets.QWidget):
         self._profile = copy.deepcopy(block) if isinstance(block, dict) else None
         self._refresh_profile_row()
         self.editor.set_format(self.loader.profile.format)
-        for w in (self.paste_btn, self.copy_btn):  # C structs are for binary frames
-            w.setVisible(not self.is_text)
-        for w in (self.console_btn, self.printf_btn):
-            w.setVisible(self.is_text)
+        for act in (self.paste_act, self.copy_act):  # C structs are for binary frames
+            act.setVisible(not self.is_text)
+        for act in (self.console_act, self.printf_act):
+            act.setVisible(self.is_text)
+        self.tools_btn.setText("Console ▾" if self.is_text else "C struct ▾")
         streams = self.loader.data.get("streams", {})
         self.drafts = {str(k): StreamDraft(v) for k, v in streams.items()}
         panels = self.loader.data.get("panels")
@@ -322,7 +324,7 @@ class ConfiguratorTab(QtWidgets.QWidget):
             return
         self._rebuild_tabs(created[0])
         self._on_changed()
-        self.status_lbl.setText(f"Created {', '.join(created)} from console output")
+        self.status_lbl.say(f"Created {', '.join(created)} from console output")
 
     def copy_printf(self) -> None:
         key = self.current_key()
@@ -339,7 +341,7 @@ class ConfiguratorTab(QtWidgets.QWidget):
         clipboard = QtWidgets.QApplication.clipboard()
         if clipboard is not None:
             clipboard.setText(printf_line(pattern, types))
-        self.status_lbl.setText(f"Copied {key} as printf")
+        self.status_lbl.say(f"Copied {key} as printf", "ok")
 
     def _fingerprint(self) -> str:
         return json.dumps(self.document())
@@ -397,53 +399,44 @@ class ConfiguratorTab(QtWidgets.QWidget):
             draft = self.drafts.get(self.stream_tabs.tabData(i))
             if draft is not None:
                 self.stream_tabs.setTabText(i, self._tab_text(draft))
-        dirty = self.is_dirty()
-        self.dirty_lbl.setText("Unsaved changes" if dirty else "")
-        self.save_btn.setStyleSheet(SAVE_DIRTY if dirty else "")
-        self.revert_btn.setEnabled(dirty)
+        self.bar.set_shown(self.save_box, self.is_dirty())
         has_stream = key is not None
-        for w in (self.copy_btn, self.printf_btn, self.delete_btn):
-            w.setEnabled(has_stream)
+        for act in (self.copy_act, self.printf_act, self.delete_act):
+            act.setEnabled(has_stream)
         self._update_status()
 
     def _update_status(self) -> None:
+        """The bar's message: the shown stream's first problem while there is one."""
         key = self.current_key()
         if key is None or key not in self.drafts:
-            self.status_lbl.setText("No streams")
-            self.status_lbl.setToolTip("")
+            self.status_lbl.say("No streams")
+            return
+        if self.editor.pattern_error is not None:
+            self.status_lbl.say(
+                self.editor.pattern_error,
+                "error",
+                "Not applied: fix the pattern, or Esc to drop the edit",
+            )
             return
         draft = self.drafts[key]
-        if self.is_text:
-            text = f"{key} · {len(draft.fields)} values · {len(draft.signals)} signals"
-        else:
-            text = (
-                f"{key} · {len(draft.fields)} fields · {len(draft.signals)} signals"
-                f" · {draft.payload_size()} B"
-            )
         problems = validate_stream(key, draft.to_stream(), self.loader.profile.format)
         errors = [p for p in problems if p.severity == "error"]
         shown = errors or problems
-        if self.editor.pattern_error is not None:
-            self.status_lbl.setText(
-                f'{text} · <span style="color:#FF4040">{self.editor.pattern_error}</span>'
-            )
-            self.status_lbl.setToolTip("Not applied: fix the pattern, or Esc to drop the edit")
-            return
         if shown:
-            first = shown[0].message
             more = f" (+{len(shown) - 1} more)" if len(shown) > 1 else ""
-            color = "#FF4040" if errors else "#FFB000"
-            self.status_lbl.setText(f'{text} · <span style="color:{color}">{first}{more}</span>')
-            self.status_lbl.setToolTip("\n".join(str(p) for p in problems))
-        else:
-            self.status_lbl.setText(text)
-            self.status_lbl.setToolTip("")
+            self.status_lbl.say(
+                f"{shown[0].message}{more}",
+                "error" if errors else "warn",
+                "\n".join(str(p) for p in problems),
+            )
+        elif self.status_lbl.level in ("warn", "error"):
+            self.status_lbl.say("")  # fixed: a confirmation fades by itself
 
     def _show_problem(self, message: str) -> None:
         if self.editor.pattern_error is not None:
-            self._update_status()  # the stream line with the pattern's error
+            self._update_status()  # the pattern's error
             return
-        self.status_lbl.setText(f'<span style="color:#FF4040">{message}</span>')
+        self.status_lbl.say(message, "error")
 
     def rename_stream(self, new_key: str) -> None:
         old = self.current_key()
@@ -529,7 +522,7 @@ class ConfiguratorTab(QtWidgets.QWidget):
             self.drafts[key] = StreamDraft(stream)
             self._rebuild_tabs(key)
             self._on_changed()
-            self.status_lbl.setText(f"Fields replaced: {summary}")
+            self.status_lbl.say(f"Fields replaced: {summary}", "ok")
         else:
             self._add_stream(key, stream)
 
@@ -541,7 +534,7 @@ class ConfiguratorTab(QtWidgets.QWidget):
         clipboard = QtWidgets.QApplication.clipboard()
         if clipboard is not None:
             clipboard.setText(to_c_struct(key, self.drafts[key].to_stream()))
-        self.status_lbl.setText(f"Copied {key} as a C struct")
+        self.status_lbl.say(f"Copied {key} as a C struct", "ok")
 
     # --- saving ---
 
@@ -570,6 +563,5 @@ class ConfiguratorTab(QtWidgets.QWidget):
         self._on_changed()
         warnings = [str(p) for p in problems]
         note = f" ({len(warnings)} warning(s))" if warnings else ""
-        self.status_lbl.setText(f"Saved {self.loader.path.name}{note}")
-        self.status_lbl.setToolTip("\n".join(warnings))
+        self.status_lbl.say(f"Saved {self.loader.path.name}{note}", "ok", "\n".join(warnings))
         self.config_saved.emit()
