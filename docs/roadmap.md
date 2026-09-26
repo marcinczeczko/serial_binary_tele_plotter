@@ -408,7 +408,7 @@ in each item's PR.
   log as plain lines (double-click resends); Step metrics as Now / Prev / change.
   *Done when:* the pane has no always-visible disabled button, and every ADR-0008 behaviour
   (edited vs sent, Live, presets, numbered sends, resend) still works.
-- [ ] **R9.6 Graticule and markers**: framed lanes, 10 dotted divisions, ticked centre
+- [x] **R9.6 Graticule and markers**: framed lanes, 10 dotted divisions, ticked centre
   crosshair, the X unit on the last tick (no `Time [s]`), orange `T` markers for trigger level
   and position, `A`/`B` cursor flags.
   *Done when:* the markers show as designed and `bench_render.py` stays at one paint per frame
