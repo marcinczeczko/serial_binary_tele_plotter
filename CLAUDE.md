@@ -18,8 +18,8 @@ so you can work without hardware.
    (`C*` correctness, `P*` performance, `A*` architecture, `T*` tooling).
 4. `docs/adr/`: design decisions. ADR-0002 is the target pipeline.
 5. `docs/specs/`: working specs for the next roadmap items. Phase 9 (the scope view,
-   ADR-0012) is complete. **Phase 10 is in progress: GPU rendering,
-   `docs/specs/serial_bin_plotter_gpu-rendering_2026-09-26.md`.**
+   ADR-0012) is complete. Phase 10 is render headroom on the current renderer: a GPU
+   renderer was analysed and dropped (`docs/specs/serial_bin_plotter_gpu-rendering_2026-09-26.md`).
 
 Before starting non-trivial work, check whether a roadmap item or finding already covers
 it, and reference its ID in commits and PRs.

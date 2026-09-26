@@ -1,7 +1,14 @@
-# GPU rendering: analysis and migration plan (proposed Phase 10)
+# GPU rendering: analysis and migration plan (dropped)
 
-- Status: accepted as Phase 10 (2026-09-26). R10.0 measured on macOS (section 1b); the
-  owner's go is still needed at the R10.2 gate.
+- Status: **dropped** (owner, 2026-09-26). Kept as a record. Only R10.0 (the baseline) was
+  done; the cursor repaint fix is now R10.1 on the current renderer. The R10.x numbers
+  below are the plan as it was proposed; they aren't roadmap items.
+- Why it was dropped: on the owner's M1 the plot holds 30 FPS at 41% of the GUI thread and
+  reaches 58.8 FPS at a 60 FPS cap. The biggest waste (cursor moves repainting every curve)
+  is fixable on QPainter. Against that, the rewrite costs about 1000 lines (including the
+  Phase 9 graticule and markers), a pre-1.0 dependency, GPU CI and two renderers to maintain.
+- Revisit if: many more signals or much higher rates, 4K on weak Windows machines, a paused
+  34 × 100k zoom that feels slow, or the scope look needs text or thick lines on the plot.
 - Relates to: ADR-0005 (render budget rules), R3.4, ADR-0012 / R9.6 (graticule and markers).
 
 ## 1. What limits rendering today (measured)
@@ -65,7 +72,7 @@ What this shows:
 - **Cursor moves repaint the whole plot.** With the mouse moving there are about 2.7 plot
   paints per live frame (463 paints for 171 frames). Each paint redraws all 34 curves and
   the graticule. A retained GPU scene makes a repaint cheap. On the raster path, coalescing
-  cursor updates into the live frame fixes it (R10.7).
+  cursor updates into the live frame fixes it (now roadmap R10.1).
 - **The rest of the window** (about 230–250 ms/s with the cursor moving) is mostly the
   Signals pane repainting its rows for each readout (`SignalDelegate.paint`, about 90 ms/s),
   plus the readout itself. It's not the plot's problem, but it is worth a look if the GUI

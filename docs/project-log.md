@@ -6,14 +6,15 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
-## 2026-09-26 — R10.0 Whole-window baseline; Phase 10 (GPU rendering) planned
+## 2026-09-26 — R10.0 Whole-window baseline; GPU renderer analysed and dropped
 
-- Phase 10 is added to the roadmap: a GPU renderer (pygfx on wgpu, so Metal on macOS and
-  D3D12 or Vulkan on Windows), with pyqtgraph + QPainter kept as the fallback. The analysis
-  and options are in `docs/specs/serial_bin_plotter_gpu-rendering_2026-09-26.md`.
-  Rejected: pyqtgraph `useOpenGL` as the target (only curves go to the GPU, macOS GL is
-  deprecated; −33% paint on the M1, kept as an opt-in idea), VisPy, Qt Graphs, Qt Charts
-  GL, and a hand-built Qt Quick scene graph.
+- A GPU renderer (pygfx on wgpu: Metal on macOS, D3D12 or Vulkan on Windows) was analysed
+  and **dropped by the owner**. The plot already has headroom on the M1, and the main waste
+  is fixable on QPainter; the rewrite's cost (about 1000 lines, a pre-1.0 dependency, GPU CI,
+  two renderers) isn't worth it now. The record, and when to revisit, is in
+  `docs/specs/serial_bin_plotter_gpu-rendering_2026-09-26.md`. Also rejected there: pyqtgraph
+  `useOpenGL` (−33% paint on the M1, but macOS GL is deprecated), VisPy, Qt Graphs, Qt Charts
+  GL, and a Qt Quick scene graph.
 - `tools/bench_window.py`: the real `MainWindow` on VIRTUAL with the `bench_render` fixture.
   It splits the GUI thread's CPU (`thread_time`) into pull + draw, plot paint and the rest.
   Options: `--cursor` (60 Hz sweep), `--fps`, `--size`, `--paints`, `--profile`.
@@ -21,11 +22,8 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
   - Mouse idle: 30.3 FPS, GUI thread 41% busy, of which the plot's paint is **67%**.
   - Cursor sweeping: 78% busy, plot paint **61%**, rest of window 30%.
   - 60 FPS cap: 58.8 FPS, 82–91% busy, plot paint 57%. 0 lost.
-- Found: a moving cursor repaints every curve, about 2.7 plot paints per live frame (R10.7).
+- Found: a moving cursor repaints every curve, about 2.7 plot paints per live frame (R10.1).
   The Signals pane's row painting costs about 90 ms/s while the readout updates.
-- Scope change: the owner deferred Windows. R10.0 is closed on macOS numbers, and the R10.2
-  gate is macOS-only. Windows is measured in R10.6's Windows CI job. The goal of running on
-  both platforms is unchanged.
 - `bench_render` on the same Mac, plot only: 9.7 ms paint natively (8.0 ms offscreen), 6.5
   ms with `useOpenGL`; at a 60 FPS cap and 2400×1400, 58.8 FPS either way.
 
