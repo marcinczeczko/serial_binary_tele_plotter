@@ -6,6 +6,27 @@ roadmap items (`R*`), findings (`C*/P*/A*/T*`) and ADRs. See
 
 ---
 
+## 2026-09-26 — R10.1 Live cursor moves wait for the next frame
+
+- `TelemetryPlot._on_mouse_moved`: live, while frames arrive (one in the last 100 ms), a
+  mouse move is held and applied by the next `show_packet`, before that frame's single
+  paint. Only the latest position counts. If frames stop, a 100 ms single-shot timer applies
+  it. Paused, and when no frames arrive, moves apply at once. `move_cursor()` itself stays
+  immediate.
+- `bench_window --cursor` now sweeps through the mouse handler (it called `move_cursor`
+  directly, which skipped the path a real mouse takes).
+- Interleaved against `main`, 3 × 6 s, cursor sweeping at 60 Hz (M1 Pro):
+  - GUI thread 78.2–78.8% → **47.2–47.4%** busy.
+  - Plot paints 470–481 → **171 for 171 frames**.
+  - Rest of window 234–237 → 115–117 ms/s: the readout now updates at the frame rate.
+  - 60 FPS cap: 87–91% → 82% busy, 58.8 FPS either way.
+  - `bench_render` unchanged: 8.0 ms paint, 30.3 FPS.
+- Tests +3 (`test_qt_plot_lanes.py`): the move waits for the frame, the fallback when frames
+  stop, and immediate moves while paused. 482 pass (3 runs). The PTY transport test fails
+  in this macOS sandbox, on `main` too.
+
+---
+
 ## 2026-09-26 — R10.0 Whole-window baseline; GPU renderer analysed and dropped
 
 - A GPU renderer (pygfx on wgpu: Metal on macOS, D3D12 or Vulkan on Windows) was analysed

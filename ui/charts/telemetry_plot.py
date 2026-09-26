@@ -15,7 +15,9 @@ Dragging or zooming a lane's Y switches that lane to manual, so the next frame d
 undo it. The lane's context menu (right click) switches it back.
 
 The cursor readout is emitted (`readout_changed`) and shown in the Signals panel, not drawn
-on the plot (R6.2): a visible `TextItem` costs a second paint per frame. Overlays are plain
+on the plot (R6.2): a visible `TextItem` costs a second paint per frame. Live, a mouse move
+waits for the next frame (R10.1): moving the cursor lines repaints every curve under them,
+so applied on its own it made about 2.7 plot paints per frame. Overlays are plain
 lines and regions for the same reason: command markers (R6.3), and the trigger's level line
 and capture window (R6.5).
 
@@ -53,6 +55,10 @@ AXIS_WIDTH = 64  # px: equal left-axis widths keep the lanes' time axes aligned
 RANGE_UPDATE_INTERVAL_S = 0.2
 MIN_BUCKETS = 300  # before the view has a real width
 CURSOR_RATE_HZ = 60  # mouse-move readout updates per second (P7)
+# Live, a mouse move is applied with the next frame if one came this recently (R10.1), else
+# at once; if frames stop, a deferred move is applied after CURSOR_FLUSH_MS anyway.
+LIVE_FRAME_GAP_S = 0.1
+CURSOR_FLUSH_MS = 100
 MARKER_COLOR = "#FFB000"
 TRIGGER_COLOR = "#FF9A1A"
 TICK_TEXT = "#8a8a8a"
@@ -256,6 +262,12 @@ class TelemetryPlot(QtWidgets.QWidget):
         self.anchor_time: float | None = None
         self.anchor_values: dict[str, float] = {}
         self._cursor_x: float | None = None
+        self._pending_cursor: float | None = None  # a live mouse move for the next frame
+        self._last_frame_ts = -math.inf
+        self._cursor_flush = QtCore.QTimer(self)
+        self._cursor_flush.setSingleShot(True)
+        self._cursor_flush.setInterval(CURSOR_FLUSH_MS)
+        self._cursor_flush.timeout.connect(self._flush_cursor)
         # Exact values at a time, for the live readout (live frames hold min/max buckets):
         # (t, signal ids) -> {signal id: value}. Set by LiveFeed to the store's values_at.
         self.value_source: Callable[[float, list[str]], dict[str, float]] | None = None
@@ -449,6 +461,9 @@ class TelemetryPlot(QtWidgets.QWidget):
         t = packet["time"]
         if len(t) == 0:
             return
+        self._last_frame_ts = time.perf_counter()
+        # A mouse move since the last frame lands in this frame's paint (R10.1).
+        self._flush_cursor()
         draw = prepared or prepare_draw(t, packet["signals"], self.draw_buckets())
         self._draw(draw.time, draw.signals)
         self.plot.setXRange(float(t[0]), float(t[-1]), padding=0)
@@ -521,6 +536,7 @@ class TelemetryPlot(QtWidgets.QWidget):
         else:
             self.mode = PlotMode.LIVE
             self.analysis_packet = None
+            self._drop_pending_cursor()
             self.anchor_time = None
             self.anchor_values = {}
             for lane in self.lanes.values():
@@ -572,8 +588,26 @@ class TelemetryPlot(QtWidgets.QWidget):
         for key in self._shown:
             vb = self.lanes[key].vb
             if vb.sceneBoundingRect().contains(pos):
-                self.move_cursor(vb.mapSceneToView(pos).x())
+                x = float(vb.mapSceneToView(pos).x())
+                live = self.mode == PlotMode.LIVE
+                if live and time.perf_counter() - self._last_frame_ts < LIVE_FRAME_GAP_S:
+                    self._pending_cursor = x
+                    if not self._cursor_flush.isActive():
+                        self._cursor_flush.start()
+                else:
+                    self.move_cursor(x)
                 return
+
+    def _flush_cursor(self) -> None:
+        """Applies a deferred live mouse move (the next frame, or the timer if frames stop)."""
+        x = self._pending_cursor
+        self._drop_pending_cursor()
+        if x is not None:
+            self.move_cursor(x)
+
+    def _drop_pending_cursor(self) -> None:
+        self._pending_cursor = None
+        self._cursor_flush.stop()
 
     def move_cursor(self, x: float) -> None:
         ds = self.analysis_packet if self.mode == PlotMode.ANALYSIS else self.last_packet
