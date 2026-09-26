@@ -167,12 +167,16 @@ def main() -> int:
     phase = [0.0]
 
     def move_cursor() -> None:
-        packet = win.plot.last_packet
-        if packet is None or len(packet["time"]) < 2:
+        # Through the plot's mouse handler (what the rate-limited scene signal calls), so
+        # the sweep costs what a real mouse costs.
+        shown = win.plot.shown_lanes()
+        if not shown:
             return
-        t = packet["time"]
+        vb = win.plot.lanes[shown[0]].vb
+        (x0, x1), (y0, y1) = vb.viewRange()
         phase[0] = (phase[0] + 0.004) % 1.0
-        win.plot.move_cursor(float(t[0] + (t[-1] - t[0]) * (0.1 + 0.8 * phase[0])))
+        x = x0 + (x1 - x0) * (0.1 + 0.8 * phase[0])
+        win.plot._on_mouse_moved((vb.mapViewToScene(QtCore.QPointF(x, (y0 + y1) / 2)),))
 
     sweep.timeout.connect(move_cursor)
     if args.cursor:

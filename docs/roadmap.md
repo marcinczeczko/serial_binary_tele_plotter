@@ -427,10 +427,12 @@ along with when it would be worth revisiting.
   plot paint and the rest of the window.
   *Done (2026-09-26, macOS):* the plot's paint is 57–67% of the GUI thread; a moving cursor
   makes it paint about 2.7 times per live frame.
-- [ ] **R10.1 Cursor repaints**: each cursor move repaints every curve. Coalesce cursor updates
+- [x] **R10.1 Cursor repaints**: each cursor move repaints every curve. Coalesce cursor updates
   into the live frame.
   *Done when:* `bench_window --cursor` shows one plot paint per live frame, and the cursor
   readout still follows the mouse.
+  *Done:* 171 plot paints for 171 frames (was about 470); the GUI thread is 47% busy with the
+  cursor moving (was 78%).
 
 ---
 

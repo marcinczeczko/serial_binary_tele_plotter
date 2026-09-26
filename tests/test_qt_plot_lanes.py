@@ -283,3 +283,54 @@ def test_live_feed_draws_the_overview_and_reads_exact_values(qtbot: Any) -> None
     assert f"Speed: {expected:+.3f}" in plot.readout_text()
     feed.set_store(None)
     assert plot.value_source is None
+
+
+def _mouse_to(plot: Any, lane: str, x: float) -> None:
+    """A rate-limited mouse move over `lane` at time `x` (what the SignalProxy delivers)."""
+    from PyQt6 import QtCore
+
+    vb = plot.lanes[lane].vb
+    y = sum(vb.viewRange()[1]) / 2
+    plot._on_mouse_moved((vb.mapViewToScene(QtCore.QPointF(x, y)),))
+
+
+def test_live_mouse_moves_wait_for_the_next_frame(qtbot: Any) -> None:
+    """R10.1: while frames arrive, a mouse move costs no plot paint of its own."""
+    plot = _plot(qtbot)
+    plot.show_packet(_packet())
+    readouts: list[Any] = []
+    plot.readout_changed.connect(readouts.append)
+
+    _mouse_to(plot, "slow", 0.2)
+    _mouse_to(plot, "big", 0.4)
+    assert readouts == []
+    assert not plot.lanes["slow"].cursor.isVisible()
+
+    plot.show_packet(_packet(start=1))
+    assert len(readouts) == 1  # only the latest position is applied
+    assert readouts[0].t == pytest.approx(0.4, abs=0.005)
+    assert plot.lanes["slow"].cursor.isVisible()
+    assert plot.lanes["big"].cursor.value() == pytest.approx(0.4, abs=0.005)
+
+
+def test_live_mouse_move_applies_when_frames_stop(qtbot: Any) -> None:
+    plot = _plot(qtbot)
+    plot.show_packet(_packet())
+    readouts: list[Any] = []
+    plot.readout_changed.connect(readouts.append)
+
+    _mouse_to(plot, "slow", 0.3)
+    qtbot.waitUntil(lambda: len(readouts) == 1, timeout=1000)
+    assert readouts[0].t == pytest.approx(0.3, abs=0.005)
+
+
+def test_paused_mouse_moves_apply_at_once(qtbot: Any) -> None:
+    plot = _plot(qtbot)
+    plot.show_packet(_packet())
+    plot.set_paused(True, _packet())
+    readouts: list[Any] = []
+    plot.readout_changed.connect(readouts.append)
+
+    _mouse_to(plot, "slow", 0.25)
+    assert len(readouts) == 1
+    assert readouts[0].t == pytest.approx(0.25, abs=0.005)
