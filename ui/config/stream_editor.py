@@ -975,7 +975,9 @@ class StreamEditor(QtWidgets.QWidget):
         if visible != self.draft.signal(sid).get("visible", True):
             self.draft.set_signal(sid, "visible", visible)
             self._signal, self._field = sid, str(self.draft.signal(sid).get("field"))
-            self._edited()
+            # The redraw clears the tree, which frees `item` while Qt is still inside its
+            # setData: run it on the next turn of the event loop (as drops do).
+            QtCore.QTimer.singleShot(0, self._edited)
 
     def _on_dropped(self, sid: str, lane: str) -> None:
         """A drag onto a lane: plot a field there, move a signal, or stop plotting it."""
